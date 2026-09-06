@@ -1,0 +1,43 @@
+name: Deploy OLNOO Admin
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-olnoo-admin
+  cancel-in-progress: false
+
+env:
+  PROD_HOST: 213.155.29.140
+  PROD_USER: root
+  PROD_DIR: /opt/olnoo/projects/olnoo-admin
+  SYSTEMD_SERVICE: olnoo-admin
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up SSH
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.KZ_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$PROD_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy to production
+        run: |
+          set -e
+          ssh -i ~/.ssh/deploy_key "$PROD_USER@$PROD_HOST" "bash -s" <<EOF
+          set -e
+          cd "$PROD_DIR"
+          git restore next-env.d.ts package-lock.json 2>/dev/null || true
+          git pull --ff-only origin main
+          npm install
+          npm run build
+          systemctl restart "$SYSTEMD_SERVICE"
+          systemctl is-active --quiet "$SYSTEMD_SERVICE"
+          EOF
