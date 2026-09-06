@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'ØLNOO SEO — SEO Operating System',
+  title: 'ØLNOO Admin — Client & Operations Platform',
   description:
-    'Premium SEO management workspace for OLNOO — projects, pages, keywords and semantic mapping.',
+    'Unified OLNOO client and operations platform — clients, projects, SEO and CRM in one premium workspace.',
   generator: 'v0.app',
 }
 

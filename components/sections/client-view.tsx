@@ -1,5 +1,5 @@
 import { SectionHeader, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
-import { pages, clusters } from '@/lib/data'
+import { pages, clusters, crmMetrics, recentActivity } from '@/lib/data'
 
 const totalKw = clusters.reduce((s, c) => s + c.items.length, 0)
 const mapped = clusters.reduce(
@@ -18,33 +18,38 @@ export function ClientOverview() {
         description="A read-only summary of your website's SEO coverage, prepared by the OLNOO team."
       />
 
-      <section className="grid grid-cols-2 border border-hairline bg-card md:grid-cols-3 lg:grid-cols-5">
-        <Metric label="Total pages" value={pages.length} />
-        <Metric label="Total keywords" value={totalKw} />
-        <Metric label="Mapped keywords" value={mapped} accent />
-        <Metric label="Missing pages" value={missing} />
-        <Metric label="Coverage" value={`${coverage}%`} />
-      </section>
+      <div className="flex flex-col gap-4">
+        <span className="label-mono text-muted-foreground">SEO</span>
+        <section className="grid grid-cols-2 border border-hairline bg-card md:grid-cols-4">
+          <Metric label="Pages" value={pages.length} />
+          <Metric label="Keywords" value={totalKw} />
+          <Metric label="Coverage" value={`${coverage}%`} accent />
+          <Metric label="Missing pages" value={missing} />
+        </section>
+      </div>
 
       <div className="flex flex-col gap-4">
-        <span className="label-mono text-muted-foreground">Coverage by cluster</span>
+        <span className="label-mono text-muted-foreground">CRM</span>
+        <section className="grid grid-cols-3 border border-hairline bg-card">
+          <Metric label="Leads" value={crmMetrics.total} />
+          <Metric label="In progress" value={crmMetrics.inProgress} />
+          <Metric label="Won" value={crmMetrics.won} accent />
+        </section>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        <span className="label-mono text-muted-foreground">Recent activity</span>
         <div className="border border-hairline bg-card">
-          {clusters.map((c) => {
-            const m = c.items.filter((i) => i.status === 'Mapped').length
-            const pct = Math.round((m / c.items.length) * 100)
-            return (
-              <div
-                key={c.name}
-                className="flex items-center gap-6 border-b border-hairline px-6 py-4 last:border-b-0"
-              >
-                <span className="w-32 text-sm text-foreground">{c.name}</span>
-                <div className="h-px flex-1 bg-hairline">
-                  <div className="h-px bg-blue" style={{ width: `${pct}%` }} />
-                </div>
-                <span className="font-mono text-xs text-muted-foreground">{pct}%</span>
-              </div>
-            )
-          })}
+          {recentActivity.map((a, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-4 border-b border-hairline px-6 py-4 last:border-b-0"
+            >
+              <span className="label-mono w-10 shrink-0 text-muted-foreground">{a.module}</span>
+              <span className="flex-1 text-sm text-foreground/90">{a.text}</span>
+              <span className="label-mono shrink-0 text-muted-foreground">{a.time}</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>

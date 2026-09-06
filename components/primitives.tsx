@@ -1,22 +1,12 @@
 import type { ReactNode } from 'react'
 
-type StatusKind =
-  | 'Mapped'
-  | 'No page'
-  | 'Missing'
-  | 'Draft'
-  | 'Live'
-  | 'Synced'
-  | 'Pending'
-  | 'Imported'
+const GOOD = new Set(['Mapped', 'Live', 'Synced', 'Imported', 'Won', 'Active'])
+const BAD = new Set(['Missing', 'No page', 'Lost'])
 
-export function StatusPill({ status }: { status: StatusKind }) {
-  const good = status === 'Mapped' || status === 'Live' || status === 'Synced' || status === 'Imported'
-  const bad = status === 'Missing' || status === 'No page'
-
-  const dot = good
+export function StatusPill({ status }: { status: string }) {
+  const dot = GOOD.has(status)
     ? 'bg-blue'
-    : bad
+    : BAD.has(status)
       ? 'bg-destructive'
       : 'bg-muted-foreground'
 
@@ -25,6 +15,12 @@ export function StatusPill({ status }: { status: StatusKind }) {
       <span className={`size-1.5 rounded-full ${dot}`} aria-hidden />
       <span className="label-mono text-foreground/80">{status}</span>
     </span>
+  )
+}
+
+export function ModuleTags({ modules }: { modules: string[] }) {
+  return (
+    <span className="label-mono text-foreground/70">{modules.join(' · ')}</span>
   )
 }
 
