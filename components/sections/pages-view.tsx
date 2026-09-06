@@ -1,24 +1,27 @@
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
+import { useI18n } from '@/components/i18n-provider'
 import { pages } from '@/lib/data'
 
 export function PagesView() {
+  const { t } = useI18n()
+
   return (
     <div className="flex flex-col gap-10">
       <SectionHeader
         index="03"
-        title="Pages"
-        description="Every indexed URL with its title, primary heading, locale and the keyword it is built to rank for."
+        title={t.pagesView.title}
+        description={t.pagesView.description}
       />
 
       <TableShell>
         <thead>
           <tr>
-            <Th>URL</Th>
-            <Th>Title</Th>
-            <Th>H1</Th>
-            <Th>Locale</Th>
-            <Th>Target keyword</Th>
-            <Th>Status</Th>
+            <Th>{t.table.url}</Th>
+            <Th>{t.table.title}</Th>
+            <Th>{t.table.h1}</Th>
+            <Th>{t.table.locale}</Th>
+            <Th>{t.table.targetKeyword}</Th>
+            <Th>{t.table.status}</Th>
           </tr>
         </thead>
         <tbody>

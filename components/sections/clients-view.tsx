@@ -10,9 +10,12 @@ import {
   Th,
   Td,
 } from '@/components/primitives'
+import { useI18n } from '@/components/i18n-provider'
+import { pluralizeProjects } from '@/lib/i18n'
 import { clients, projects, ALL_MODULES, type Client } from '@/lib/data'
 
 function ClientDetail({ client, onClose }: { client: Client; onClose: () => void }) {
+  const { t } = useI18n()
   const clientProjects = projects.filter((p) => p.client === client.name)
 
   return (
@@ -20,12 +23,12 @@ function ClientDetail({ client, onClose }: { client: Client; onClose: () => void
       <div className="fixed inset-0 z-30 bg-foreground/10" onClick={onClose} aria-hidden />
       <aside className="fixed right-0 top-0 z-40 flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-hairline bg-card">
         <div className="flex items-center justify-between border-b border-hairline px-6 py-5">
-          <span className="label-mono text-muted-foreground">Client</span>
+          <span className="label-mono text-muted-foreground">{t.clientsView.detailLabel}</span>
           <button
             onClick={onClose}
             className="label-mono flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
           >
-            Close <X className="size-3" aria-hidden />
+            {t.common.close} <X className="size-3" aria-hidden />
           </button>
         </div>
 
@@ -36,13 +39,13 @@ function ClientDetail({ client, onClose }: { client: Client; onClose: () => void
           </div>
 
           <dl className="flex flex-col gap-px border border-hairline bg-hairline">
-            <Field label="Contact" value={client.contact} />
-            <Field label="Projects" value={String(client.projectCount)} />
-            <Field label="Status" value={client.status} />
+            <Field label={t.field.contact} value={client.contact} />
+            <Field label={t.field.projects} value={String(client.projectCount)} />
+            <Field label={t.field.status} value={t.status[client.status]} />
           </dl>
 
           <div className="flex flex-col gap-3">
-            <span className="label-mono text-muted-foreground">Enabled modules</span>
+            <span className="label-mono text-muted-foreground">{t.clientsView.enabledModules}</span>
             <div className="border border-hairline bg-card">
               {ALL_MODULES.map((m) => {
                 const enabled = client.modules.includes(m)
@@ -60,7 +63,7 @@ function ClientDetail({ client, onClose }: { client: Client; onClose: () => void
                       {enabled && <Check className="size-3" strokeWidth={3} />}
                     </span>
                     <span className={`text-sm ${enabled ? 'text-foreground' : 'text-muted-foreground'}`}>
-                      {m}
+                      {t.module[m]}
                     </span>
                   </div>
                 )
@@ -69,7 +72,7 @@ function ClientDetail({ client, onClose }: { client: Client; onClose: () => void
           </div>
 
           <div className="flex flex-col gap-3">
-            <span className="label-mono text-muted-foreground">Projects</span>
+            <span className="label-mono text-muted-foreground">{t.clientsView.projects}</span>
             <div className="border border-hairline bg-card">
               {clientProjects.map((p) => (
                 <div
@@ -98,17 +101,18 @@ function Field({ label, value }: { label: string; value: string }) {
 }
 
 export function ClientsView() {
+  const { t, locale } = useI18n()
   const [selected, setSelected] = useState<Client | null>(null)
 
   return (
     <div className="flex flex-col gap-10">
       <SectionHeader
         index="02"
-        title="Clients"
-        description="Companies operated through OLNOO Admin. External clients will appear here as modules are enabled per account."
+        title={t.clientsView.title}
+        description={t.clientsView.description}
         action={
           <button className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground">
-            + Add client
+            {t.clientsView.addClient}
           </button>
         }
       />
@@ -116,11 +120,11 @@ export function ClientsView() {
       <TableShell>
         <thead>
           <tr>
-            <Th>Client</Th>
-            <Th>Projects</Th>
-            <Th>Enabled modules</Th>
-            <Th>Contact</Th>
-            <Th>Status</Th>
+            <Th>{t.table.client}</Th>
+            <Th>{t.table.projects}</Th>
+            <Th>{t.table.enabledModules}</Th>
+            <Th>{t.table.contact}</Th>
+            <Th>{t.table.status}</Th>
           </tr>
         </thead>
         <tbody>
@@ -132,7 +136,7 @@ export function ClientsView() {
             >
               <Td className="font-medium text-foreground">{c.name}</Td>
               <Td className="font-mono text-xs text-muted-foreground">
-                {c.projectCount} project{c.projectCount === 1 ? '' : 's'}
+                {pluralizeProjects(c.projectCount, locale)}
               </Td>
               <Td>
                 <ModuleTags modules={c.modules} />

@@ -3,9 +3,11 @@
 import { useState } from 'react'
 import { Check } from 'lucide-react'
 import { SectionHeader } from '@/components/primitives'
+import { useI18n } from '@/components/i18n-provider'
 import { clients, ALL_MODULES, MODULE_STATE, type ModuleKey } from '@/lib/data'
 
 export function SettingsView() {
+  const { t } = useI18n()
   const [matrix, setMatrix] = useState<Record<string, Set<ModuleKey>>>(() =>
     Object.fromEntries(clients.map((c) => [c.id, new Set(c.modules)])),
   )
@@ -23,20 +25,20 @@ export function SettingsView() {
     <div className="flex flex-col gap-10">
       <SectionHeader
         index="09"
-        title="Settings"
-        description="Module enablement per client. Active modules can be toggled today; the remaining modules ship in later releases."
+        title={t.settingsView.title}
+        description={t.settingsView.description}
       />
 
       <section className="flex flex-col gap-4">
-        <span className="label-mono text-muted-foreground">Module availability</span>
+        <span className="label-mono text-muted-foreground">{t.settingsView.moduleAvailability}</span>
         <div className="grid grid-cols-2 gap-px border border-hairline bg-hairline sm:grid-cols-3 lg:grid-cols-6">
           {ALL_MODULES.map((m) => (
             <div key={m} className="flex flex-col gap-2 bg-card px-5 py-5">
-              <span className="text-sm font-medium text-foreground">{m}</span>
+              <span className="text-sm font-medium text-foreground">{t.module[m]}</span>
               <span
                 className={`label-mono ${MODULE_STATE[m] === 'active' ? 'text-blue' : 'text-muted-foreground'}`}
               >
-                {MODULE_STATE[m] === 'active' ? 'Active' : 'Coming later'}
+                {MODULE_STATE[m] === 'active' ? t.common.active : t.settingsView.comingLater}
               </span>
             </div>
           ))}
@@ -44,20 +46,20 @@ export function SettingsView() {
       </section>
 
       <section className="flex flex-col gap-4">
-        <span className="label-mono text-muted-foreground">Enablement matrix</span>
+        <span className="label-mono text-muted-foreground">{t.settingsView.enablementMatrix}</span>
         <div className="overflow-x-auto border border-hairline bg-card">
           <table className="w-full min-w-[720px] border-collapse text-sm">
             <thead>
               <tr>
                 <th className="label-mono border-b border-hairline px-4 py-3 text-left font-normal text-muted-foreground">
-                  Client
+                  {t.table.client}
                 </th>
                 {ALL_MODULES.map((m) => (
                   <th
                     key={m}
                     className="label-mono border-b border-l border-hairline px-4 py-3 text-center font-normal text-muted-foreground"
                   >
-                    {m}
+                    {t.module[m]}
                   </th>
                 ))}
               </tr>
@@ -79,7 +81,7 @@ export function SettingsView() {
                         <button
                           onClick={() => toggle(c.id, m)}
                           disabled={soon}
-                          aria-label={`${enabled ? 'Disable' : 'Enable'} ${m} for ${c.name}`}
+                          aria-label={`${enabled ? t.settingsView.disable : t.settingsView.enable} ${t.module[m]} for ${c.name}`}
                           className={`inline-flex size-4 items-center justify-center border transition-colors ${
                             enabled
                               ? 'border-blue bg-blue text-background'
@@ -98,9 +100,7 @@ export function SettingsView() {
             </tbody>
           </table>
         </div>
-        <p className="label-mono text-muted-foreground">
-          UI only — Social, Ads, PR and Analytics are locked until their modules ship.
-        </p>
+        <p className="label-mono text-muted-foreground">{t.settingsView.footnote}</p>
       </section>
     </div>
   )

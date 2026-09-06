@@ -1,7 +1,9 @@
 import { SectionHeader, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
+import { useI18n } from '@/components/i18n-provider'
 import { metrics, projects, clusters } from '@/lib/data'
 
 export function Overview() {
+  const { t } = useI18n()
   const totalKw = clusters.reduce((s, c) => s + c.items.length, 0)
   const mapped = clusters.reduce(
     (s, c) => s + c.items.filter((i) => i.status === 'Mapped').length,
@@ -13,31 +15,31 @@ export function Overview() {
     <div className="flex flex-col gap-10">
       <SectionHeader
         index="01"
-        title="Overview"
-        description="Operating snapshot across every OLNOO property — inventory, semantic coverage and outstanding gaps."
+        title={t.seoOverview.title}
+        description={t.seoOverview.description}
       />
 
       <section className="grid grid-cols-2 border border-hairline bg-card md:grid-cols-3 lg:grid-cols-5">
-        <Metric label="Projects" value={metrics.projects} />
-        <Metric label="Pages" value={metrics.pages} />
-        <Metric label="Keywords" value={metrics.keywords} />
-        <Metric label="Mapped keywords" value={metrics.mappedKeywords} accent />
-        <Metric label="Missing pages" value={metrics.missingPages} />
+        <Metric label={t.seoOverview.metricProjects} value={metrics.projects} />
+        <Metric label={t.seoOverview.metricPages} value={metrics.pages} />
+        <Metric label={t.seoOverview.metricKeywords} value={metrics.keywords} />
+        <Metric label={t.seoOverview.metricMappedKeywords} value={metrics.mappedKeywords} accent />
+        <Metric label={t.seoOverview.metricMissingPages} value={metrics.missingPages} />
       </section>
 
       <section className="grid gap-8 lg:grid-cols-[1.4fr_1fr]">
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
-            <span className="label-mono text-muted-foreground">Fig. 01 — Projects</span>
-            <span className="label-mono text-muted-foreground">Rev. 03</span>
+            <span className="label-mono text-muted-foreground">{t.seoOverview.figProjects}</span>
+            <span className="label-mono text-muted-foreground">{t.seoOverview.revision}</span>
           </div>
           <TableShell>
             <thead>
               <tr>
-                <Th>Project</Th>
-                <Th>Pages</Th>
-                <Th>Keywords</Th>
-                <Th>Status</Th>
+                <Th>{t.table.project}</Th>
+                <Th>{t.table.pages}</Th>
+                <Th>{t.table.keywords}</Th>
+                <Th>{t.table.status}</Th>
               </tr>
             </thead>
             <tbody>
@@ -61,13 +63,13 @@ export function Overview() {
         </div>
 
         <div className="flex flex-col gap-4">
-          <span className="label-mono text-muted-foreground">Fig. 02 — Semantic coverage</span>
+          <span className="label-mono text-muted-foreground">{t.seoOverview.figCoverage}</span>
           <div className="flex flex-1 flex-col justify-between border border-hairline bg-card p-6">
             <div className="flex items-baseline gap-3">
               <span className="font-mono text-5xl font-light tracking-tight text-foreground">
                 {coverage}
               </span>
-              <span className="label-mono text-muted-foreground">% mapped</span>
+              <span className="label-mono text-muted-foreground">{t.seoOverview.percentMapped}</span>
             </div>
             <div className="mt-6 flex flex-col gap-3">
               {clusters.map((c) => {

@@ -3,22 +3,25 @@
 import { useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
-import { leads, LEAD_STATUSES, type Lead } from '@/lib/data'
+import { useI18n } from '@/components/i18n-provider'
+import { leads, LEAD_STATUSES, type Lead, type LeadStatus } from '@/lib/data'
 
 const sources = ['All', 'SEO', 'Ads', 'Telegram', 'Direct', 'Referral'] as const
 
 function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
+  const { t } = useI18n()
+
   return (
     <>
       <div className="fixed inset-0 z-30 bg-foreground/10" onClick={onClose} aria-hidden />
       <aside className="fixed right-0 top-0 z-40 flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-hairline bg-card">
         <div className="flex items-center justify-between border-b border-hairline px-6 py-5">
-          <span className="label-mono text-muted-foreground">Lead</span>
+          <span className="label-mono text-muted-foreground">{t.leadsView.detailLabel}</span>
           <button
             onClick={onClose}
             className="label-mono flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
           >
-            Close <X className="size-3" aria-hidden />
+            {t.common.close} <X className="size-3" aria-hidden />
           </button>
         </div>
 
@@ -32,11 +35,11 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
           </div>
 
           <div className="flex flex-col gap-3">
-            <span className="label-mono text-muted-foreground">Enquiry</span>
+            <span className="label-mono text-muted-foreground">{t.leadsView.enquiry}</span>
             <dl className="flex flex-col gap-px border border-hairline bg-hairline">
-              <Field label="Email" value={lead.email} mono />
-              <Field label="Company" value={lead.company} />
-              <Field label="Service" value={lead.service} />
+              <Field label={t.field.email} value={lead.email} mono />
+              <Field label={t.field.company} value={lead.company} />
+              <Field label={t.field.service} value={lead.service} />
             </dl>
             <p className="border border-hairline bg-card p-4 text-sm leading-relaxed text-foreground/90">
               {lead.message}
@@ -44,30 +47,30 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
           </div>
 
           <div className="flex flex-col gap-3">
-            <span className="label-mono text-muted-foreground">Source information</span>
+            <span className="label-mono text-muted-foreground">{t.leadsView.sourceInformation}</span>
             <dl className="flex flex-col gap-px border border-hairline bg-hairline">
-              <Field label="Source" value={lead.source} />
-              <Field label="Landing page" value={lead.landingPage} mono />
-              <Field label="Referrer" value={lead.referrer} mono />
-              <Field label="UTM source" value={lead.utmSource} mono />
-              <Field label="UTM medium" value={lead.utmMedium} mono />
-              <Field label="UTM campaign" value={lead.utmCampaign} mono />
-              <Field label="Locale" value={lead.locale} mono />
+              <Field label={t.field.source} value={t.leadSource[lead.source]} />
+              <Field label={t.field.landingPage} value={lead.landingPage} mono />
+              <Field label={t.field.referrer} value={lead.referrer} mono />
+              <Field label={t.field.utmSource} value={lead.utmSource} mono />
+              <Field label={t.field.utmMedium} value={lead.utmMedium} mono />
+              <Field label={t.field.utmCampaign} value={lead.utmCampaign} mono />
+              <Field label={t.field.locale} value={lead.locale} mono />
             </dl>
           </div>
 
           <div className="flex flex-col gap-3">
-            <span className="label-mono text-muted-foreground">CRM</span>
+            <span className="label-mono text-muted-foreground">{t.leadsView.crm}</span>
             <dl className="flex flex-col gap-px border border-hairline bg-hairline">
-              <Field label="Status" value={lead.status} />
+              <Field label={t.field.status} value={t.status[lead.status]} />
             </dl>
             <p className="border border-hairline bg-card p-4 text-sm leading-relaxed text-foreground/90">
-              {lead.notes || 'No notes yet.'}
+              {lead.notes || t.leadsView.noNotes}
             </p>
           </div>
 
           <div className="flex flex-col gap-3">
-            <span className="label-mono text-muted-foreground">Activity</span>
+            <span className="label-mono text-muted-foreground">{t.leadsView.activity}</span>
             <ol className="border border-hairline bg-card">
               {lead.activity.map((a, i) => (
                 <li
@@ -98,6 +101,7 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
 }
 
 export function LeadsView() {
+  const { t } = useI18n()
   const [selected, setSelected] = useState<Lead | null>(null)
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<string>('All')
@@ -116,15 +120,20 @@ export function LeadsView() {
     })
   }, [query, status, source])
 
+  const statusOptions = ['All', ...LEAD_STATUSES] as const
+  const statusLabel = (v: string) => (v === 'All' ? t.common.all : t.status[v as LeadStatus])
+  const sourceLabel = (v: string) =>
+    v === 'All' ? t.common.all : t.leadSource[v as Exclude<(typeof sources)[number], 'All'>]
+
   return (
     <div className="flex flex-col gap-10">
       <SectionHeader
         index="02"
-        title="Leads"
-        description="Every enquiry captured across OLNOO properties, with acquisition context preserved for each record."
+        title={t.leadsView.title}
+        description={t.leadsView.description}
         action={
           <button className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground">
-            + Add lead
+            {t.leadsView.addLead}
           </button>
         }
       />
@@ -133,24 +142,36 @@ export function LeadsView() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search name, company, email"
+          placeholder={t.leadsView.searchPlaceholder}
           className="label-mono min-w-[200px] flex-1 border border-hairline bg-card px-4 py-2.5 text-foreground placeholder:text-muted-foreground focus:border-foreground/40 focus:outline-none"
         />
-        <Select value={status} onChange={setStatus} options={['All', ...LEAD_STATUSES]} label="Status" />
-        <Select value={source} onChange={setSource} options={[...sources]} label="Source" />
+        <Select
+          value={status}
+          onChange={setStatus}
+          options={[...statusOptions]}
+          getLabel={statusLabel}
+          label={t.leadsView.filterStatus}
+        />
+        <Select
+          value={source}
+          onChange={setSource}
+          options={[...sources]}
+          getLabel={sourceLabel}
+          label={t.leadsView.filterSource}
+        />
       </div>
 
       <TableShell>
         <thead>
           <tr>
-            <Th>Name</Th>
-            <Th>Company</Th>
-            <Th>Email</Th>
-            <Th>Service</Th>
-            <Th>Source</Th>
-            <Th>Landing page</Th>
-            <Th>Status</Th>
-            <Th>Created</Th>
+            <Th>{t.table.name}</Th>
+            <Th>{t.table.company}</Th>
+            <Th>{t.table.email}</Th>
+            <Th>{t.table.service}</Th>
+            <Th>{t.table.source}</Th>
+            <Th>{t.table.landingPage}</Th>
+            <Th>{t.table.status}</Th>
+            <Th>{t.table.created}</Th>
           </tr>
         </thead>
         <tbody>
@@ -165,7 +186,7 @@ export function LeadsView() {
               <Td className="font-mono text-xs">{l.email}</Td>
               <Td>{l.service}</Td>
               <Td>
-                <span className="label-mono text-muted-foreground">{l.source}</span>
+                <span className="label-mono text-muted-foreground">{t.leadSource[l.source]}</span>
               </Td>
               <Td className="font-mono text-xs text-blue">{l.landingPage}</Td>
               <Td>
@@ -177,7 +198,7 @@ export function LeadsView() {
           {filtered.length === 0 && (
             <tr>
               <Td className="text-muted-foreground" >
-                <span className="label-mono">No leads match the current filters.</span>
+                <span className="label-mono">{t.leadsView.noResults}</span>
               </Td>
               <Td> </Td>
               <Td> </Td>
@@ -200,11 +221,13 @@ function Select({
   value,
   onChange,
   options,
+  getLabel,
   label,
 }: {
   value: string
   onChange: (v: string) => void
   options: string[]
+  getLabel: (v: string) => string
   label: string
 }) {
   return (
@@ -217,7 +240,7 @@ function Select({
       >
         {options.map((o) => (
           <option key={o} value={o}>
-            {o}
+            {getLabel(o)}
           </option>
         ))}
       </select>

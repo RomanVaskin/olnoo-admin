@@ -2,15 +2,24 @@
 
 import { useState } from 'react'
 import { projects } from '@/lib/data'
+import { useI18n } from '@/components/i18n-provider'
+import { pluralizeProperties } from '@/lib/i18n'
 
-const options = [
-  { id: 'all', name: 'All projects', domain: '3 properties' },
-  ...projects.map((p) => ({ id: p.id, name: p.name, domain: p.domain })),
-]
-
-export function ProjectSelector() {
+export function ProjectSelector({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (id: string) => void
+}) {
+  const { t, locale } = useI18n()
   const [open, setOpen] = useState(false)
-  const [selected, setSelected] = useState(options[0])
+
+  const options = [
+    { id: 'all', name: t.projectSelector.allProjects, domain: pluralizeProperties(projects.length, locale) },
+    ...projects.map((p) => ({ id: p.id, name: p.name, domain: p.domain })),
+  ]
+  const selected = options.find((o) => o.id === value) ?? options[0]
 
   return (
     <div className="relative">
@@ -42,7 +51,7 @@ export function ProjectSelector() {
               <button
                 key={o.id}
                 onClick={() => {
-                  setSelected(o)
+                  onChange(o.id)
                   setOpen(false)
                 }}
                 className={`flex w-full flex-col items-start gap-0.5 border-b border-hairline px-4 py-2.5 text-left transition-colors last:border-b-0 hover:bg-muted/60 ${

@@ -1,13 +1,16 @@
 import { SectionHeader } from '@/components/primitives'
+import { useI18n } from '@/components/i18n-provider'
 import { clusters } from '@/lib/data'
 
 export function SeoMap() {
+  const { t } = useI18n()
+
   return (
     <div className="flex flex-col gap-10">
       <SectionHeader
         index="05"
-        title="SEO Map"
-        description="The semantic backbone. Each keyword resolves to a destination page, grouped by cluster. Missing pages are the work queue."
+        title={t.seoMap.title}
+        description={t.seoMap.description}
       />
 
       <div className="flex flex-col gap-px border border-hairline bg-hairline">
@@ -18,7 +21,7 @@ export function SeoMap() {
               <div className="flex items-center justify-between border-b border-hairline px-6 py-4">
                 <span className="label-mono text-foreground">{cluster.name}</span>
                 <span className="label-mono text-muted-foreground">
-                  {missing > 0 ? `${missing} missing` : 'complete'}
+                  {missing > 0 ? t.seoMap.missing(missing) : t.seoMap.complete}
                 </span>
               </div>
               <ul className="flex flex-col">
@@ -43,7 +46,7 @@ export function SeoMap() {
                             : 'font-mono text-xs text-blue'
                         }
                       >
-                        {missingPage ? 'No page' : item.page}
+                        {missingPage ? t.seoMap.noPage : item.page}
                       </span>
                       <span className="inline-flex items-center gap-2 justify-self-start md:justify-self-end">
                         <span
@@ -51,7 +54,7 @@ export function SeoMap() {
                           aria-hidden
                         />
                         <span className="label-mono text-foreground/80">
-                          {missingPage ? 'Missing' : 'Mapped'}
+                          {missingPage ? t.status.Missing : t.status.Mapped}
                         </span>
                       </span>
                     </li>

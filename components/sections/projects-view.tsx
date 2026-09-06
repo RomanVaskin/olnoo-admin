@@ -6,18 +6,21 @@ import {
   Th,
   Td,
 } from '@/components/primitives'
+import { useI18n } from '@/components/i18n-provider'
 import { projects } from '@/lib/data'
 
 export function ProjectsView() {
+  const { t } = useI18n()
+
   return (
     <div className="flex flex-col gap-10">
       <SectionHeader
         index="03"
-        title="Projects"
-        description="Connected properties across every client. Each project carries its own domain, module set, page inventory, keyword set and pipeline."
+        title={t.projectsView.title}
+        description={t.projectsView.description}
         action={
           <button className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground">
-            New project
+            {t.projectsView.newProject}
           </button>
         }
       />
@@ -25,14 +28,14 @@ export function ProjectsView() {
       <TableShell>
         <thead>
           <tr>
-            <Th>Project</Th>
-            <Th>Domain</Th>
-            <Th>Client</Th>
-            <Th>Modules</Th>
-            <Th className="text-right">Pages</Th>
-            <Th className="text-right">Keywords</Th>
-            <Th className="text-right">Leads</Th>
-            <Th>Status</Th>
+            <Th>{t.table.project}</Th>
+            <Th>{t.table.domain}</Th>
+            <Th>{t.table.client}</Th>
+            <Th>{t.table.modules}</Th>
+            <Th className="text-right">{t.table.pages}</Th>
+            <Th className="text-right">{t.table.keywords}</Th>
+            <Th className="text-right">{t.table.leads}</Th>
+            <Th>{t.table.status}</Th>
           </tr>
         </thead>
         <tbody>

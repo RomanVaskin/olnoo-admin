@@ -18,6 +18,10 @@ export const metadata: Metadata = {
   description:
     'Unified OLNOO client and operations platform — clients, projects, SEO and CRM in one premium workspace.',
   generator: 'v0.app',
+  robots: {
+    index: false,
+    follow: false,
+  },
 }
 
 export const viewport: Viewport = {

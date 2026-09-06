@@ -1,5 +1,6 @@
 import { SectionHeader, Metric } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
+import { useI18n } from '@/components/i18n-provider'
 import {
   adminMetrics,
   metrics,
@@ -24,48 +25,56 @@ function StatRow({ label, value }: { label: string; value: string | number }) {
   )
 }
 
-export function AdminOverview() {
+export function AdminOverview({
+  project,
+  onProjectChange,
+}: {
+  project: string
+  onProjectChange: (id: string) => void
+}) {
+  const { t } = useI18n()
+
   return (
     <div className="flex flex-col gap-10">
       <SectionHeader
         index="01"
-        title="Overview"
-        description="A cross-module snapshot of the OLNOO platform — inventory, semantic coverage and pipeline in one place."
-        action={<ProjectSelector />}
+        title={t.adminOverview.title}
+        description={t.adminOverview.description}
+        action={<ProjectSelector value={project} onChange={onProjectChange} />}
       />
 
       <section className="grid grid-cols-2 border border-hairline bg-card md:grid-cols-3 lg:grid-cols-5">
-        <Metric label="Active projects" value={adminMetrics.activeProjects} />
-        <Metric label="SEO pages" value={adminMetrics.seoPages} />
-        <Metric label="Keywords" value={adminMetrics.keywords} />
-        <Metric label="New leads" value={adminMetrics.newLeads} accent />
-        <Metric label="Open leads" value={adminMetrics.openLeads} />
+        <Metric label={t.adminOverview.metricActiveProjects} value={adminMetrics.activeProjects} />
+        <Metric label={t.adminOverview.metricSeoPages} value={adminMetrics.seoPages} />
+        <Metric label={t.adminOverview.metricKeywords} value={adminMetrics.keywords} />
+        <Metric label={t.adminOverview.metricNewLeads} value={adminMetrics.newLeads} accent />
+        <Metric label={t.adminOverview.metricOpenLeads} value={adminMetrics.openLeads} />
       </section>
 
       <section className="grid gap-8 lg:grid-cols-2">
         <div className="flex flex-col gap-4">
-          <span className="label-mono text-muted-foreground">Module — SEO</span>
+          <span className="label-mono text-muted-foreground">{t.adminOverview.moduleSeo}</span>
           <div className="border border-hairline bg-card">
-            <StatRow label="Pages" value={metrics.pages} />
-            <StatRow label="Keywords" value={metrics.keywords} />
-            <StatRow label="Missing pages" value={metrics.missingPages} />
-            <StatRow label="Coverage" value={`${coverage}%`} />
+            <StatRow label={t.adminOverview.statPages} value={metrics.pages} />
+            <StatRow label={t.adminOverview.statKeywords} value={metrics.keywords} />
+            <StatRow label={t.adminOverview.statMissingPages} value={metrics.missingPages} />
+            <StatRow label={t.adminOverview.statCoverage} value={`${coverage}%`} />
           </div>
         </div>
 
         <div className="flex flex-col gap-4">
-          <span className="label-mono text-muted-foreground">Module — CRM</span>
+          <span className="label-mono text-muted-foreground">{t.adminOverview.moduleCrm}</span>
           <div className="border border-hairline bg-card">
-            <StatRow label="New leads" value={crmMetrics.new} />
-            <StatRow label="In progress" value={crmMetrics.inProgress} />
-            <StatRow label="Proposal" value={crmMetrics.proposal} />
-            <StatRow label="Won" value={crmMetrics.won} />
+            <StatRow label={t.adminOverview.statNewLeads} value={crmMetrics.new} />
+            <StatRow label={t.adminOverview.statInProgress} value={crmMetrics.inProgress} />
+            <StatRow label={t.adminOverview.statProposal} value={crmMetrics.proposal} />
+            <StatRow label={t.adminOverview.statWon} value={crmMetrics.won} />
           </div>
         </div>
       </section>
 
       <section className="flex flex-col gap-4">
-        <span className="label-mono text-muted-foreground">Recent activity</span>
+        <span className="label-mono text-muted-foreground">{t.adminOverview.recentActivity}</span>
         <div className="border border-hairline bg-card">
           {recentActivity.map((a, i) => (
             <div
@@ -73,7 +82,7 @@ export function AdminOverview() {
               className="flex items-center gap-4 border-b border-hairline px-6 py-4 last:border-b-0"
             >
               <span className="label-mono w-10 shrink-0 text-muted-foreground">
-                {a.module}
+                {t.module[a.module]}
               </span>
               <span className="flex-1 text-sm text-foreground/90">{a.text}</span>
               <span className="label-mono shrink-0 text-muted-foreground">{a.time}</span>

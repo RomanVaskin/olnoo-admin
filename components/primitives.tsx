@@ -1,26 +1,33 @@
 import type { ReactNode } from 'react'
+import { useI18n } from '@/components/i18n-provider'
+import type { ModuleKey } from '@/lib/data'
 
 const GOOD = new Set(['Mapped', 'Live', 'Synced', 'Imported', 'Won', 'Active'])
 const BAD = new Set(['Missing', 'No page', 'Lost'])
 
 export function StatusPill({ status }: { status: string }) {
+  const { t } = useI18n()
   const dot = GOOD.has(status)
     ? 'bg-blue'
     : BAD.has(status)
       ? 'bg-destructive'
       : 'bg-muted-foreground'
+  const label = t.status[status as keyof typeof t.status] ?? status
 
   return (
     <span className="inline-flex items-center gap-2 whitespace-nowrap">
       <span className={`size-1.5 rounded-full ${dot}`} aria-hidden />
-      <span className="label-mono text-foreground/80">{status}</span>
+      <span className="label-mono text-foreground/80">{label}</span>
     </span>
   )
 }
 
-export function ModuleTags({ modules }: { modules: string[] }) {
+export function ModuleTags({ modules }: { modules: ModuleKey[] }) {
+  const { t } = useI18n()
   return (
-    <span className="label-mono text-foreground/70">{modules.join(' · ')}</span>
+    <span className="label-mono text-foreground/70">
+      {modules.map((m) => t.module[m]).join(' · ')}
+    </span>
   )
 }
 
