@@ -21,6 +21,7 @@ import {
   ClientOverview,
   ClientPages,
   ClientKeywords,
+  ClientSeoMap,
 } from '@/components/sections/client-view'
 
 type Mode = 'admin' | 'client'
@@ -277,7 +278,7 @@ export function AppShell() {
           {active === 'client-overview' && <ClientOverview />}
           {active === 'client-seo-pages' && <ClientPages />}
           {active === 'client-seo-keywords' && <ClientKeywords />}
-          {active === 'client-seo-map' && <SeoMap />}
+          {active === 'client-seo-map' && <ClientSeoMap />}
           {active === 'client-crm-leads' && <ClientCrm />}
         </main>
       </div>

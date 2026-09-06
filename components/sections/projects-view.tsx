@@ -1,3 +1,6 @@
+'use client'
+
+import { useEffect, useState } from 'react'
 import {
   SectionHeader,
   StatusPill,
@@ -7,10 +10,30 @@ import {
   Td,
 } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
-import { projects } from '@/lib/data'
+import type { ModuleKey } from '@/lib/data'
+
+type ProjectRow = {
+  id: number
+  name: string
+  domain: string
+  client_name: string
+  status: string
+  pages_count: number
+  keywords_count: number
+}
+
+// Only the SEO module has a real backend so far — CRM/Social/Ads/PR/Analytics stay out of scope here.
+const PROJECT_MODULES: ModuleKey[] = ['SEO']
 
 export function ProjectsView() {
   const { t } = useI18n()
+  const [projects, setProjects] = useState<ProjectRow[]>([])
+
+  useEffect(() => {
+    fetch('/api/projects')
+      .then((res) => res.json())
+      .then(setProjects)
+  }, [])
 
   return (
     <div className="flex flex-col gap-10">
@@ -43,13 +66,13 @@ export function ProjectsView() {
             <tr key={p.id} className="transition-colors hover:bg-muted/60">
               <Td className="font-medium text-foreground">{p.name}</Td>
               <Td className="font-mono text-xs">{p.domain}</Td>
-              <Td className="text-muted-foreground">{p.client}</Td>
+              <Td className="text-muted-foreground">{p.client_name}</Td>
               <Td>
-                <ModuleTags modules={p.modules} />
+                <ModuleTags modules={PROJECT_MODULES} />
               </Td>
-              <Td className="text-right font-mono">{p.pages}</Td>
-              <Td className="text-right font-mono">{p.keywords}</Td>
-              <Td className="text-right font-mono">{p.leads ?? '—'}</Td>
+              <Td className="text-right font-mono">{p.pages_count}</Td>
+              <Td className="text-right font-mono">{p.keywords_count}</Td>
+              <Td className="text-right font-mono">—</Td>
               <Td>
                 <StatusPill status={p.status} />
               </Td>

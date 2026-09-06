@@ -110,6 +110,7 @@ export const en = {
     Won: 'Won',
     Lost: 'Lost',
     Imported: 'Imported',
+    Unassigned: 'Unassigned',
   },
   leadSource: {
     SEO: 'SEO',
@@ -183,11 +184,18 @@ export const en = {
     title: 'Pages',
     description:
       'Every indexed URL with its title, primary heading, locale and the keyword it is built to rank for.',
+    syncButton: 'Sync Pages',
+    syncing: 'Syncing…',
+    syncResult: (found: number, upserted: number, failed: number) =>
+      `Sync complete — ${found} found, ${upserted} updated${failed ? `, ${failed} failed` : ''}.`,
+    syncError: 'Sync failed. Please try again.',
+    empty: 'No pages yet. Run Sync Pages to import them from the sitemap.',
   },
   keywordsView: {
     title: 'Keywords',
     description:
       'Wordstat demand grouped into clusters and mapped to a target page. Unmapped queries surface as page opportunities.',
+    empty: 'No keywords yet. Import Wordstat data or wait for the next sync.',
   },
   seoMap: {
     title: 'SEO Map',
@@ -196,6 +204,7 @@ export const en = {
     missing: (n: number) => `${n} missing`,
     complete: 'complete',
     noPage: 'No page',
+    empty: 'No keywords yet for this project.',
   },
   wordstatImport: {
     title: 'Wordstat Import',
@@ -205,6 +214,11 @@ export const en = {
     dropzoneTitle: 'Drop CSV / XLSX or click to browse',
     dropzoneHint: 'Keyword · Frequency · Region',
     importButton: 'Import keywords',
+    importing: 'Importing…',
+    importSuccess: (n: number) => `Imported ${n} keywords.`,
+    importError: 'Import failed. Please try again.',
+    parseError: 'Could not read this file. Check the format and try again.',
+    noPreview: 'Select a project and upload a file to preview rows.',
     preview: (count: number, total: number) => `Preview — ${count} of ${total} rows`,
     recentImports: 'Recent imports',
   },

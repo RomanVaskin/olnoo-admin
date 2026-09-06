@@ -112,6 +112,7 @@ export const ru: Messages = {
     Won: 'Выигран',
     Lost: 'Проигран',
     Imported: 'Импортировано',
+    Unassigned: 'Не размечено',
   },
   leadSource: {
     SEO: 'SEO',
@@ -185,11 +186,18 @@ export const ru: Messages = {
     title: 'Страницы',
     description:
       'Все проиндексированные URL с заголовком, основным H1, локалью и ключевым запросом, под который создана страница.',
+    syncButton: 'Синхронизировать страницы',
+    syncing: 'Синхронизация…',
+    syncResult: (found: number, upserted: number, failed: number) =>
+      `Синхронизация завершена — найдено ${found}, обновлено ${upserted}${failed ? `, ошибок ${failed}` : ''}.`,
+    syncError: 'Не удалось синхронизировать. Попробуйте ещё раз.',
+    empty: 'Страниц пока нет. Запустите синхронизацию, чтобы импортировать их из sitemap.',
   },
   keywordsView: {
     title: 'Ключевые слова',
     description:
       'Спрос из Wordstat, сгруппированный в кластеры и размеченный на целевые страницы. Неразмеченные запросы становятся задачами на создание страниц.',
+    empty: 'Ключевых слов пока нет. Импортируйте данные Wordstat или дождитесь следующей синхронизации.',
   },
   seoMap: {
     title: 'SEO-карта',
@@ -198,6 +206,7 @@ export const ru: Messages = {
     missing: (n: number) => `${n} отсутствует`,
     complete: 'готово',
     noPage: 'Нет страницы',
+    empty: 'Для этого проекта пока нет ключевых слов.',
   },
   wordstatImport: {
     title: 'Импорт Wordstat',
@@ -207,6 +216,11 @@ export const ru: Messages = {
     dropzoneTitle: 'Перетащите CSV / XLSX или нажмите, чтобы выбрать файл',
     dropzoneHint: 'Ключевое слово · Частота · Регион',
     importButton: 'Импортировать ключевые слова',
+    importing: 'Импортируем…',
+    importSuccess: (n: number) => `Импортировано ${n} ключевых слов.`,
+    importError: 'Импорт не удался. Попробуйте ещё раз.',
+    parseError: 'Не удалось прочитать файл. Проверьте формат и попробуйте снова.',
+    noPreview: 'Выберите проект и загрузите файл для предпросмотра.',
     preview: (count: number, total: number) => `Предпросмотр — ${count} из ${total} строк`,
     recentImports: 'Последние импорты',
   },
