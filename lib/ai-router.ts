@@ -36,7 +36,7 @@ export async function callAiRouter(
     body: JSON.stringify({
       taskType: 'reasoning',
       messages,
-      provider: 'auto',
+      provider: 'openai',
       model: null,
       temperature: opts.temperature ?? 0.1,
       maxTokens: opts.maxTokens ?? 12000,
