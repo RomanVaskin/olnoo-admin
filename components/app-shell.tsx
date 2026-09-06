@@ -12,6 +12,7 @@ import { Overview } from '@/components/sections/overview'
 import { PagesView } from '@/components/sections/pages-view'
 import { KeywordsView } from '@/components/sections/keywords-view'
 import { SeoMap } from '@/components/sections/seo-map'
+import { SeoClusters } from '@/components/sections/seo-clusters'
 import { WordstatImport } from '@/components/sections/wordstat-import'
 import { CrmOverview } from '@/components/sections/crm-overview'
 import { LeadsView } from '@/components/sections/leads-view'
@@ -52,6 +53,7 @@ const adminGroups: NavGroup[] = [
           { id: 'seo-keywords' },
           { id: 'seo-map' },
           { id: 'seo-wordstat' },
+          { id: 'seo-clusters' },
         ],
       },
       {
@@ -268,6 +270,7 @@ export function AppShell() {
           {active === 'seo-keywords' && <KeywordsView />}
           {active === 'seo-map' && <SeoMap />}
           {active === 'seo-wordstat' && <WordstatImport />}
+          {active === 'seo-clusters' && <SeoClusters />}
           {active === 'crm-overview' && (
             <CrmOverview project={project} onProjectChange={setProject} />
           )}
