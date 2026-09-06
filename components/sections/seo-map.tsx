@@ -15,7 +15,21 @@ type MapItem = {
   status: 'Mapped' | 'Unassigned'
 }
 
-type PageOption = { id: number; url: string }
+type PageOption = { id: number; url: string; locale: string | null; title: string | null }
+
+function pagePath(url: string) {
+  try {
+    return new URL(url).pathname || '/'
+  } catch {
+    return url
+  }
+}
+
+function pageOptionLabel(page: PageOption) {
+  const parts = [page.locale, pagePath(page.url)].filter(Boolean)
+  const base = parts.join(' ')
+  return page.title ? `${base} — ${page.title}` : base
+}
 
 export function SeoMap() {
   const { t } = useI18n()
@@ -40,7 +54,14 @@ export function SeoMap() {
       .then(([mapItems, pageRows]) => {
         if (cancelled) return
         setItems(mapItems)
-        setPages(pageRows.map((p: any) => ({ id: p.id, url: p.url })))
+        setPages(
+          pageRows.map((p: any) => ({
+            id: p.id,
+            url: p.url,
+            locale: p.locale ?? null,
+            title: p.title ?? null,
+          })),
+        )
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -122,7 +143,7 @@ export function SeoMap() {
                         <option value="">{t.seoMap.noPage}</option>
                         {pages.map((p) => (
                           <option key={p.id} value={p.id}>
-                            {p.url}
+                            {pageOptionLabel(p)}
                           </option>
                         ))}
                       </select>
