@@ -35,6 +35,9 @@ jobs:
           set -e
           cd "$PROD_DIR"
           git restore next-env.d.ts package-lock.json 2>/dev/null || true
+          if [ -f package-lock.json ] && ! git ls-files --error-unmatch package-lock.json > /dev/null 2>&1; then
+            rm -f package-lock.json
+          fi
           git pull --ff-only origin main
           npm install
           npm run build
