@@ -34,12 +34,9 @@ jobs:
           ssh -i ~/.ssh/deploy_key "$PROD_USER@$PROD_HOST" "bash -s" <<EOF
           set -e
           cd "$PROD_DIR"
-          git restore next-env.d.ts package-lock.json 2>/dev/null || true
-          if [ -f package-lock.json ] && ! git ls-files --error-unmatch package-lock.json > /dev/null 2>&1; then
-            rm -f package-lock.json
-          fi
-          git pull --ff-only origin main
-          npm install
+          git fetch origin main
+          git reset --hard origin/main
+          npm ci
           npm run build
           systemctl restart "$SYSTEMD_SERVICE"
           systemctl is-active --quiet "$SYSTEMD_SERVICE"
