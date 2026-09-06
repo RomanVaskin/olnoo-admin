@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
-import { parseImportFile } from '@/lib/import-parse'
+import { ImportParseError, parseImportFile } from '@/lib/import-parse'
+import { importKeywordRows } from '@/lib/keywords-import'
 
 const PREVIEW_LIMIT = 20
 
@@ -36,8 +37,9 @@ export async function POST(req: Request) {
   let rows
   try {
     rows = await parseImportFile(buffer, file.name)
-  } catch {
-    return NextResponse.json({ error: 'Could not parse file' }, { status: 400 })
+  } catch (err) {
+    const reason = err instanceof ImportParseError ? err.message : 'неизвестная ошибка при разборе файла'
+    return NextResponse.json({ error: `Не удалось прочитать файл: ${reason}` }, { status: 400 })
   }
 
   if (!confirm) {
@@ -48,31 +50,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'No valid rows found in file' }, { status: 400 })
   }
 
-  const client = await pool.connect()
   try {
-    await client.query('BEGIN')
-    for (const row of rows) {
-      await client.query(
-        `
-        INSERT INTO keywords (project_id, query, frequency, region, status)
-        VALUES ($1, $2, $3, $4, 'active')
-        ON CONFLICT (project_id, query, region)
-        DO UPDATE SET frequency = EXCLUDED.frequency, updated_at = now()
-        `,
-        [projectId, row.keyword, row.frequency, row.region],
-      )
-    }
-    await client.query(
-      `INSERT INTO imports (project_id, file_name, rows_count, status) VALUES ($1, $2, $3, 'Imported')`,
-      [projectId, file.name, rows.length],
-    )
-    await client.query('COMMIT')
-  } catch (err) {
-    await client.query('ROLLBACK')
+    const result = await importKeywordRows(pool, projectId as string, file.name, rows)
+    return NextResponse.json(result)
+  } catch {
     return NextResponse.json({ error: 'Import failed' }, { status: 500 })
-  } finally {
-    client.release()
   }
-
-  return NextResponse.json({ imported: rows.length })
 }

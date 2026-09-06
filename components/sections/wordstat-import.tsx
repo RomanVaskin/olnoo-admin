@@ -57,8 +57,8 @@ export function WordstatImport() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setPreview({ rows: data.preview, total: data.total })
-    } catch {
-      setMessage(t.wordstatImport.parseError)
+    } catch (err) {
+      setMessage(err instanceof Error && err.message ? err.message : t.wordstatImport.parseError)
     } finally {
       setBusy(false)
     }
@@ -80,8 +80,8 @@ export function WordstatImport() {
       setFile(null)
       setPreview(null)
       loadImports()
-    } catch {
-      setMessage(t.wordstatImport.importError)
+    } catch (err) {
+      setMessage(err instanceof Error && err.message ? err.message : t.wordstatImport.importError)
     } finally {
       setBusy(false)
     }
