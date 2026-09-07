@@ -28,6 +28,8 @@ type RawCluster = {
   reason: string
 }
 
+export type ReviewStatus = 'pending' | 'confirmed' | 'no_page' | 'ignored'
+
 export type SavedCluster = {
   id: number
   name: string
@@ -41,6 +43,10 @@ export type SavedCluster = {
   needsNewPage: boolean
   reason: string | null
   status: string
+  confirmedPageId: number | null
+  confirmedPageUrl: string | null
+  reviewStatus: ReviewStatus
+  reviewedAt: string | null
   keywords: { id: number; query: string; frequency: number | null }[]
 }
 
@@ -422,10 +428,15 @@ export async function listClustersForProject(pool: Pool, projectId: number): Pro
       sc.confidence,
       sc.needs_new_page,
       sc.reason,
-      sc.status
+      sc.status,
+      sc.confirmed_page_id,
+      cp.url AS confirmed_page_url,
+      sc.review_status,
+      sc.reviewed_at
     FROM seo_clusters sc
     LEFT JOIN keywords pk ON pk.id = sc.primary_keyword_id
     LEFT JOIN pages rp ON rp.id = sc.recommended_page_id
+    LEFT JOIN pages cp ON cp.id = sc.confirmed_page_id
     WHERE sc.project_id = $1
     ORDER BY sc.total_frequency DESC NULLS LAST, sc.id ASC
     `,
@@ -465,6 +476,59 @@ export async function listClustersForProject(pool: Pool, projectId: number): Pro
     needsNewPage: r.needs_new_page,
     reason: r.reason,
     status: r.status,
+    confirmedPageId: r.confirmed_page_id,
+    confirmedPageUrl: r.confirmed_page_url,
+    reviewStatus: r.review_status,
+    reviewedAt: r.reviewed_at,
     keywords: keywordsByCluster.get(r.id) ?? [],
   }))
+}
+
+export class ClusterReviewError extends Error {}
+
+/**
+ * Records a human decision on a cluster's target page — separate from the AI's own
+ * `status` field, which stays untouched and keeps reflecting the AI's own classification.
+ * 'confirmed' requires a pageId (the AI recommendation or another existing page from the
+ * same project); 'no_page' and 'ignored' always clear confirmed_page_id.
+ */
+export async function updateClusterReview(
+  pool: Pool,
+  params: { clusterId: number; projectId: number; reviewStatus: ReviewStatus; pageId: number | null },
+): Promise<void> {
+  const { clusterId, projectId, reviewStatus, pageId } = params
+
+  if (reviewStatus === 'confirmed') {
+    if (!Number.isInteger(pageId)) {
+      throw new ClusterReviewError('pageId is required to confirm a target page.')
+    }
+    const { rows } = await pool.query(
+      `UPDATE seo_clusters
+       SET confirmed_page_id = $1, review_status = 'confirmed', reviewed_at = now(), updated_at = now()
+       WHERE id = $2
+         AND project_id = $3
+         AND EXISTS (SELECT 1 FROM pages p WHERE p.id = $1 AND p.project_id = $3)
+       RETURNING id`,
+      [pageId, clusterId, projectId],
+    )
+    if (rows.length === 0) {
+      throw new ClusterReviewError('Cluster or page not found for this project.')
+    }
+    return
+  }
+
+  if (reviewStatus !== 'no_page' && reviewStatus !== 'ignored') {
+    throw new ClusterReviewError('Invalid review status.')
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE seo_clusters
+     SET confirmed_page_id = NULL, review_status = $1, reviewed_at = now(), updated_at = now()
+     WHERE id = $2 AND project_id = $3
+     RETURNING id`,
+    [reviewStatus, clusterId, projectId],
+  )
+  if (rows.length === 0) {
+    throw new ClusterReviewError('Cluster not found for this project.')
+  }
 }
