@@ -48,7 +48,7 @@ export type SavedCluster = {
 // Router rejects any message content over 32000 chars; this leaves a small safety margin
 // so projects near the edge (many keywords and/or many pages) fail the size check below
 // rather than hit the Router's 400 VALIDATION_ERROR.
-const MAX_PROMPT_CHARS = 31800
+const MAX_PROMPT_CHARS = 90000
 
 // Below this confidence a cluster is surfaced for manual review instead of being
 // auto-labelled "Existing page" / "No page".
