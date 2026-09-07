@@ -61,11 +61,11 @@ function pageLocale(p: PageOption): string | null {
 }
 
 /**
- * A cluster's language, used to filter the target-page dropdown so an RU cluster only offers
- * RU pages (and vice versa). Prefers the AI-recommended page's language — the most reliable
+ * A cluster's language, used to filter page search results so an RU cluster only offers RU
+ * pages (and vice versa). Prefers the AI-recommended page's language — the most reliable
  * signal — and only falls back to guessing from the primary keyword's script when no
  * recommendation exists. Never derived from confirmedPageId: a previously mis-confirmed page
- * must not bias the language filter, or the safety case in step 3 would defeat itself.
+ * must not bias the language filter.
  */
 function clusterLocale(c: ClusterRow, pages: PageOption[]): string | null {
   if (c.recommendedPageId != null) {
@@ -75,6 +75,135 @@ function clusterLocale(c: ClusterRow, pages: PageOption[]): string | null {
   }
   if (c.primaryKeyword) return /[Ѐ-ӿ]/.test(c.primaryKeyword) ? 'ru' : 'en'
   return null
+}
+
+/**
+ * Ranks a page against a search query: exact match (0) beats prefix match (1) beats substring
+ * match (2); anything else is excluded. Checked against URL, title, and H1 — whichever the page
+ * has. Deliberately simple (no fuzzy-matching library) per the search requirements.
+ */
+function pageMatchScore(p: PageOption, query: string): number | null {
+  const fields = [p.url, pagePath(p.url), p.title, p.h1]
+    .filter((v): v is string => !!v)
+    .map((v) => v.toLowerCase())
+  if (fields.some((f) => f === query)) return 0
+  if (fields.some((f) => f.startsWith(query))) return 1
+  if (fields.some((f) => f.includes(query))) return 2
+  return null
+}
+
+/** Reusable page search: filters an already-loaded, locale-scoped page list client-side, max 10 results. */
+function searchPages(pages: PageOption[], query: string): PageOption[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  return pages
+    .map((p) => ({ p, score: pageMatchScore(p, q) }))
+    .filter((x): x is { p: PageOption; score: number } => x.score !== null)
+    .sort((a, b) => a.score - b.score || a.p.url.localeCompare(b.p.url))
+    .slice(0, 10)
+    .map((x) => x.p)
+}
+
+/** Best (lowest) pageMatchScore across several query strings — used to rank a page against both the primary keyword and the cluster name at once. */
+function clusterMatchScore(p: PageOption, queries: string[]): number | null {
+  let best: number | null = null
+  for (const raw of queries) {
+    const q = raw.trim().toLowerCase()
+    if (!q) continue
+    const score = pageMatchScore(p, q)
+    if (score !== null && (best === null || score < best)) best = score
+  }
+  return best
+}
+
+/**
+ * Up to 3 "Recommended pages" for a cluster, client-side only — no new AI call, no new API. The
+ * AI recommendation (if any) always leads; the remaining slots are filled from the already-loaded,
+ * locale-matching page list, ranked by relevance of the primary keyword + cluster name against
+ * URL/title/H1 (exact > startsWith > includes, per pageMatchScore). Never duplicates a page.
+ */
+function getRecommendedPages(c: ClusterRow, pages: PageOption[]): PageOption[] {
+  const result: PageOption[] = []
+  const seen = new Set<number>()
+
+  const aiPick = c.recommendedPageId != null ? pages.find((p) => p.id === c.recommendedPageId) : undefined
+  if (aiPick) {
+    result.push(aiPick)
+    seen.add(aiPick.id)
+  }
+
+  const clusterLoc = clusterLocale(c, pages)
+  const localePages = clusterLoc ? pages.filter((p) => pageLocale(p) === clusterLoc) : pages
+  const queries = [c.primaryKeyword, c.name].filter((v): v is string => !!v)
+
+  if (queries.length > 0) {
+    const ranked = localePages
+      .filter((p) => !seen.has(p.id))
+      .map((p) => ({ p, score: clusterMatchScore(p, queries) }))
+      .filter((x): x is { p: PageOption; score: number } => x.score !== null)
+      .sort((a, b) => a.score - b.score || a.p.url.localeCompare(b.p.url))
+
+    for (const { p } of ranked) {
+      if (result.length >= 3) break
+      result.push(p)
+      seen.add(p.id)
+    }
+  }
+
+  return result
+}
+
+function PageSearch({
+  pages,
+  onSelect,
+  onClose,
+}: {
+  pages: PageOption[]
+  onSelect: (p: PageOption) => void
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  const [query, setQuery] = useState('')
+  const results = searchPages(pages, query)
+  return (
+    <div className="relative w-full min-w-[220px]" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t.seoClusters.searchPlaceholder}
+          className="w-full border border-hairline bg-card px-3 py-2 text-xs text-foreground outline-none focus:border-blue"
+        />
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 p-1 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <X className="size-3.5" aria-hidden />
+        </button>
+      </div>
+      {results.length > 0 && (
+        <div className="absolute z-10 mt-1 max-h-64 w-[560px] max-w-[calc(100vw-2rem)] overflow-y-auto border border-hairline bg-card shadow-sm">
+          {results.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => onSelect(p)}
+              className="block w-full px-3 py-2 text-left text-xs transition-colors hover:bg-muted/60"
+            >
+              <span className="block whitespace-normal break-words font-mono text-blue">{pagePath(p.url)}</span>
+              {(p.title || p.h1) && (
+                <span className="mt-0.5 block whitespace-normal break-words text-muted-foreground">
+                  {p.title || p.h1}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 const REVIEW_STATUS_DOT: Record<ReviewStatus, string> = {
@@ -94,8 +223,8 @@ function ReviewStatusPill({ status }: { status: ReviewStatus }) {
   )
 }
 
-function canConfirmRecommended(c: ClusterRow) {
-  return c.recommendedPageId != null && (c.reviewStatus !== 'confirmed' || c.confirmedPageId !== c.recommendedPageId)
+function canConfirmPage(c: ClusterRow, pageId: number) {
+  return c.reviewStatus !== 'confirmed' || c.confirmedPageId !== pageId
 }
 
 function ConfirmRecommendedButton({
@@ -146,8 +275,45 @@ function ClusterTaskButton({
   )
 }
 
-function ChooseExistingButton({ onClick }: { onClick: () => void }) {
+/**
+ * "Recommended pages" block: up to 3 candidates (AI pick first), each with its own compact
+ * Confirm button, plus a Find existing link — used in both the table row and the expanded detail
+ * view so the two stay in sync.
+ */
+function RecommendedPagesList({
+  cluster,
+  pages,
+  saving,
+  onConfirm,
+  onFindExisting,
+}: {
+  cluster: ClusterRow
+  pages: PageOption[]
+  saving: boolean
+  onConfirm: (page: PageOption) => void
+  onFindExisting: () => void
+}) {
   const { t } = useI18n()
+  return (
+    <div className="flex flex-col gap-1.5">
+      {pages.length > 0 ? (
+        pages.map((p) => (
+          <div key={p.id} className="flex items-center gap-2 overflow-hidden">
+            <span className="truncate font-mono text-xs text-blue">{pagePath(p.url)}</span>
+            {canConfirmPage(cluster, p.id) && (
+              <ConfirmRecommendedButton saving={saving} onConfirm={() => onConfirm(p)} />
+            )}
+          </div>
+        ))
+      ) : (
+        <span className="text-muted-foreground">{t.seoClusters.noPage}</span>
+      )}
+      <FindPageButton label={t.seoClusters.findExisting} onClick={onFindExisting} />
+    </div>
+  )
+}
+
+function FindPageButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -157,7 +323,24 @@ function ChooseExistingButton({ onClick }: { onClick: () => void }) {
       }}
       className="label-mono shrink-0 whitespace-nowrap border-b border-foreground/50 text-foreground/80 transition-colors hover:border-foreground hover:text-foreground"
     >
-      {t.seoClusters.chooseExisting}
+      {label}
+    </button>
+  )
+}
+
+function IgnoreButton({ saving, onIgnore }: { saving: boolean; onIgnore: () => void }) {
+  const { t } = useI18n()
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onIgnore()
+      }}
+      disabled={saving}
+      className="label-mono shrink-0 whitespace-nowrap border-b border-foreground/30 text-muted-foreground transition-colors hover:border-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {t.seoClusters.ignoreAction}
     </button>
   )
 }
@@ -226,7 +409,7 @@ export function SeoClusters() {
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<number | null>(null)
   const [taskPanel, setTaskPanel] = useState<TaskPanelState | null>(null)
-  const [overrideRevealed, setOverrideRevealed] = useState<Set<number>>(new Set())
+  const [searchOpenId, setSearchOpenId] = useState<number | null>(null)
 
   useEffect(() => {
     if (projects.length && projectId === null) setProjectId(projects[0].id)
@@ -262,7 +445,7 @@ export function SeoClusters() {
   useEffect(() => {
     if (projectId === null) return
     setExpanded(null)
-    setOverrideRevealed(new Set())
+    setSearchOpenId(null)
     loadClusters(projectId)
     loadPages(projectId)
   }, [projectId])
@@ -293,13 +476,9 @@ export function SeoClusters() {
     }
   }
 
-  function handleConfirmRecommended(cluster: ClusterRow) {
-    if (cluster.recommendedPageId == null) return
-    handleReview(cluster.id, 'confirmed', cluster.recommendedPageId)
-  }
-
-  function handleRevealExisting(clusterId: number) {
-    setOverrideRevealed((prev) => new Set(prev).add(clusterId))
+  async function handleSelectPage(cluster: ClusterRow, page: PageOption) {
+    const ok = await handleReview(cluster.id, 'confirmed', page.id)
+    if (ok) setSearchOpenId(null)
   }
 
   /**
@@ -404,16 +583,10 @@ export function SeoClusters() {
             {clusters.map((c) => {
               const isOpen = expanded === c.id
               const clusterLoc = clusterLocale(c, pages)
-              // AI "no page" clusters skip the dropdown as the primary control (see human-review
-              // flow in the spec) until the human either confirms an existing page or explicitly
-              // asks to override the AI via "Choose existing page".
-              const showTargetDropdown = !c.needsNewPage || c.reviewStatus === 'confirmed' || overrideRevealed.has(c.id)
-              // Only pages matching the cluster's language are offered as new choices; a
-              // previously confirmed page of another locale (see safety case) is still shown
-              // so the current value renders correctly, it's just not offered to other clusters.
-              const dropdownPages = clusterLoc
-                ? pages.filter((p) => pageLocale(p) === clusterLoc || p.id === c.confirmedPageId)
-                : pages
+              // Only pages matching the cluster's language are offered in search results — an RU
+              // cluster must never surface EN pages and vice versa.
+              const searchablePages = clusterLoc ? pages.filter((p) => pageLocale(p) === clusterLoc) : pages
+              const recommendedPages = getRecommendedPages(c, pages)
               return (
                 <Fragment key={c.id}>
                   <tr
@@ -431,68 +604,36 @@ export function SeoClusters() {
                         {t.seoClusters.intentLabel[c.intent as keyof typeof t.seoClusters.intentLabel] ?? c.intent}
                       </span>
                     </Td>
-                    <Td className="max-w-[220px]">
-                      <div className="flex items-center gap-2 overflow-hidden">
-                        <span className="truncate">
-                          {c.recommendedPageUrl ? (
-                            <span className="font-mono text-xs text-blue">{pagePath(c.recommendedPageUrl)}</span>
-                          ) : (
-                            <span className="text-muted-foreground">{t.seoClusters.noPage}</span>
-                          )}
-                        </span>
-                        {canConfirmRecommended(c) && (
-                          <ConfirmRecommendedButton
-                            saving={savingId === c.id}
-                            onConfirm={() => handleConfirmRecommended(c)}
-                          />
-                        )}
-                      </div>
+                    <Td className="max-w-[240px]">
+                      <RecommendedPagesList
+                        cluster={c}
+                        pages={recommendedPages}
+                        saving={savingId === c.id}
+                        onConfirm={(p) => handleSelectPage(c, p)}
+                        onFindExisting={() => setSearchOpenId(c.id)}
+                      />
                     </Td>
                     <Td className="text-right font-mono">{c.confidence ?? '—'}</Td>
                     <Td>
                       <StatusPill status={c.status} />
                     </Td>
                     <Td>
-                      {showTargetDropdown ? (
-                        <div className="relative" onClick={(e) => e.stopPropagation()}>
-                          <select
-                            value={
-                              c.reviewStatus === 'confirmed' && c.confirmedPageId
-                                ? String(c.confirmedPageId)
-                                : c.reviewStatus === 'no_page' || c.reviewStatus === 'ignored'
-                                  ? c.reviewStatus
-                                  : ''
-                            }
-                            disabled={savingId === c.id}
-                            onChange={(e) => {
-                              const val = e.target.value
-                              if (!val) return
-                              if (val === 'no_page') handleReview(c.id, 'no_page', null)
-                              else if (val === 'ignored') handleReview(c.id, 'ignored', null)
-                              else handleReview(c.id, 'confirmed', Number(val))
-                            }}
-                            className="w-full min-w-[180px] appearance-none border border-hairline bg-card px-3 py-2 pr-7 text-xs text-foreground outline-none focus:border-blue disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <option value="" disabled hidden>
-                              {t.seoClusters.targetPagePlaceholder}
-                            </option>
-                            {dropdownPages.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {pagePath(p.url)}
-                              </option>
-                            ))}
-                            <option value="no_page">{t.seoClusters.targetPageNoPage}</option>
-                            <option value="ignored">{t.seoClusters.targetPageIgnored}</option>
-                          </select>
-                          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 font-mono text-xs text-muted-foreground">
-                            ▾
-                          </span>
-                        </div>
+                      {searchOpenId === c.id ? (
+                        <PageSearch
+                          pages={searchablePages}
+                          onSelect={(p) => handleSelectPage(c, p)}
+                          onClose={() => setSearchOpenId(null)}
+                        />
+                      ) : c.reviewStatus === 'ignored' ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : c.reviewStatus === 'confirmed' ? (
+                        c.confirmedPageUrl ? (
+                          <span className="font-mono text-xs text-blue">{pagePath(c.confirmedPageUrl)}</span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )
                       ) : (
-                        <div className="flex items-center gap-2">
-                          <span className="label-mono text-muted-foreground">{t.seoClusters.noPage}</span>
-                          <ChooseExistingButton onClick={() => handleRevealExisting(c.id)} />
-                        </div>
+                        <span className="text-muted-foreground">—</span>
                       )}
                     </Td>
                     <Td>
@@ -509,6 +650,12 @@ export function SeoClusters() {
                             kind="create"
                             saving={savingId === c.id}
                             onOpen={() => handleCreatePageOneClick(c)}
+                          />
+                        )}
+                        {c.reviewStatus === 'pending' && (
+                          <IgnoreButton
+                            saving={savingId === c.id}
+                            onIgnore={() => handleReview(c.id, 'ignored', null)}
                           />
                         )}
                       </div>
@@ -536,18 +683,14 @@ export function SeoClusters() {
                           </div>
                           <div>
                             <dt className="label-mono text-muted-foreground">{t.seoClusters.recommendedPage}</dt>
-                            <dd className="mt-1 flex items-center gap-2 text-foreground/90">
-                              {c.recommendedPageUrl ? (
-                                <span className="font-mono text-xs text-blue">{pagePath(c.recommendedPageUrl)}</span>
-                              ) : (
-                                <span className="text-muted-foreground">{t.seoClusters.noPage}</span>
-                              )}
-                              {canConfirmRecommended(c) && (
-                                <ConfirmRecommendedButton
-                                  saving={savingId === c.id}
-                                  onConfirm={() => handleConfirmRecommended(c)}
-                                />
-                              )}
+                            <dd className="mt-1 text-foreground/90">
+                              <RecommendedPagesList
+                                cluster={c}
+                                pages={recommendedPages}
+                                saving={savingId === c.id}
+                                onConfirm={(p) => handleSelectPage(c, p)}
+                                onFindExisting={() => setSearchOpenId(c.id)}
+                              />
                             </dd>
                           </div>
                           <div>
