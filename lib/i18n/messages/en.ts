@@ -262,6 +262,10 @@ export const en = {
     confirmedTargetPage: 'Confirmed target page',
     updateError: 'Failed to update review status. Please try again.',
     confirmRecommended: 'Confirm',
+    improvePage: 'Improve page',
+    createPage: 'Create page',
+    copyTask: 'Copy task',
+    taskCopied: 'Copied!',
   },
   crmOverview: {
     title: 'CRM Overview',

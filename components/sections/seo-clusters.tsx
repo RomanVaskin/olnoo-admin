@@ -1,9 +1,11 @@
 'use client'
 
 import { Fragment, useEffect, useState } from 'react'
+import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
 import { useProjects, ProjectPicker } from '@/components/sections/seo-project-picker'
+import { buildCreateTask, buildImproveTask, type TaskLocale, type TaskPage } from '@/lib/seo-task-generator'
 
 type ReviewStatus = 'pending' | 'confirmed' | 'no_page' | 'ignored'
 
@@ -27,7 +29,14 @@ type ClusterRow = {
   keywords: { id: number; query: string; frequency: number | null }[]
 }
 
-type PageOption = { id: number; url: string; locale: string | null }
+type PageOption = {
+  id: number
+  url: string
+  locale: string | null
+  title: string | null
+  h1: string | null
+  description: string | null
+}
 
 function pagePath(url: string) {
   try {
@@ -112,6 +121,79 @@ function ConfirmRecommendedButton({
   )
 }
 
+function ClusterTaskButton({
+  kind,
+  onOpen,
+}: {
+  kind: 'improve' | 'create'
+  onOpen: () => void
+}) {
+  const { t } = useI18n()
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onOpen()
+      }}
+      className="label-mono shrink-0 whitespace-nowrap border-b border-foreground/50 text-foreground/80 transition-colors hover:border-foreground hover:text-foreground"
+    >
+      {kind === 'improve' ? t.seoClusters.improvePage : t.seoClusters.createPage}
+    </button>
+  )
+}
+
+type TaskPanelState = {
+  title: string
+  text: string
+}
+
+function TaskPanel({ panel, onClose }: { panel: TaskPanelState; onClose: () => void }) {
+  const { t } = useI18n()
+  const [copied, setCopied] = useState(false)
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(panel.text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-30 bg-foreground/10" onClick={onClose} aria-hidden />
+      <aside className="fixed right-0 top-0 z-40 flex h-full w-full max-w-2xl flex-col border-l border-hairline bg-card">
+        <div className="flex items-center justify-between border-b border-hairline px-6 py-5">
+          <span className="label-mono text-muted-foreground">{panel.title}</span>
+          <button
+            onClick={onClose}
+            className="label-mono flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {t.common.close} <X className="size-3" aria-hidden />
+          </button>
+        </div>
+        <div className="flex flex-1 flex-col gap-4 overflow-hidden px-6 py-6">
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="label-mono w-fit shrink-0 border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground"
+          >
+            {copied ? t.seoClusters.taskCopied : t.seoClusters.copyTask}
+          </button>
+          <textarea
+            readOnly
+            value={panel.text}
+            className="flex-1 resize-none overflow-y-auto border border-hairline bg-background p-4 font-mono text-xs leading-relaxed text-foreground/90 outline-none"
+          />
+        </div>
+      </aside>
+    </>
+  )
+}
+
 export function SeoClusters() {
   const { t, locale } = useI18n()
   const numberLocale = locale === 'ru' ? 'ru-RU' : 'en-US'
@@ -124,6 +206,7 @@ export function SeoClusters() {
   const [savingId, setSavingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<number | null>(null)
+  const [taskPanel, setTaskPanel] = useState<TaskPanelState | null>(null)
 
   useEffect(() => {
     if (projects.length && projectId === null) setProjectId(projects[0].id)
@@ -143,7 +226,14 @@ export function SeoClusters() {
       .then((rows: any[]) =>
         setPages(
           rows
-            .map((r) => ({ id: r.id, url: r.url, locale: r.locale }))
+            .map((r) => ({
+              id: r.id,
+              url: r.url,
+              locale: r.locale,
+              title: r.title,
+              h1: r.h1,
+              description: r.description,
+            }))
             .sort((a, b) => a.url.localeCompare(b.url)),
         ),
       )
@@ -179,6 +269,33 @@ export function SeoClusters() {
   function handleConfirmRecommended(cluster: ClusterRow) {
     if (cluster.recommendedPageId == null) return
     handleReview(cluster.id, 'confirmed', cluster.recommendedPageId)
+  }
+
+  function handleOpenTask(cluster: ClusterRow, kind: 'improve' | 'create') {
+    const project = projects.find((p) => p.id === projectId)
+    if (!project) return
+
+    const clusterInput = {
+      name: cluster.name,
+      primaryKeyword: cluster.primaryKeyword,
+      intent: cluster.intent,
+      totalFrequency: cluster.totalFrequency,
+      keywords: cluster.keywords.map((k) => ({ query: k.query, frequency: k.frequency })),
+    }
+    const taskLocale: TaskLocale = clusterLocale(cluster, pages) === 'ru' ? 'ru' : 'en'
+
+    if (kind === 'improve') {
+      if (cluster.confirmedPageId == null) return
+      const matched = pages.find((p) => p.id === cluster.confirmedPageId)
+      const page: TaskPage = matched
+        ? { url: matched.url, title: matched.title, h1: matched.h1, description: matched.description, locale: matched.locale }
+        : { url: cluster.confirmedPageUrl ?? '', title: null, h1: null, description: null, locale: null }
+      const text = buildImproveTask({ name: project.name, domain: project.domain }, clusterInput, page, taskLocale)
+      setTaskPanel({ title: t.seoClusters.improvePage, text })
+    } else {
+      const text = buildCreateTask({ name: project.name, domain: project.domain }, clusterInput, taskLocale)
+      setTaskPanel({ title: t.seoClusters.createPage, text })
+    }
   }
 
   async function handleGenerate() {
@@ -327,7 +444,15 @@ export function SeoClusters() {
                       </div>
                     </Td>
                     <Td>
-                      <ReviewStatusPill status={c.reviewStatus} />
+                      <div className="flex items-center gap-3">
+                        <ReviewStatusPill status={c.reviewStatus} />
+                        {c.reviewStatus === 'confirmed' && c.confirmedPageId != null && (
+                          <ClusterTaskButton kind="improve" onOpen={() => handleOpenTask(c, 'improve')} />
+                        )}
+                        {c.reviewStatus === 'no_page' && (
+                          <ClusterTaskButton kind="create" onOpen={() => handleOpenTask(c, 'create')} />
+                        )}
+                      </div>
                     </Td>
                   </tr>
                   {isOpen && (
@@ -409,6 +534,8 @@ export function SeoClusters() {
           </tbody>
         </TableShell>
       )}
+
+      {taskPanel && <TaskPanel panel={taskPanel} onClose={() => setTaskPanel(null)} />}
     </div>
   )
 }

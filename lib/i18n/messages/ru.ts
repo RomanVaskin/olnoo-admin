@@ -264,6 +264,10 @@ export const ru: Messages = {
     confirmedTargetPage: 'Подтверждённая целевая страница',
     updateError: 'Не удалось обновить статус проверки. Попробуйте ещё раз.',
     confirmRecommended: 'Подтвердить',
+    improvePage: 'Улучшить страницу',
+    createPage: 'Создать страницу',
+    copyTask: 'Скопировать задание',
+    taskCopied: 'Скопировано!',
   },
   crmOverview: {
     title: 'Обзор CRM',
