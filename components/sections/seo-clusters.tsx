@@ -124,9 +124,11 @@ function ConfirmRecommendedButton({
 function ClusterTaskButton({
   kind,
   onOpen,
+  saving,
 }: {
   kind: 'improve' | 'create'
   onOpen: () => void
+  saving?: boolean
 }) {
   const { t } = useI18n()
   return (
@@ -136,9 +138,26 @@ function ClusterTaskButton({
         e.stopPropagation()
         onOpen()
       }}
-      className="label-mono shrink-0 whitespace-nowrap border-b border-foreground/50 text-foreground/80 transition-colors hover:border-foreground hover:text-foreground"
+      disabled={saving}
+      className="label-mono shrink-0 whitespace-nowrap border-b border-foreground/50 text-foreground/80 transition-colors hover:border-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
     >
       {kind === 'improve' ? t.seoClusters.improvePage : t.seoClusters.createPage}
+    </button>
+  )
+}
+
+function ChooseExistingButton({ onClick }: { onClick: () => void }) {
+  const { t } = useI18n()
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      className="label-mono shrink-0 whitespace-nowrap border-b border-foreground/50 text-foreground/80 transition-colors hover:border-foreground hover:text-foreground"
+    >
+      {t.seoClusters.chooseExisting}
     </button>
   )
 }
@@ -207,6 +226,7 @@ export function SeoClusters() {
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<number | null>(null)
   const [taskPanel, setTaskPanel] = useState<TaskPanelState | null>(null)
+  const [overrideRevealed, setOverrideRevealed] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     if (projects.length && projectId === null) setProjectId(projects[0].id)
@@ -242,12 +262,17 @@ export function SeoClusters() {
   useEffect(() => {
     if (projectId === null) return
     setExpanded(null)
+    setOverrideRevealed(new Set())
     loadClusters(projectId)
     loadPages(projectId)
   }, [projectId])
 
-  async function handleReview(clusterId: number, reviewStatus: 'confirmed' | 'no_page' | 'ignored', pageId: number | null) {
-    if (projectId === null) return
+  async function handleReview(
+    clusterId: number,
+    reviewStatus: 'confirmed' | 'no_page' | 'ignored',
+    pageId: number | null,
+  ): Promise<boolean> {
+    if (projectId === null) return false
     setSavingId(clusterId)
     setError(null)
     try {
@@ -259,8 +284,10 @@ export function SeoClusters() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || t.seoClusters.updateError)
       setClusters(data)
+      return true
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : t.seoClusters.updateError)
+      return false
     } finally {
       setSavingId(null)
     }
@@ -269,6 +296,20 @@ export function SeoClusters() {
   function handleConfirmRecommended(cluster: ClusterRow) {
     if (cluster.recommendedPageId == null) return
     handleReview(cluster.id, 'confirmed', cluster.recommendedPageId)
+  }
+
+  function handleRevealExisting(clusterId: number) {
+    setOverrideRevealed((prev) => new Set(prev).add(clusterId))
+  }
+
+  /**
+   * One click for an AI "no page" cluster: confirms review_status = no_page (the same PATCH the
+   * old manual dropdown flow used), then opens the existing Create-page task panel — collapsing
+   * "human confirms no_page" and "open Create task" into a single action.
+   */
+  async function handleCreatePageOneClick(cluster: ClusterRow) {
+    const ok = await handleReview(cluster.id, 'no_page', null)
+    if (ok) handleOpenTask(cluster, 'create')
   }
 
   function handleOpenTask(cluster: ClusterRow, kind: 'improve' | 'create') {
@@ -363,6 +404,10 @@ export function SeoClusters() {
             {clusters.map((c) => {
               const isOpen = expanded === c.id
               const clusterLoc = clusterLocale(c, pages)
+              // AI "no page" clusters skip the dropdown as the primary control (see human-review
+              // flow in the spec) until the human either confirms an existing page or explicitly
+              // asks to override the AI via "Choose existing page".
+              const showTargetDropdown = !c.needsNewPage || c.reviewStatus === 'confirmed' || overrideRevealed.has(c.id)
               // Only pages matching the cluster's language are offered as new choices; a
               // previously confirmed page of another locale (see safety case) is still shown
               // so the current value renders correctly, it's just not offered to other clusters.
@@ -408,40 +453,47 @@ export function SeoClusters() {
                       <StatusPill status={c.status} />
                     </Td>
                     <Td>
-                      <div className="relative" onClick={(e) => e.stopPropagation()}>
-                        <select
-                          value={
-                            c.reviewStatus === 'confirmed' && c.confirmedPageId
-                              ? String(c.confirmedPageId)
-                              : c.reviewStatus === 'no_page' || c.reviewStatus === 'ignored'
-                                ? c.reviewStatus
-                                : ''
-                          }
-                          disabled={savingId === c.id}
-                          onChange={(e) => {
-                            const val = e.target.value
-                            if (!val) return
-                            if (val === 'no_page') handleReview(c.id, 'no_page', null)
-                            else if (val === 'ignored') handleReview(c.id, 'ignored', null)
-                            else handleReview(c.id, 'confirmed', Number(val))
-                          }}
-                          className="w-full min-w-[180px] appearance-none border border-hairline bg-card px-3 py-2 pr-7 text-xs text-foreground outline-none focus:border-blue disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <option value="" disabled hidden>
-                            {t.seoClusters.targetPagePlaceholder}
-                          </option>
-                          {dropdownPages.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {pagePath(p.url)}
+                      {showTargetDropdown ? (
+                        <div className="relative" onClick={(e) => e.stopPropagation()}>
+                          <select
+                            value={
+                              c.reviewStatus === 'confirmed' && c.confirmedPageId
+                                ? String(c.confirmedPageId)
+                                : c.reviewStatus === 'no_page' || c.reviewStatus === 'ignored'
+                                  ? c.reviewStatus
+                                  : ''
+                            }
+                            disabled={savingId === c.id}
+                            onChange={(e) => {
+                              const val = e.target.value
+                              if (!val) return
+                              if (val === 'no_page') handleReview(c.id, 'no_page', null)
+                              else if (val === 'ignored') handleReview(c.id, 'ignored', null)
+                              else handleReview(c.id, 'confirmed', Number(val))
+                            }}
+                            className="w-full min-w-[180px] appearance-none border border-hairline bg-card px-3 py-2 pr-7 text-xs text-foreground outline-none focus:border-blue disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <option value="" disabled hidden>
+                              {t.seoClusters.targetPagePlaceholder}
                             </option>
-                          ))}
-                          <option value="no_page">{t.seoClusters.targetPageNoPage}</option>
-                          <option value="ignored">{t.seoClusters.targetPageIgnored}</option>
-                        </select>
-                        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 font-mono text-xs text-muted-foreground">
-                          ▾
-                        </span>
-                      </div>
+                            {dropdownPages.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {pagePath(p.url)}
+                              </option>
+                            ))}
+                            <option value="no_page">{t.seoClusters.targetPageNoPage}</option>
+                            <option value="ignored">{t.seoClusters.targetPageIgnored}</option>
+                          </select>
+                          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 font-mono text-xs text-muted-foreground">
+                            ▾
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="label-mono text-muted-foreground">{t.seoClusters.noPage}</span>
+                          <ChooseExistingButton onClick={() => handleRevealExisting(c.id)} />
+                        </div>
+                      )}
                     </Td>
                     <Td>
                       <div className="flex items-center gap-3">
@@ -451,6 +503,13 @@ export function SeoClusters() {
                         )}
                         {c.reviewStatus === 'no_page' && (
                           <ClusterTaskButton kind="create" onOpen={() => handleOpenTask(c, 'create')} />
+                        )}
+                        {c.needsNewPage && c.reviewStatus === 'pending' && (
+                          <ClusterTaskButton
+                            kind="create"
+                            saving={savingId === c.id}
+                            onOpen={() => handleCreatePageOneClick(c)}
+                          />
                         )}
                       </div>
                     </Td>

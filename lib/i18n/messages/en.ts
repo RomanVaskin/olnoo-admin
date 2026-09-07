@@ -265,6 +265,7 @@ export const en = {
     confirmedTargetPage: 'Confirmed target page',
     updateError: 'Failed to update review status. Please try again.',
     confirmRecommended: 'Confirm',
+    chooseExisting: 'Choose existing page',
     improvePage: 'Improve page',
     createPage: 'Create page',
     copyTask: 'Copy task',
