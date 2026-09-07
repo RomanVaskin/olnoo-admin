@@ -43,9 +43,11 @@ export type SavedCluster = {
   keywords: { id: number; query: string; frequency: number | null }[]
 }
 
-// Keeps each AI Router call comfortably inside its response budget; batches are merged
-// back into one final set below rather than run through a background queue.
-const KEYWORDS_PER_BATCH = 220
+// MVP: cluster the whole project in a single AI Router call — no batching/merge. The
+// Router rejects any message content over 32000 chars; this leaves a small safety margin
+// so projects near the edge (many keywords and/or many pages) fail the size check below
+// rather than hit the Router's 400 VALIDATION_ERROR.
+const MAX_PROMPT_CHARS = 31800
 
 // Below this confidence a cluster is surfaced for manual review instead of being
 // auto-labelled "Existing page" / "No page".
@@ -87,16 +89,6 @@ Output JSON shape, exactly:
   ]
 }`
 
-const MERGE_SYSTEM_PROMPT = `You are given several partial lists of SEO keyword clusters, produced independently from different batches of the same project's full keyword set. Merge them into one final, non-redundant list of clusters.
-
-Rules:
-- If two or more clusters from different batches represent the same real search intent, merge them into a single cluster: union their "keywords" arrays (deduplicated), pick the single best "primaryKeyword", and pick one consistent "intent", "recommendedPageUrl", "needsNewPage", "confidence" and "reason" for the merged cluster.
-- If a cluster is unique to one batch, keep it as-is.
-- Never merge clusters that represent genuinely different intents just because they share words.
-- Do not invent keywords that were not present in the input clusters.
-- "totalFrequency" does not need to be exact in your output — it is recomputed afterwards from the underlying data.
-- Return ONLY strict JSON in the exact same shape as before: { "clusters": [ ... ] }. No markdown, no commentary.`
-
 function formatKeywordsForPrompt(keywords: ClusterKeywordInput[]): string {
   return keywords.map((k) => `- ${k.query} (frequency: ${k.frequency ?? 0})`).join('\n')
 }
@@ -123,16 +115,6 @@ EXISTING PAGES (${pages.length}):
 ${formatPagesForPrompt(pages)}
 
 Cluster the keywords above by search intent and return the JSON described in your instructions.`
-}
-
-function buildMergeUserPrompt(rawClusters: RawCluster[], pages: ClusterPageInput[]): string {
-  return `PARTIAL CLUSTERS FROM ALL BATCHES (${rawClusters.length}):
-${JSON.stringify(rawClusters, null, 2)}
-
-EXISTING PAGES (${pages.length}):
-${formatPagesForPrompt(pages)}
-
-Merge these into the final non-redundant cluster list and return the JSON described in your instructions.`
 }
 
 function stripToJson(text: string): string {
@@ -339,30 +321,16 @@ export async function generateClustersForProject(pool: Pool, projectId: number):
   }))
   const pages: ClusterPageInput[] = pageRows
 
-  const batches: ClusterKeywordInput[][] = []
-  for (let i = 0; i < keywords.length; i += KEYWORDS_PER_BATCH) {
-    batches.push(keywords.slice(i, i + KEYWORDS_PER_BATCH))
+  const userPrompt = buildClusteringUserPrompt(keywords, pages)
+  if (userPrompt.length > MAX_PROMPT_CHARS) {
+    throw new ClusteringError('Too many keywords for clustering in one run')
   }
 
-  const batchResults: RawCluster[][] = []
-  for (const batch of batches) {
-    const content = await callAiRouter([
-      { role: 'system', content: CLUSTERING_SYSTEM_PROMPT },
-      { role: 'user', content: buildClusteringUserPrompt(batch, pages) },
-    ])
-    batchResults.push(parseClusterResponse(content))
-  }
-
-  let finalRaw: RawCluster[]
-  if (batchResults.length <= 1) {
-    finalRaw = batchResults[0] ?? []
-  } else {
-    const content = await callAiRouter([
-      { role: 'system', content: MERGE_SYSTEM_PROMPT },
-      { role: 'user', content: buildMergeUserPrompt(batchResults.flat(), pages) },
-    ])
-    finalRaw = parseClusterResponse(content)
-  }
+  const content = await callAiRouter([
+    { role: 'system', content: CLUSTERING_SYSTEM_PROMPT },
+    { role: 'user', content: userPrompt },
+  ])
+  const finalRaw = parseClusterResponse(content)
 
   const keywordByQuery = new Map<string, ClusterKeywordInput[]>()
   for (const k of keywords) {
