@@ -24,6 +24,18 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## New project standard
+
+Every new public OLNOO Next.js site must ship with:
+
+- `app/sitemap.ts`
+- `app/robots.ts` (or an equivalent `robots.txt`)
+- a production origin
+- public, indexable routes listed in the sitemap
+- private/admin/API/noindex routes excluded from it
+
+The Technical SEO screen in OLNOO Admin (SEO → Technical SEO) automatically verifies that the site is reachable and its sitemap is valid, with no manual checking.
+
 ## Learn More
 
 To learn more, take a look at the following resources:
