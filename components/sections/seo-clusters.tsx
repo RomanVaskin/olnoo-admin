@@ -54,6 +54,33 @@ function ReviewStatusPill({ status }: { status: ReviewStatus }) {
   )
 }
 
+function canConfirmRecommended(c: ClusterRow) {
+  return c.recommendedPageId != null && (c.reviewStatus !== 'confirmed' || c.confirmedPageId !== c.recommendedPageId)
+}
+
+function ConfirmRecommendedButton({
+  saving,
+  onConfirm,
+}: {
+  saving: boolean
+  onConfirm: () => void
+}) {
+  const { t } = useI18n()
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onConfirm()
+      }}
+      disabled={saving}
+      className="label-mono shrink-0 whitespace-nowrap border-b border-blue text-blue transition-colors hover:border-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {t.seoClusters.confirmRecommended}
+    </button>
+  )
+}
+
 export function SeoClusters() {
   const { t, locale } = useI18n()
   const numberLocale = locale === 'ru' ? 'ru-RU' : 'en-US'
@@ -110,6 +137,11 @@ export function SeoClusters() {
     } finally {
       setSavingId(null)
     }
+  }
+
+  function handleConfirmRecommended(cluster: ClusterRow) {
+    if (cluster.recommendedPageId == null) return
+    handleReview(cluster.id, 'confirmed', cluster.recommendedPageId)
   }
 
   async function handleGenerate() {
@@ -193,12 +225,22 @@ export function SeoClusters() {
                         {t.seoClusters.intentLabel[c.intent as keyof typeof t.seoClusters.intentLabel] ?? c.intent}
                       </span>
                     </Td>
-                    <Td className="max-w-[220px] truncate">
-                      {c.recommendedPageUrl ? (
-                        <span className="font-mono text-xs text-blue">{pagePath(c.recommendedPageUrl)}</span>
-                      ) : (
-                        <span className="text-muted-foreground">{t.seoClusters.noPage}</span>
-                      )}
+                    <Td className="max-w-[220px]">
+                      <div className="flex items-center gap-2 overflow-hidden">
+                        <span className="truncate">
+                          {c.recommendedPageUrl ? (
+                            <span className="font-mono text-xs text-blue">{pagePath(c.recommendedPageUrl)}</span>
+                          ) : (
+                            <span className="text-muted-foreground">{t.seoClusters.noPage}</span>
+                          )}
+                        </span>
+                        {canConfirmRecommended(c) && (
+                          <ConfirmRecommendedButton
+                            saving={savingId === c.id}
+                            onConfirm={() => handleConfirmRecommended(c)}
+                          />
+                        )}
+                      </div>
                     </Td>
                     <Td className="text-right font-mono">{c.confidence ?? '—'}</Td>
                     <Td>
@@ -266,11 +308,17 @@ export function SeoClusters() {
                           </div>
                           <div>
                             <dt className="label-mono text-muted-foreground">{t.seoClusters.recommendedPage}</dt>
-                            <dd className="mt-1 text-foreground/90">
+                            <dd className="mt-1 flex items-center gap-2 text-foreground/90">
                               {c.recommendedPageUrl ? (
                                 <span className="font-mono text-xs text-blue">{pagePath(c.recommendedPageUrl)}</span>
                               ) : (
                                 <span className="text-muted-foreground">{t.seoClusters.noPage}</span>
+                              )}
+                              {canConfirmRecommended(c) && (
+                                <ConfirmRecommendedButton
+                                  saving={savingId === c.id}
+                                  onConfirm={() => handleConfirmRecommended(c)}
+                                />
                               )}
                             </dd>
                           </div>
