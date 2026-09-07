@@ -27,7 +27,7 @@ type ClusterRow = {
   keywords: { id: number; query: string; frequency: number | null }[]
 }
 
-type PageOption = { id: number; url: string }
+type PageOption = { id: number; url: string; locale: string | null }
 
 function pagePath(url: string) {
   try {
@@ -35,6 +35,37 @@ function pagePath(url: string) {
   } catch {
     return url
   }
+}
+
+// Mirrors the prefix detection in lib/html-extract.ts, which is what populates pages.locale
+// during sync — kept in sync so a URL prefix and the stored locale never disagree here.
+const LOCALE_PREFIXES = new Set(['ru', 'en', 'kk', 'kz'])
+
+function urlLocale(url: string): string | null {
+  const prefix = pagePath(url).match(/^\/([a-z]{2})(\/|$)/i)?.[1]?.toLowerCase()
+  return prefix && LOCALE_PREFIXES.has(prefix) ? prefix : null
+}
+
+/** A page's language: its URL prefix (/ru/…) takes priority, falling back to the stored locale column. */
+function pageLocale(p: PageOption): string | null {
+  return urlLocale(p.url) ?? (p.locale ? p.locale.toLowerCase() : null)
+}
+
+/**
+ * A cluster's language, used to filter the target-page dropdown so an RU cluster only offers
+ * RU pages (and vice versa). Prefers the AI-recommended page's language — the most reliable
+ * signal — and only falls back to guessing from the primary keyword's script when no
+ * recommendation exists. Never derived from confirmedPageId: a previously mis-confirmed page
+ * must not bias the language filter, or the safety case in step 3 would defeat itself.
+ */
+function clusterLocale(c: ClusterRow, pages: PageOption[]): string | null {
+  if (c.recommendedPageId != null) {
+    const recommended = pages.find((p) => p.id === c.recommendedPageId)
+    const loc = recommended ? pageLocale(recommended) : c.recommendedPageUrl ? urlLocale(c.recommendedPageUrl) : null
+    if (loc) return loc
+  }
+  if (c.primaryKeyword) return /[Ѐ-ӿ]/.test(c.primaryKeyword) ? 'ru' : 'en'
+  return null
 }
 
 const REVIEW_STATUS_DOT: Record<ReviewStatus, string> = {
@@ -109,7 +140,13 @@ export function SeoClusters() {
   function loadPages(id: number) {
     fetch(`/api/pages?projectId=${id}`)
       .then((r) => r.json())
-      .then((rows: any[]) => setPages(rows.map((r) => ({ id: r.id, url: r.url })).sort((a, b) => a.url.localeCompare(b.url))))
+      .then((rows: any[]) =>
+        setPages(
+          rows
+            .map((r) => ({ id: r.id, url: r.url, locale: r.locale }))
+            .sort((a, b) => a.url.localeCompare(b.url)),
+        ),
+      )
   }
 
   useEffect(() => {
@@ -208,6 +245,13 @@ export function SeoClusters() {
           <tbody>
             {clusters.map((c) => {
               const isOpen = expanded === c.id
+              const clusterLoc = clusterLocale(c, pages)
+              // Only pages matching the cluster's language are offered as new choices; a
+              // previously confirmed page of another locale (see safety case) is still shown
+              // so the current value renders correctly, it's just not offered to other clusters.
+              const dropdownPages = clusterLoc
+                ? pages.filter((p) => pageLocale(p) === clusterLoc || p.id === c.confirmedPageId)
+                : pages
               return (
                 <Fragment key={c.id}>
                   <tr
@@ -269,7 +313,7 @@ export function SeoClusters() {
                           <option value="" disabled hidden>
                             {t.seoClusters.targetPagePlaceholder}
                           </option>
-                          {pages.map((p) => (
+                          {dropdownPages.map((p) => (
                             <option key={p.id} value={p.id}>
                               {pagePath(p.url)}
                             </option>
