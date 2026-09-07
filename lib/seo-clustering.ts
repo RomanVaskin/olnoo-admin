@@ -24,6 +24,7 @@ type RawCluster = {
   recommendedPageUrl: string | null
   confidence: number
   needsNewPage: boolean
+  excludeFromSeo: boolean
   reason: string
 }
 
@@ -59,18 +60,20 @@ Group the given Wordstat search queries into clusters strictly by REAL SEARCH IN
 
 Hard rules:
 1. One cluster = one search intent = one potential landing page. Never split a single intent into several clusters just because the keywords are worded differently — word forms, synonyms, word order, and filler words (e.g. "компания", "услуги", "цена", "купить", "заказать") do NOT create a new intent on their own.
-2. Do not create a separate cluster for a synonym or grammatical variant of a keyword already covered by another cluster.
-3. Every keyword you are given must end up in exactly one cluster, unless it is genuinely unrelated to every other query — in that case give it its own single-keyword cluster.
-4. Classify each cluster's "intent" as one of: "commercial" (wants to buy/order/hire/get a quote), "informational" (wants to learn/understand), "navigational" (looking for a specific brand/site), or "mixed" (genuinely ambiguous).
-5. Pick one "primaryKeyword" per cluster — the most representative query, normally the one with the highest frequency, in clean natural form.
-6. Set "totalFrequency" to the sum of the frequency of every keyword you placed in that cluster.
-7. You are also given the project's EXISTING PAGES (url, title, h1, description, locale). If — and only if — one of those pages is a genuine, accurate match for the cluster's intent, set "recommendedPageUrl" to that page's exact url from the list. Do not force a loose or partial match just to fill the field.
-8. If no existing page is a good match, set "recommendedPageUrl" to null and "needsNewPage" to true.
-9. If you recommend an existing page, set "needsNewPage" to false.
-10. "confidence" is an integer 0-100 expressing confidence in both the clustering and the page recommendation (or the needs-new-page call).
-11. "reason" is one short sentence, in the same language as the keywords, explaining the page recommendation or why a new page is needed.
-12. Never invent a keyword you were not given. Only echo back keywords exactly as given (trimming whitespace is fine).
-13. Return ONLY strict JSON — no markdown, no code fences, no commentary before or after. The raw response is parsed as JSON directly.
+2. The reverse is equally important: sharing a broad generic phrase does NOT mean the same intent. A phrase like "автоматизация бизнеса" ("business automation") can appear across many genuinely different intents — do not dump most of the keyword set into one giant catch-all cluster just because they share that phrase. When a query adds a qualifier that changes what the searcher actually wants, it is a different intent and belongs in a different cluster. Always keep at least these apart when present, even though they may share the base phrase: general/broad business automation; AI-specific automation (ИИ/AI/агенты/нейросети); sales automation (продажи/отдел продаж); CRM automation; 1C automation (1С); Telegram bots/chatbots (Telegram/чат-бот/бот); education/informational queries (обучение/курс/что такое/книга/статья); local or city-specific queries (a city name like Краснодар, Челябинск, Ростов, Сочи); and brand/navigational queries (a specific company, product, tool, or person's name). A single oversized cluster covering most of the input is almost always wrong — prefer more, narrower clusters over one broad one.
+3. Do not create a separate cluster for a synonym or grammatical variant of a keyword already covered by another cluster.
+4. Every keyword you are given must end up in exactly one cluster, unless it is genuinely unrelated to every other query — in that case give it its own single-keyword cluster. Never place the same keyword text in more than one cluster's "keywords" array — each keyword belongs to exactly one cluster.
+5. Classify each cluster's "intent" as one of: "commercial" (wants to buy/order/hire/get a quote), "informational" (wants to learn/understand), "navigational" (looking for a specific brand/site), or "mixed" (genuinely ambiguous).
+6. Pick one "primaryKeyword" per cluster — the most representative query, normally the one with the highest frequency, in clean natural form.
+7. Set "totalFrequency" to the sum of the frequency of every keyword you placed in that cluster.
+8. You are also given the project's EXISTING PAGES (url, title, h1, locale). If — and only if — one of those pages is a genuine, accurate topical match for the cluster's intent, set "recommendedPageUrl" to that page's exact url from the list. Do not force a loose or partial match just to fill the field. In particular, never recommend a generic non-topical page such as an About page, a Contact page, or a Cases/portfolio page as the target for a cluster — those only match a cluster whose real intent is genuinely about the company itself, contacting it, or its case studies, not as a filler when nothing else fits.
+9. If no existing page is a genuinely good match, set "recommendedPageUrl" to null and "needsNewPage" to true.
+10. If you recommend an existing page, set "needsNewPage" to false.
+11. If every keyword in a cluster is a navigational search for a specific third-party brand, product, tool, or person's name that is NOT this project's own site (e.g. a competitor company, a SaaS/software product, a course, an influencer), this is not an SEO opportunity for this project. Set "intent" to "navigational", set "excludeFromSeo" to true, set "recommendedPageUrl" to null, and set "needsNewPage" to false — do not turn a competitor's or third party's brand query into a task to build a new page. For every other cluster, set "excludeFromSeo" to false.
+12. "confidence" is an integer 0-100 expressing confidence in both the clustering and the page recommendation (or the needs-new-page/excludeFromSeo call).
+13. "reason" is one short sentence, in the same language as the keywords, explaining the page recommendation, why a new page is needed, or why the cluster was excluded.
+14. Never invent a keyword you were not given. Only echo back keywords exactly as given (trimming whitespace is fine).
+15. Return ONLY strict JSON — no markdown, no code fences, no commentary before or after. The raw response is parsed as JSON directly.
 
 Output JSON shape, exactly:
 {
@@ -84,6 +87,7 @@ Output JSON shape, exactly:
       "recommendedPageUrl": string | null,
       "confidence": number,
       "needsNewPage": boolean,
+      "excludeFromSeo": boolean,
       "reason": string
     }
   ]
@@ -168,9 +172,21 @@ function parseClusterResponse(raw: string): RawCluster[] {
     const confidenceNum = typeof obj.confidence === 'number' ? obj.confidence : Number(obj.confidence)
     const confidence = Number.isFinite(confidenceNum) ? Math.max(0, Math.min(100, Math.round(confidenceNum))) : 0
     const needsNewPage = typeof obj.needsNewPage === 'boolean' ? obj.needsNewPage : recommendedPageUrl === null
+    const excludeFromSeo = typeof obj.excludeFromSeo === 'boolean' ? obj.excludeFromSeo : false
     const reason = typeof obj.reason === 'string' ? obj.reason.trim() : ''
 
-    result.push({ name, primaryKeyword, keywords, intent, totalFrequency, recommendedPageUrl, confidence, needsNewPage, reason })
+    result.push({
+      name,
+      primaryKeyword,
+      keywords,
+      intent,
+      totalFrequency,
+      recommendedPageUrl,
+      confidence,
+      needsNewPage,
+      excludeFromSeo,
+      reason,
+    })
   }
 
   return result
@@ -189,11 +205,28 @@ function normalizePageUrl(url: string): string {
   }
 }
 
-/** Drops hallucinated keywords/pages, recomputes frequency from real data, and derives a UI status. */
+// Generic utility pages that are never a genuine SEO target for a keyword cluster — the AI
+// is told the same thing in the prompt, but a small set of well-known offenders (contact/case
+// study/about pages used as filler recommendations) is rejected here deterministically too.
+const NON_SEO_PAGE_LAST_SEGMENTS = new Set(['contact', 'cases', 'about'])
+
+function isNonSeoUtilityPage(pageUrl: string): boolean {
+  const path = normalizePageUrl(pageUrl)
+  const lastSegment = path.split('/').filter(Boolean).pop() ?? ''
+  return NON_SEO_PAGE_LAST_SEGMENTS.has(lastSegment)
+}
+
+/**
+ * Drops hallucinated keywords/pages, recomputes frequency from real data, derives a UI status,
+ * and enforces that every keyword id is claimed by at most one cluster — `usedKeywordIds` is
+ * shared across all clusters in a run and mutated in place, so whichever cluster claims a
+ * keyword first (AI response order) keeps it and every later duplicate is dropped.
+ */
 function reconcileCluster(
   raw: RawCluster,
   keywordByQuery: Map<string, ClusterKeywordInput[]>,
   pageByUrl: Map<string, ClusterPageInput>,
+  usedKeywordIds: Set<number>,
 ): {
   name: string
   primaryKeywordId: number | null
@@ -207,18 +240,20 @@ function reconcileCluster(
   keywordIds: number[]
 } | null {
   // A single keyword TEXT can exist as several DB rows (one per Wordstat region) —
-  // every row sharing text the model placed in this cluster belongs in it.
+  // every row sharing text the model placed in this cluster belongs in it — but a keyword id
+  // already claimed by an earlier cluster in this run is skipped, never assigned twice.
   const matched: ClusterKeywordInput[] = []
   const seen = new Set<number>()
   for (const q of raw.keywords) {
     for (const kw of keywordByQuery.get(normalizeQuery(q)) ?? []) {
-      if (!seen.has(kw.id)) {
+      if (!seen.has(kw.id) && !usedKeywordIds.has(kw.id)) {
         seen.add(kw.id)
         matched.push(kw)
       }
     }
   }
   if (matched.length === 0) return null
+  for (const kw of matched) usedKeywordIds.add(kw.id)
 
   const totalFrequency = matched.reduce((sum, k) => sum + (k.frequency ?? 0), 0)
 
@@ -228,18 +263,27 @@ function reconcileCluster(
       ? primaryCandidates.reduce((best, k) => ((k.frequency ?? 0) > (best.frequency ?? 0) ? k : best), primaryCandidates[0])
       : matched.reduce((best, k) => ((k.frequency ?? 0) > (best.frequency ?? 0) ? k : best), matched[0])
 
-  const recommendedPage = raw.recommendedPageUrl ? pageByUrl.get(normalizePageUrl(raw.recommendedPageUrl)) ?? null : null
-  const needsNewPage = recommendedPage ? false : true
+  let recommendedPage = raw.recommendedPageUrl ? pageByUrl.get(normalizePageUrl(raw.recommendedPageUrl)) ?? null : null
+  if (recommendedPage && isNonSeoUtilityPage(recommendedPage.url)) recommendedPage = null
 
-  const status =
-    raw.confidence < REVIEW_CONFIDENCE_THRESHOLD ? 'Needs review' : recommendedPage ? 'Existing page' : 'No page'
+  // Competitor/brand navigational queries are not an OLNOO SEO opportunity — never a page
+  // recommendation, never a "build a new page" task, regardless of what the AI set.
+  const needsNewPage = raw.excludeFromSeo ? false : recommendedPage ? false : true
+
+  const status = raw.excludeFromSeo
+    ? 'Ignored'
+    : raw.confidence < REVIEW_CONFIDENCE_THRESHOLD
+      ? 'Needs review'
+      : recommendedPage
+        ? 'Existing page'
+        : 'No page'
 
   return {
     name: raw.name,
     primaryKeywordId: primary?.id ?? null,
     intent: raw.intent,
     totalFrequency,
-    recommendedPageId: recommendedPage?.id ?? null,
+    recommendedPageId: raw.excludeFromSeo ? null : (recommendedPage?.id ?? null),
     confidence: raw.confidence,
     needsNewPage,
     reason: raw.reason,
@@ -340,12 +384,23 @@ export async function generateClustersForProject(pool: Pool, projectId: number):
   }
   const pageByUrl = new Map(pages.map((p) => [normalizePageUrl(p.url), p]))
 
+  // Shared across every reconcileCluster() call below so a keyword the AI placed in more than
+  // one cluster is kept only in the first (its best/most-confident placement per the prompt's
+  // response order) and dropped from every later duplicate — no keyword id is ever saved twice.
+  const usedKeywordIds = new Set<number>()
   const reconciled = finalRaw
-    .map((c) => reconcileCluster(c, keywordByQuery, pageByUrl))
+    .map((c) => reconcileCluster(c, keywordByQuery, pageByUrl, usedKeywordIds))
     .filter((c): c is NonNullable<typeof c> => c !== null)
 
   if (reconciled.length === 0) {
     throw new ClusteringError('AI Router did not return any usable clusters for this project.')
+  }
+
+  // Defensive invariant: by construction usedKeywordIds can never exceed the project's own
+  // keyword count, but this guards against a future edit silently breaking that guarantee.
+  const totalClusteredKeywords = reconciled.reduce((sum, c) => sum + c.keywordIds.length, 0)
+  if (totalClusteredKeywords !== usedKeywordIds.size || usedKeywordIds.size > keywords.length) {
+    throw new ClusteringError('Clustering validation failed: keyword counts do not reconcile with the project.')
   }
 
   await persistClusters(pool, projectId, reconciled)

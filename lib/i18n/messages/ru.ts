@@ -116,6 +116,7 @@ export const ru: Messages = {
     Unassigned: 'Не размечено',
     'Existing page': 'Есть страница',
     'Needs review': 'Нужна проверка',
+    Ignored: 'Игнорируется',
   },
   leadSource: {
     SEO: 'SEO',

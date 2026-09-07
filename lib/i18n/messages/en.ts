@@ -114,6 +114,7 @@ export const en = {
     Unassigned: 'Unassigned',
     'Existing page': 'Existing page',
     'Needs review': 'Needs review',
+    Ignored: 'Ignored',
   },
   leadSource: {
     SEO: 'SEO',
