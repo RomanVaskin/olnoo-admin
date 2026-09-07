@@ -78,6 +78,15 @@ function clusterLocale(c: ClusterRow, pages: PageOption[]): string | null {
 }
 
 /**
+ * The status shown in the table: a confirmed page always wins over the AI's original
+ * classification (seo_clusters.status), which is never updated by the review flow — otherwise a
+ * cluster confirmed via "Find existing" would keep showing "No page" forever.
+ */
+function displayStatus(c: ClusterRow): string {
+  return c.confirmedPageId != null ? 'Existing page' : c.status
+}
+
+/**
  * Ranks a page against a search query: exact match (0) beats prefix match (1) beats substring
  * match (2); anything else is excluded. Checked against URL, title, and H1 — whichever the page
  * has. Deliberately simple (no fuzzy-matching library) per the search requirements.
@@ -615,7 +624,7 @@ export function SeoClusters() {
                     </Td>
                     <Td className="text-right font-mono">{c.confidence ?? '—'}</Td>
                     <Td>
-                      <StatusPill status={c.status} />
+                      <StatusPill status={displayStatus(c)} />
                     </Td>
                     <Td>
                       {searchOpenId === c.id ? (
