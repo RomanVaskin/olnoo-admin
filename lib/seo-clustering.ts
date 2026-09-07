@@ -101,7 +101,6 @@ function formatPagesForPrompt(pages: ClusterPageInput[]): string {
       if (p.locale) bits.push(`locale: ${p.locale}`)
       if (p.title) bits.push(`title: ${p.title}`)
       if (p.h1) bits.push(`h1: ${p.h1}`)
-      if (p.description) bits.push(`description: ${p.description}`)
       return `- ${bits.join(' | ')}`
     })
     .join('\n')
