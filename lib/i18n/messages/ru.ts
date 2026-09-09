@@ -9,6 +9,8 @@ export const ru: Messages = {
     close: 'Закрыть',
     activeModule: 'Активный модуль',
     all: 'Все',
+    saving: 'Сохранение…',
+    deleting: 'Удаление…',
   },
   shell: {
     appName: 'OLNOO Admin',
@@ -311,6 +313,9 @@ export const ru: Messages = {
     crm: 'CRM',
     activity: 'Активность',
     noNotes: 'Заметок пока нет.',
+    deleteLead: 'Удалить лид',
+    confirmDelete: 'Удалить лид «{name}»? Это действие необратимо.',
+    createError: 'Не удалось создать лид.',
   },
   settingsView: {
     title: 'Настройки',

@@ -277,7 +277,7 @@ export function AppShell() {
           {active === 'crm-overview' && (
             <CrmOverview project={project} onProjectChange={setProject} />
           )}
-          {active === 'crm-leads' && <LeadsView />}
+          {active === 'crm-leads' && <LeadsView project={project} />}
           {active === 'settings' && <SettingsView />}
 
           {/* Client */}

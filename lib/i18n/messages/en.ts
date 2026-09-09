@@ -7,6 +7,8 @@ export const en = {
     close: 'Close',
     activeModule: 'Active module',
     all: 'All',
+    saving: 'Saving…',
+    deleting: 'Deleting…',
   },
   shell: {
     appName: 'OLNOO Admin',
@@ -309,6 +311,9 @@ export const en = {
     crm: 'CRM',
     activity: 'Activity',
     noNotes: 'No notes yet.',
+    deleteLead: 'Delete lead',
+    confirmDelete: 'Delete lead "{name}"? This cannot be undone.',
+    createError: 'Could not create lead.',
   },
   settingsView: {
     title: 'Settings',

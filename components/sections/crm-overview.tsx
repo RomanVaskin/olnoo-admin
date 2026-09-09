@@ -1,9 +1,11 @@
+'use client'
+
+import { useEffect, useMemo, useState } from 'react'
 import { SectionHeader, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
 import { useI18n } from '@/components/i18n-provider'
-import { crmMetrics, leads, leadSources } from '@/lib/data'
-
-const maxSource = Math.max(...leadSources.map((s) => s.count), 1)
+import type { Lead } from '@/lib/data'
+import { fromApiLead } from '@/lib/crm-client'
 
 export function CrmOverview({
   project,
@@ -13,6 +15,43 @@ export function CrmOverview({
   onProjectChange: (id: string) => void
 }) {
   const { t } = useI18n()
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetch(`/api/leads?project=${encodeURIComponent(project)}`)
+      .then((r) => r.json())
+      .then((rows) => {
+        if (cancelled) return
+        setLeads((rows as Record<string, unknown>[]).map(fromApiLead))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [project])
+
+  const crmMetrics = useMemo(
+    () => ({
+      new: leads.filter((l) => l.status === 'New').length,
+      inProgress: leads.filter((l) => l.status === 'In progress').length,
+      proposal: leads.filter((l) => l.status === 'Proposal').length,
+      won: leads.filter((l) => l.status === 'Won').length,
+    }),
+    [leads],
+  )
+
+  const leadSources = useMemo(() => {
+    const counts = new Map<Lead['source'], number>()
+    for (const l of leads) counts.set(l.source, (counts.get(l.source) ?? 0) + 1)
+    return Array.from(counts, ([source, count]) => ({ source, count }))
+  }, [leads])
+
+  const maxSource = Math.max(...leadSources.map((s) => s.count), 1)
   const recent = leads.slice(0, 6)
 
   return (
@@ -60,6 +99,16 @@ export function CrmOverview({
                   <Td className="font-mono text-xs text-muted-foreground">{l.created}</Td>
                 </tr>
               ))}
+              {!loading && recent.length === 0 && (
+                <tr>
+                  <Td className="text-muted-foreground">{t.leadsView.noResults}</Td>
+                  <Td> </Td>
+                  <Td> </Td>
+                  <Td> </Td>
+                  <Td> </Td>
+                  <Td> </Td>
+                </tr>
+              )}
             </tbody>
           </TableShell>
         </div>
