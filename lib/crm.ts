@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { pool } from '@/lib/db'
 
 /** Resolves a URL-facing project slug (e.g. "olnoo") to the numeric projects.id, or null for "all"/unknown. */
@@ -5,6 +6,50 @@ export async function resolveProjectId(slug: string | null): Promise<number | nu
   if (!slug || slug === 'all') return null
   const { rows } = await pool.query<{ id: number }>('SELECT id FROM projects WHERE slug = $1', [slug])
   return rows[0]?.id ?? null
+}
+
+export type CreateLeadInput = {
+  project: string | null
+  name: string
+  email: string
+  company?: string
+  service?: string
+  message?: string
+  source?: string
+  notes?: string
+}
+
+export type CreateLeadResult = { error: string; status: number } | { row: Record<string, unknown> }
+
+/** Shared insert used by both the Admin UI's create form and the authenticated inbound API. */
+export async function createLeadRecord(input: CreateLeadInput): Promise<CreateLeadResult> {
+  if (!input.name.trim()) return { error: 'name is required', status: 400 }
+  if (!/^\S+@\S+\.\S+$/.test(input.email)) return { error: 'a valid email is required', status: 400 }
+
+  const projectId = await resolveProjectId(input.project)
+  if (!projectId) return { error: 'a known project is required', status: 400 }
+
+  const id = randomUUID()
+  const { rows } = await pool.query(
+    `
+    INSERT INTO leads (
+      id, project_id, name, company, email, service, message, source, status, notes
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'New', $9)
+    RETURNING *
+    `,
+    [
+      id,
+      projectId,
+      input.name.trim(),
+      (input.company ?? '').trim(),
+      input.email.trim(),
+      (input.service ?? '').trim(),
+      input.message ?? '',
+      normalizeSource(input.source),
+      input.notes ?? '',
+    ],
+  )
+  return { row: rows[0] }
 }
 
 const KNOWN_SOURCES = ['SEO', 'Ads', 'Telegram', 'Direct', 'Referral'] as const

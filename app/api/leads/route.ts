@@ -1,7 +1,6 @@
-import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
-import { normalizeSource, resolveProjectId } from '@/lib/crm'
+import { createLeadRecord, resolveProjectId } from '@/lib/crm'
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
@@ -26,37 +25,21 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null)
-  if (!body || typeof body.name !== 'string' || !body.name.trim()) {
+  if (!body || typeof body.name !== 'string') {
     return NextResponse.json({ error: 'name is required' }, { status: 400 })
   }
-  if (typeof body.email !== 'string' || !/^\S+@\S+\.\S+$/.test(body.email)) {
-    return NextResponse.json({ error: 'a valid email is required' }, { status: 400 })
-  }
 
-  const projectId = await resolveProjectId(typeof body.project === 'string' ? body.project : null)
-  if (!projectId) {
-    return NextResponse.json({ error: 'a known project is required' }, { status: 400 })
-  }
+  const result = await createLeadRecord({
+    project: typeof body.project === 'string' ? body.project : null,
+    name: body.name,
+    email: typeof body.email === 'string' ? body.email : '',
+    company: typeof body.company === 'string' ? body.company : undefined,
+    service: typeof body.service === 'string' ? body.service : undefined,
+    message: typeof body.message === 'string' ? body.message : undefined,
+    source: typeof body.source === 'string' ? body.source : 'manual',
+    notes: typeof body.notes === 'string' ? body.notes : undefined,
+  })
 
-  const id = randomUUID()
-  const { rows } = await pool.query(
-    `
-    INSERT INTO leads (
-      id, project_id, name, company, email, service, message, source, status, notes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'New', $9)
-    RETURNING *
-    `,
-    [
-      id,
-      projectId,
-      body.name.trim(),
-      typeof body.company === 'string' ? body.company.trim() : '',
-      body.email.trim(),
-      typeof body.service === 'string' ? body.service.trim() : '',
-      typeof body.message === 'string' ? body.message : '',
-      normalizeSource(typeof body.source === 'string' ? body.source : 'manual'),
-      typeof body.notes === 'string' ? body.notes : '',
-    ],
-  )
-  return NextResponse.json(rows[0], { status: 201 })
+  if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status })
+  return NextResponse.json(result.row, { status: 201 })
 }
