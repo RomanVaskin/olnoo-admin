@@ -14,9 +14,9 @@ Do not re-discover repo/path/service/port/database if it is already recorded her
 - env: `/opt/olnoo/projects/olnoo/.env.local`
 - technology: Next.js 16.3.3
 
-Responsibilities: public pages, SEO landing pages, contact form. The contact form writes new leads directly into the shared Postgres CRM (server-side, via `DATABASE_URL`).
+Responsibilities: public pages, SEO landing pages, contact form. The contact form writes new leads directly into the shared Postgres CRM (server-side, via `DATABASE_URL`, project `olnoo`) — no HTTP hop to `olnoo-admin` for lead creation.
 
-`/admin/crm` redirects to `https://admin.olnoo.com/en?screen=crm-leads&project=olnoo`.
+`/admin/crm` and `/admin/social` (and all subpaths) redirect to `https://admin.olnoo.com/en?screen=crm-leads&project=olnoo` and `https://admin.olnoo.com/en?screen=social-posts&project=olnoo`. The legacy SQLite-backed CRM/Social UI (`app/admin/crm/*`, `app/admin/social/*`) and Admin API (`/api/admin/leads/*`, `/api/admin/social/*`) have been removed from this repo, along with `lib/leads.ts`, `lib/social-posts.ts`, `lib/social-types.ts`, and the `better-sqlite3` dependency — this repo no longer reads or writes SQLite. See `Legacy` below.
 
 ## OLNOO Admin
 
@@ -27,6 +27,8 @@ Responsibilities: public pages, SEO landing pages, contact form. The contact for
 - port: `3140`
 - env: `/opt/olnoo/projects/olnoo-admin/.env.local`
 - technology: Next.js 16.3.3
+
+`admin.olnoo.com` is the single shared Admin for all OLNOO projects — `olnoo.com` has no operational CRM/Social UI or API of its own anymore (see `OLNOO Main` above).
 
 Unified admin panel. Screens read `?project=<slug>` from the URL.
 CRM Overview: `/en?screen=crm-overview&project=<slug>`. CRM Leads: `/en?screen=crm-leads&project=<slug>`. Current production example: `project=olnoo`.
@@ -53,10 +55,9 @@ Migration: `db/migrations/0004_crm_leads.sql` (added `leads` table + `projects.s
 
 CRM rules: Postgres is the only current source of truth for new leads; do not create a second CRM database; `crm-overview` and `crm-leads` read the same data; status/notes persist in Postgres.
 
-## Legacy — do not remove, do not extend
+## Legacy (inactive, backup only)
 
-- SQLite `data/crm.sqlite` in the `olnoo` repo (`lib/leads.ts`) — no longer receives new leads. Still backs the old `/admin/crm` UI, which is now unreachable via browser (redirected) but not deleted.
-- `olnoo` repo API routes `/api/admin/leads`, `/api/admin/leads/[id]`, `/api/admin/leads/export` — still live, still write to SQLite if called directly (the redirect only affects browser navigation to `/admin/crm`, not direct API calls). Known technical debt; not removed by design (out of scope for the CRM consolidation work).
+The SQLite CRM/Social runtime has been fully retired from the `olnoo` repo — no code path reads or writes it anymore (see `OLNOO Main` above). `data/crm.sqlite` may still physically exist on the KZ server as a leftover file; it is a backup only, not deleted as part of that cleanup, and no task should read from or write to it. Deleting it from the server is a separate, not-yet-done step.
 
 ## Social
 
@@ -68,7 +69,7 @@ Migration: `db/migrations/0005_social_posts.sql`.
 
 Data layer: `lib/social.ts`, reuses `resolveProjectId` from `lib/crm.ts` — no separate project-resolution mechanism.
 
-The old `olnoo` implementation (`app/admin/social/`, `app/api/admin/social/*`, SQLite `social_posts` table in `data/crm.sqlite`) still exists and is **not yet redirected** (unlike `/admin/crm`) — decide and wire that redirect only after the new Social screen is confirmed working in production. No delete endpoint existed in the old implementation; the new one adds one.
+The old `olnoo` implementation (`app/admin/social/`, `app/api/admin/social/*`, SQLite `social_posts` table in `data/crm.sqlite`) has been removed from the `olnoo` repo; `/admin/social` (and subpaths) now redirect to `admin.olnoo.com`, the same way `/admin/crm` does. No delete endpoint existed in the old implementation; the current one has one.
 
 ## AI Router
 
