@@ -16,8 +16,90 @@ export function isSocialChannel(value: unknown): value is SocialChannel {
   return typeof value === 'string' && (KNOWN_CHANNELS as readonly string[]).includes(value)
 }
 
-function serializeChannels(channels: string[]): string {
-  return channels.filter(isSocialChannel).join(',')
+/** The channels currently stored for a post, parsed and filtered to known values. Used when an
+ * update doesn't touch channels itself but still needs to know the post's effective channel set
+ * (the "published" guard in updateSocialPost). */
+async function getStoredChannels(id: string, projectSlug: string | null): Promise<SocialChannel[]> {
+  const existing = await getSocialPost(id, projectSlug)
+  const raw = typeof existing?.channels === 'string' ? existing.channels : ''
+  return raw.split(',').filter(isSocialChannel)
+}
+
+/** Inserts a draft social_publications row for each of the given channels that doesn't already
+ * have one for this post (idempotent — never duplicates a channel already tracked). Channels no
+ * longer selected keep their existing row rather than having it removed. This is the only place
+ * a publication row gets created — always as a side effect of the post's channels being set,
+ * never from a read path. */
+async function ensurePublicationsForChannels(
+  postId: string,
+  projectId: number,
+  channels: SocialChannel[],
+): Promise<void> {
+  if (channels.length === 0) return
+
+  const { rows: existing } = await pool.query<{ platform: string }>(
+    'SELECT platform FROM social_publications WHERE social_post_id = $1 AND project_id = $2',
+    [postId, projectId],
+  )
+  const existingPlatforms = new Set(existing.map((row) => row.platform))
+
+  for (const platform of channels) {
+    if (existingPlatforms.has(platform)) continue
+    await pool.query(
+      `INSERT INTO social_publications (id, project_id, social_post_id, platform, status)
+       VALUES ($1, $2, $3, $4, 'draft')`,
+      [randomUUID(), projectId, postId, platform],
+    )
+  }
+}
+
+/** Whether every one of the given channels currently has a 'published' social_publications row
+ * for this post — the one fact social_posts.status is ever allowed to reflect as "published". */
+async function isFullyPublished(postId: string, projectId: number, channels: SocialChannel[]): Promise<boolean> {
+  if (channels.length === 0) return false
+  const { rows } = await pool.query<{ platform: string; status: string }>(
+    'SELECT platform, status FROM social_publications WHERE social_post_id = $1 AND project_id = $2',
+    [postId, projectId],
+  )
+  const statusByPlatform = new Map(rows.map((row) => [row.platform, row.status]))
+  return channels.every((channel) => statusByPlatform.get(channel) === 'published')
+}
+
+/**
+ * Keeps social_posts.status honest against social_publications — the only source of truth for
+ * "is this post actually published". Never part of a read path: call this only after an
+ * operation that actually changes state — a publication created, updated, or deleted (see
+ * lib/social-publications.ts), or the post's own selected channels changing (see
+ * updateSocialPost/createSocialPost below). A post's status becomes 'published' only once every
+ * currently selected channel has a 'published' publication; the moment that stops holding, it's
+ * demoted back to 'ready' rather than left claiming a state that no longer holds. A post with no
+ * channels selected is left alone. Idempotent.
+ */
+export async function syncPostStatusFromPublications(postId: string, projectId: number): Promise<void> {
+  const { rows: postRows } = await pool.query<{ channels: string; status: string }>(
+    'SELECT channels, status FROM social_posts WHERE id = $1 AND project_id = $2',
+    [postId, projectId],
+  )
+  const post = postRows[0]
+  if (!post) return
+
+  const channels = post.channels ? post.channels.split(',').filter(isSocialChannel) : []
+  if (channels.length === 0) return
+
+  const fullyPublished = await isFullyPublished(postId, projectId, channels)
+  if (fullyPublished && post.status !== 'published') {
+    await pool.query('UPDATE social_posts SET status = $1, updated_at = now() WHERE id = $2 AND project_id = $3', [
+      'published',
+      postId,
+      projectId,
+    ])
+  } else if (!fullyPublished && post.status === 'published') {
+    await pool.query('UPDATE social_posts SET status = $1, updated_at = now() WHERE id = $2 AND project_id = $3', [
+      'ready',
+      postId,
+      projectId,
+    ])
+  }
 }
 
 export type SocialPostFields = {
@@ -76,11 +158,17 @@ export async function getSocialPost(id: string, projectSlug: string | null): Pro
 export async function createSocialPost(projectSlug: string | null, input: SocialPostFields): Promise<SocialResult> {
   if (!input.topic.trim()) return { error: 'topic is required', status: 400 }
   if (input.status && !isSocialStatus(input.status)) return { error: 'invalid status', status: 400 }
+  // A brand-new post can never have a publication yet, so it can never legitimately start out
+  // published — no query needed to know that.
+  if (input.status === 'published') {
+    return { error: 'a new post cannot be created already published', status: 400 }
+  }
 
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
 
   const id = randomUUID()
+  const channels = (input.channels ?? []).filter(isSocialChannel)
   const { rows } = await pool.query(
     `
     INSERT INTO social_posts (
@@ -99,11 +187,16 @@ export async function createSocialPost(projectSlug: string | null, input: Social
       input.instagramText ?? '',
       input.threadsText ?? '',
       input.vkText ?? '',
-      serializeChannels(input.channels ?? []),
+      channels.join(','),
       (input.publishDate ?? '').trim(),
       input.status ?? 'idea',
     ],
   )
+
+  if (channels.length > 0) {
+    await ensurePublicationsForChannels(id, projectId, channels)
+  }
+
   return { row: rows[0] }
 }
 
@@ -119,6 +212,21 @@ export async function updateSocialPost(
 
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
+
+  // The channels this update will leave the post with — from this same patch if it's changing
+  // them, otherwise whatever's already stored. Resolved once, used both by the "published" guard
+  // below and by the post-write reconciliation.
+  const nextChannels = input.channels ? input.channels.filter(isSocialChannel) : null
+
+  if (input.status === 'published') {
+    const channelsToCheck = nextChannels ?? (await getStoredChannels(id, projectSlug))
+    if (!(await isFullyPublished(id, projectId, channelsToCheck))) {
+      return {
+        error: 'post cannot be marked published until every selected channel has a published publication',
+        status: 400,
+      }
+    }
+  }
 
   const sets: string[] = []
   const params: unknown[] = []
@@ -137,7 +245,7 @@ export async function updateSocialPost(
   if (typeof input.instagramText === 'string') set('instagram_text', input.instagramText)
   if (typeof input.threadsText === 'string') set('threads_text', input.threadsText)
   if (typeof input.vkText === 'string') set('vk_text', input.vkText)
-  if (input.channels) set('channels', serializeChannels(input.channels))
+  if (nextChannels) set('channels', nextChannels.join(','))
   if (typeof input.publishDate === 'string') set('publish_date', input.publishDate.trim())
   if (input.status) set('status', input.status)
 
@@ -155,6 +263,17 @@ export async function updateSocialPost(
     params,
   )
   if (!rows[0]) return { error: 'not found', status: 404 }
+
+  if (nextChannels) {
+    await ensurePublicationsForChannels(id, projectId, nextChannels)
+    await syncPostStatusFromPublications(id, projectId)
+    // The reconciliation above may have just changed status again (e.g. dropping the one
+    // channel that wasn't published yet just made the rest fully published) — re-read so the
+    // caller never sees the pre-reconciliation snapshot.
+    const fresh = await getSocialPost(id, projectSlug)
+    if (fresh) return { row: fresh }
+  }
+
   return { row: rows[0] }
 }
 

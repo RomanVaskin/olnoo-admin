@@ -1,7 +1,6 @@
-import { randomUUID } from 'node:crypto'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
-import { getSocialPost, isSocialChannel } from '@/lib/social'
+import { getSocialPost, syncPostStatusFromPublications } from '@/lib/social'
 
 const KNOWN_STATUSES = ['draft', 'ready', 'published', 'failed'] as const
 export type SocialPublicationStatus = (typeof KNOWN_STATUSES)[number]
@@ -25,52 +24,11 @@ export type SocialPublicationResult = { error: string; status: number } | { row:
  * supplying a different id with this project's slug (or vice versa), and a social_account_id
  * can only be attached if that account belongs to the same project. */
 
-/**
- * Keeps social_posts.status honest against social_publications — the only source of truth for
- * "is this post actually published" — so the post's own status can never manually claim
- * "published" while a selected channel isn't. Post status becomes 'published' only once every
- * currently selected channel has a 'published' publication; if it later stops being fully
- * published (a channel reverted, or a channel was added), it's demoted back to 'ready' rather
- * than left claiming a state that no longer holds. A post with no channels selected is left
- * alone — there's nothing to reconcile. Idempotent; safe to call after any publication change.
- */
-async function syncPostStatusFromPublications(postId: string, projectId: number): Promise<void> {
-  const { rows: postRows } = await pool.query<{ channels: string; status: string }>(
-    'SELECT channels, status FROM social_posts WHERE id = $1 AND project_id = $2',
-    [postId, projectId],
-  )
-  const post = postRows[0]
-  if (!post) return
-
-  const channels = post.channels ? post.channels.split(',').filter(isSocialChannel) : []
-  if (channels.length === 0) return
-
-  const { rows: pubRows } = await pool.query<{ platform: string; status: string }>(
-    'SELECT platform, status FROM social_publications WHERE social_post_id = $1 AND project_id = $2',
-    [postId, projectId],
-  )
-  const statusByPlatform = new Map(pubRows.map((row) => [row.platform, row.status]))
-  const fullyPublished = channels.every((channel) => statusByPlatform.get(channel) === 'published')
-
-  if (fullyPublished && post.status !== 'published') {
-    await pool.query('UPDATE social_posts SET status = $1, updated_at = now() WHERE id = $2 AND project_id = $3', [
-      'published',
-      postId,
-      projectId,
-    ])
-  } else if (!fullyPublished && post.status === 'published') {
-    await pool.query('UPDATE social_posts SET status = $1, updated_at = now() WHERE id = $2 AND project_id = $3', [
-      'ready',
-      postId,
-      projectId,
-    ])
-  }
-}
-
-/** Ensures one social_publications row exists per channel currently selected on the post
- * (idempotent — a channel already tracked is never duplicated), then returns every publication
- * recorded for the post, including ones for channels since removed from it. Returns null if the
- * project or post can't be resolved. */
+/** Pure read: returns every publication recorded for the post (including ones for channels
+ * since deselected — nothing is created or changed here). New publication rows are created only
+ * as a side effect of the post's channels actually changing — see ensurePublicationsForChannels
+ * in lib/social.ts, called from updateSocialPost/createSocialPost. Returns null if the project or
+ * post can't be resolved. */
 export async function listPublicationsForPost(
   postId: string,
   projectSlug: string | null,
@@ -80,25 +38,6 @@ export async function listPublicationsForPost(
 
   const post = await getSocialPost(postId, projectSlug)
   if (!post) return null
-
-  const channels = typeof post.channels === 'string' ? post.channels.split(',').filter(isSocialChannel) : []
-
-  const { rows: existing } = await pool.query<{ platform: string }>(
-    'SELECT platform FROM social_publications WHERE social_post_id = $1 AND project_id = $2',
-    [postId, projectId],
-  )
-  const existingPlatforms = new Set(existing.map((row) => row.platform))
-
-  for (const platform of channels) {
-    if (existingPlatforms.has(platform)) continue
-    await pool.query(
-      `INSERT INTO social_publications (id, project_id, social_post_id, platform, status)
-       VALUES ($1, $2, $3, $4, 'draft')`,
-      [randomUUID(), projectId, postId, platform],
-    )
-  }
-
-  await syncPostStatusFromPublications(postId, projectId)
 
   const { rows } = await pool.query(
     'SELECT * FROM social_publications WHERE social_post_id = $1 AND project_id = $2 ORDER BY created_at ASC',
