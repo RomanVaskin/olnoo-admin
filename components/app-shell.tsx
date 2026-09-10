@@ -18,6 +18,7 @@ import { WordstatImport } from '@/components/sections/wordstat-import'
 import { CrmOverview } from '@/components/sections/crm-overview'
 import { LeadsView } from '@/components/sections/leads-view'
 import { SocialView } from '@/components/sections/social-view'
+import { SocialAccountsView } from '@/components/sections/social-accounts-view'
 import { SettingsView } from '@/components/sections/settings-view'
 import { ClientCrm } from '@/components/sections/client-crm'
 import {
@@ -67,7 +68,7 @@ const adminGroups: NavGroup[] = [
       {
         id: 'social',
         status: 'active',
-        children: [{ id: 'social-posts' }],
+        children: [{ id: 'social-posts' }, { id: 'social-accounts' }],
       },
       { id: 'ads', status: 'soon' },
       { id: 'pr', status: 'soon' },
@@ -284,6 +285,7 @@ export function AppShell() {
           )}
           {active === 'crm-leads' && <LeadsView project={project} />}
           {active === 'social-posts' && <SocialView project={project} />}
+          {active === 'social-accounts' && <SocialAccountsView project={project} />}
           {active === 'settings' && <SettingsView />}
 
           {/* Client */}

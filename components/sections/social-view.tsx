@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
+import { SocialPublications } from '@/components/sections/social-publications'
 
 const STATUSES = ['idea', 'draft', 'ready', 'published'] as const
 const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
@@ -262,6 +263,10 @@ function PostDetail({
           >
             {saving ? t.common.saving : 'Save'}
           </button>
+
+          <div className="border-t border-hairline pt-6">
+            <SocialPublications postId={post.id} channels={post.channels} project={project} />
+          </div>
 
           <div className="border-t border-hairline pt-6">
             <button

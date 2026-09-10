@@ -71,6 +71,26 @@ Data layer: `lib/social.ts`, reuses `resolveProjectId` from `lib/crm.ts` — no 
 
 The old `olnoo` implementation (`app/admin/social/`, `app/api/admin/social/*`, SQLite `social_posts` table in `data/crm.sqlite`) has been removed from the `olnoo` repo; `/admin/social` (and subpaths) now redirect to `admin.olnoo.com`, the same way `/admin/crm` does. No delete endpoint existed in the old implementation; the current one has one.
 
+### Social Accounts
+
+Project-scoped inventory of social accounts (no real posting API connected yet — this is bookkeeping only, for future automation). Table `social_accounts` (`project_id → projects.id`), `platform` one of `telegram`/`instagram`/`threads`/`vk`, `status` one of `created`/`connected`. Live at `?screen=social-accounts&project=<slug>` (nav: Social → Accounts, alongside Posts).
+
+API routes (`olnoo-admin`): `GET/POST /api/social-accounts` (list filtered by `?project=<slug>`, create), `GET/PATCH/DELETE /api/social-accounts/[id]` (project-scoped, same isolation guarantee as `/api/social`).
+
+Data layer: `lib/social-accounts.ts`.
+
+No real OLNOO accounts are seeded by migration — they are added manually via the Accounts UI after deploy.
+
+### Publication tracking
+
+Per-channel publication status for each post, table `social_publications` (`project_id → projects.id`, `social_post_id → social_posts.id` cascade-deleted with the post, `social_account_id → social_accounts.id` set null if the account is deleted). `status` one of `draft`/`ready`/`published`/`failed`. One row is auto-created (status `draft`) the first time a post's Publications block is opened for each channel currently selected on that post — channels later deselected keep their existing row rather than being deleted.
+
+API routes (`olnoo-admin`): `GET /api/social-publications?post=<id>&project=<slug>` (ensures rows exist for the post's current channels, then lists all of them), `PATCH /api/social-publications/[id]` (project-scoped; assigning a `social_account_id` is rejected with 400 if that account doesn't belong to the same project). Setting `status` to `published` sets `published_at` to now (if not already set); setting it to anything else clears `published_at`.
+
+MVP UI only: manual "Mark as published" (optionally with an external URL) and "Back to ready" inside the post's Publications block. No automated posting to any platform exists yet.
+
+Migration: `db/migrations/0007_social_accounts_publications.sql` (both tables).
+
 ## AI Router
 
 - repo: `RomanVaskin/olnoo-ai-router`
