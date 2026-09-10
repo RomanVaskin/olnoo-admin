@@ -367,6 +367,8 @@ export const en = {
     title: 'Publications',
     loading: 'Loading…',
     empty: 'No channels selected for this post yet.',
+    fullyPublished: 'Fully published',
+    partiallyPublished: 'Partially published',
     account: 'Account',
     noAccount: '— Unassigned —',
     externalUrl: 'External URL',

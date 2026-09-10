@@ -47,6 +47,20 @@ function fromApiAccount(row: Record<string, unknown>): Account {
   }
 }
 
+export type PublicationSummary = 'fully_published' | 'partially_published' | 'ready' | 'draft'
+
+/** The single source of truth for "is this post published" — computed fresh from
+ * social_publications every time, never stored, so it can't drift from reality. A channel with
+ * no publication row yet counts the same as one that isn't published. */
+export function summarizePublications(channels: string[], publications: Publication[]): PublicationSummary {
+  if (channels.length === 0) return 'draft'
+  const relevant = channels.map((channel) => publications.find((p) => p.platform === channel))
+  if (relevant.every((p) => p?.status === 'published')) return 'fully_published'
+  if (relevant.some((p) => p?.status === 'published')) return 'partially_published'
+  if (relevant.some((p) => p?.status === 'ready')) return 'ready'
+  return 'draft'
+}
+
 function formatDateTime(value: string) {
   if (!value) return '—'
   const date = new Date(value)
@@ -166,14 +180,43 @@ function PublicationRow({
   )
 }
 
+function SummaryBadge({ summary }: { summary: PublicationSummary }) {
+  const { t } = useI18n()
+  const label =
+    summary === 'fully_published'
+      ? t.socialPublications.fullyPublished
+      : summary === 'partially_published'
+        ? t.socialPublications.partiallyPublished
+        : summary === 'ready'
+          ? t.status.ready
+          : t.status.draft
+  const dotClass = summary === 'fully_published' ? 'bg-blue' : 'bg-muted-foreground'
+
+  return (
+    <span className="inline-flex items-center gap-2 whitespace-nowrap">
+      <span className={`size-1.5 rounded-full ${dotClass}`} aria-hidden />
+      <span className="label-mono text-foreground/80">{label}</span>
+    </span>
+  )
+}
+
 export function SocialPublications({
   postId,
   channels,
   project,
+  onPostChanged,
+  onSummaryChange,
 }: {
   postId: string
   channels: string[]
   project: string
+  /** Called after a publication update, since the post's own status may have just been
+   * reconciled server-side (see syncPostStatusFromPublications) — lets the parent refetch the
+   * post so its Status field reflects that without waiting for a manual reload. */
+  onPostChanged?: () => void
+  /** Reports the live fully/partially-published/ready/draft summary so the parent can gate
+   * manual selection of the post's own "Published" status against it. */
+  onSummaryChange?: (summary: PublicationSummary) => void
 }) {
   const { t } = useI18n()
   const [publications, setPublications] = useState<Publication[]>([])
@@ -206,13 +249,23 @@ export function SocialPublications({
 
   function handleUpdated(updated: Publication) {
     setPublications((current) => current.map((p) => (p.id === updated.id ? updated : p)))
+    onPostChanged?.()
   }
 
   const visible = publications.filter((p) => channels.includes(p.platform))
+  const summary = summarizePublications(channels, publications)
+
+  useEffect(() => {
+    if (!loading) onSummaryChange?.(summary)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary, loading])
 
   return (
     <div className="flex flex-col gap-3">
-      <span className="label-mono text-muted-foreground">{t.socialPublications.title}</span>
+      <div className="flex items-center justify-between">
+        <span className="label-mono text-muted-foreground">{t.socialPublications.title}</span>
+        {!loading && <SummaryBadge summary={summary} />}
+      </div>
       {loading && <span className="label-mono text-muted-foreground">{t.socialPublications.loading}</span>}
       {!loading && visible.length === 0 && (
         <p className="text-sm text-muted-foreground">{t.socialPublications.empty}</p>

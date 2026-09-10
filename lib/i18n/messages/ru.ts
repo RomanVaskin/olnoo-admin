@@ -369,6 +369,8 @@ export const ru: Messages = {
     title: 'Публикации',
     loading: 'Загрузка…',
     empty: 'Для этого поста пока не выбраны каналы.',
+    fullyPublished: 'Полностью опубликовано',
+    partiallyPublished: 'Частично опубликовано',
     account: 'Аккаунт',
     noAccount: '— Не привязан —',
     externalUrl: 'Внешняя ссылка',

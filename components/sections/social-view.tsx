@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
-import { SocialPublications } from '@/components/sections/social-publications'
+import { SocialPublications, type PublicationSummary } from '@/components/sections/social-publications'
 
 const STATUSES = ['idea', 'draft', 'ready', 'published'] as const
 const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
@@ -87,6 +87,7 @@ function PostDetail({
   const [publishDate, setPublishDate] = useState(post.publishDate)
   const [status, setStatus] = useState<SocialStatus>(post.status)
   const [differentPerChannel, setDifferentPerChannel] = useState(() => hasDistinctChannelText(post))
+  const [publicationSummary, setPublicationSummary] = useState<PublicationSummary>('draft')
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
@@ -121,6 +122,14 @@ function PostDetail({
     } finally {
       setSaving(false)
     }
+  }
+
+  /** Re-fetches the post so its Status reflects a server-side reconciliation against
+   * social_publications (see syncPostStatusFromPublications) triggered by a publication change,
+   * without requiring the user to close and reopen the post. */
+  async function refreshPost() {
+    const res = await fetch(`/api/social/${post.id}?project=${encodeURIComponent(project)}`)
+    if (res.ok) onSaved(fromApiPost(await res.json()))
   }
 
   async function saveAll() {
@@ -287,7 +296,7 @@ function PostDetail({
               className="label-mono bg-transparent text-right text-foreground focus:outline-none"
             >
               {STATUSES.map((s) => (
-                <option key={s} value={s}>
+                <option key={s} value={s} disabled={s === 'published' && publicationSummary !== 'fully_published'}>
                   {t.status[s]}
                 </option>
               ))}
@@ -303,7 +312,13 @@ function PostDetail({
           </button>
 
           <div className="border-t border-hairline pt-6">
-            <SocialPublications postId={post.id} channels={post.channels} project={project} />
+            <SocialPublications
+              postId={post.id}
+              channels={post.channels}
+              project={project}
+              onPostChanged={refreshPost}
+              onSummaryChange={setPublicationSummary}
+            />
           </div>
 
           <div className="border-t border-hairline pt-6">
