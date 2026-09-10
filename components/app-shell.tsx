@@ -17,6 +17,7 @@ import { SeoHealth } from '@/components/sections/seo-health'
 import { WordstatImport } from '@/components/sections/wordstat-import'
 import { CrmOverview } from '@/components/sections/crm-overview'
 import { LeadsView } from '@/components/sections/leads-view'
+import { SocialView } from '@/components/sections/social-view'
 import { SettingsView } from '@/components/sections/settings-view'
 import { ClientCrm } from '@/components/sections/client-crm'
 import {
@@ -63,7 +64,11 @@ const adminGroups: NavGroup[] = [
         status: 'active',
         children: [{ id: 'crm-overview' }, { id: 'crm-leads' }],
       },
-      { id: 'social', status: 'soon' },
+      {
+        id: 'social',
+        status: 'active',
+        children: [{ id: 'social-posts' }],
+      },
       { id: 'ads', status: 'soon' },
       { id: 'pr', status: 'soon' },
       { id: 'analytics', status: 'soon' },
@@ -278,6 +283,7 @@ export function AppShell() {
             <CrmOverview project={project} onProjectChange={setProject} />
           )}
           {active === 'crm-leads' && <LeadsView project={project} />}
+          {active === 'social-posts' && <SocialView project={project} />}
           {active === 'settings' && <SettingsView />}
 
           {/* Client */}

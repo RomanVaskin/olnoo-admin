@@ -58,11 +58,17 @@ CRM rules: Postgres is the only current source of truth for new leads; do not cr
 - SQLite `data/crm.sqlite` in the `olnoo` repo (`lib/leads.ts`) — no longer receives new leads. Still backs the old `/admin/crm` UI, which is now unreachable via browser (redirected) but not deleted.
 - `olnoo` repo API routes `/api/admin/leads`, `/api/admin/leads/[id]`, `/api/admin/leads/export` — still live, still write to SQLite if called directly (the redirect only affects browser navigation to `/admin/crm`, not direct API calls). Known technical debt; not removed by design (out of scope for the CRM consolidation work).
 
-## Social — known duplication, do not extend either side yet
+## Social
 
-A working Social implementation (list/create/edit, `app/admin/social/`, `app/api/admin/social/*`) already exists in `RomanVaskin/olnoo`, built before Social was planned as an `olnoo-admin` module. `OLNOO_ARCHITECTURE.md` describes Social as a `Client → Project → Social` module inside `olnoo-admin` — no such implementation exists there yet.
+Source of truth: Postgres (`olnoo-admin`), table `social_posts`, `project_id → projects.id`. Live at `?screen=social-posts&project=<slug>`.
 
-Before building Social in `olnoo-admin`: decide what is reused vs rebuilt and which one becomes the single source of truth. Do not create a second Social implementation without that decision first.
+Confirmed API routes (`olnoo-admin`): `GET/POST /api/social` (list filtered by `?project=<slug>`, create), `GET/PATCH/DELETE /api/social/[id]` (all project-scoped — a post id from another project cannot be read, edited, or deleted by supplying a different project slug or vice versa).
+
+Migration: `db/migrations/0005_social_posts.sql`.
+
+Data layer: `lib/social.ts`, reuses `resolveProjectId` from `lib/crm.ts` — no separate project-resolution mechanism.
+
+The old `olnoo` implementation (`app/admin/social/`, `app/api/admin/social/*`, SQLite `social_posts` table in `data/crm.sqlite`) still exists and is **not yet redirected** (unlike `/admin/crm`) — decide and wire that redirect only after the new Social screen is confirmed working in production. No delete endpoint existed in the old implementation; the new one adds one.
 
 ## AI Router
 
