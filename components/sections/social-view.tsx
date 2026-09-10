@@ -125,13 +125,20 @@ function PostDetail({
 
   async function saveAll() {
     const patch: Record<string, unknown> = { topic, body, channels, publishDate }
-    // "Different text per channel" off just hides the per-channel fields — it never sends them,
-    // so any existing per-channel text already saved in the DB is left completely untouched.
     if (differentPerChannel) {
       patch.telegramText = telegramText
       patch.instagramText = instagramText
       patch.threadsText = threadsText
       patch.vkText = vkText
+    } else {
+      // Off means only the shared Content is used for the selected channels — explicitly clear
+      // their per-channel overrides so old distinct text can't make the toggle re-derive to ON
+      // after reload. body itself, and any field for a channel that isn't currently selected,
+      // are left untouched.
+      if (channels.includes('telegram')) patch.telegramText = ''
+      if (channels.includes('instagram')) patch.instagramText = ''
+      if (channels.includes('threads')) patch.threadsText = ''
+      if (channels.includes('vk')) patch.vkText = ''
     }
     await save(patch)
   }
