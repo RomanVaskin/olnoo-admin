@@ -1,277 +1,86 @@
 # OLNOO Project Map
 
-Этот файл — основной источник истины по runtime-структуре OLNOO.
+Confirmed production facts only. Design/development rules live in `OLNOO_ARCHITECTURE.md`; read both before any OLNOO task (see `AGENTS.md`).
 
-Перед любой технической задачей по OLNOO Claude/Codex должен сначала прочитать этот файл.
-Не искать заново repo/path/service/port, если информация здесь соответствует production.
+Do not re-discover repo/path/service/port/database if it is already recorded here. If a task confirms a change to domain, repo, path, service, port, storage, route, or source of truth, update this file in the same commit.
 
-Если во время задачи подтверждено изменение domain, repo, path, service, port, storage, route или source of truth — обновить этот файл в том же commit.
+## OLNOO Main (public site)
 
-## 1. OLNOO Main Website
+- domain: `olnoo.com`
+- repo: `RomanVaskin/olnoo`
+- production path: `/opt/olnoo/projects/olnoo`
+- systemd service: `olnoo-web.service`
+- port: `3130`
+- env: `/opt/olnoo/projects/olnoo/.env.local`
+- technology: Next.js 16.3.3
 
-**Domain:**
-`https://olnoo.com`
+Responsibilities: public pages, SEO landing pages, contact form. The contact form writes new leads directly into the shared Postgres CRM (server-side, via `DATABASE_URL`).
 
-**Repository:**
-`https://github.com/RomanVaskin/olnoo`
+`/admin/crm` redirects to `https://admin.olnoo.com/en?screen=crm-leads&project=olnoo`.
 
-**Production server:**
-KZ VDS
+## OLNOO Admin
 
-**Production path:**
-`/opt/olnoo/projects/olnoo`
+- domain: `admin.olnoo.com`
+- repo: `RomanVaskin/olnoo-admin`
+- production path: `/opt/olnoo/projects/olnoo-admin`
+- systemd service: `olnoo-admin.service`
+- port: `3140`
+- env: `/opt/olnoo/projects/olnoo-admin/.env.local`
+- technology: Next.js 16.3.3
 
-**Systemd service:**
-`olnoo-web.service`
+Unified admin panel. Screens read `?project=<slug>` from the URL.
+CRM Overview: `/en?screen=crm-overview&project=<slug>`. CRM Leads: `/en?screen=crm-leads&project=<slug>`. Current production example: `project=olnoo`.
 
-**Port:**
-`3130`
+No authentication layer exists on this app yet (no login, no session, no middleware) — every route, including CRM writes, is reachable by anyone who can reach the domain. This is a known, pre-existing gap, not something to silently patch as a side effect of an unrelated task.
 
-**Technology:**
-Next.js 16
+## CRM
 
-**Role:**
-Публичный сайт OLNOO.
+Source of truth: Postgres (same database used by `olnoo-admin`).
 
-**Responsibilities:**
+Tables: `clients`, `projects`, `leads`.
+Relationship: `leads.project_id → projects.id`.
+Project resolution: `projects.slug` (e.g. `olnoo`, `insurance`, `aura`, `marketing`).
 
-- публичные страницы;
-- SEO landing pages;
-- формы заявок;
-- отправка новых лидов в общую CRM.
+New leads from `olnoo.com` are written directly into this Postgres `leads` table by the contact form's own server-side code (`olnoo` repo, `lib/crm-db.ts` + `app/api/contact/route.ts`) — there is no HTTP hop between the two apps for lead creation.
 
-**CRM:**
-Новые лиды пишутся напрямую в общий Postgres CRM через server-side код публичного сайта.
+Confirmed API routes (`olnoo-admin`):
+- `GET/POST /api/leads` — list (filtered by `?project=<slug>`) and create; used by the Admin UI itself.
+- `PATCH/DELETE /api/leads/[id]` — edit and delete.
+- `GET /api/projects`, `GET /api/clients`.
+- `POST /api/leads/inbound` exists (API-key-authenticated server-to-server intake) but is **not currently used** — superseded by the direct-Postgres write above after the key-based path proved unreliable in production. Left in place; do not build new integrations against it without re-confirming it's wanted.
 
-**CRM source of truth:**
-Postgres, общий с `olnoo-admin`.
-SQLite `data/crm.sqlite` является legacy и не должен использоваться для новых CRM-лидов.
+Migration: `db/migrations/0004_crm_leads.sql` (added `leads` table + `projects.slug`). Applied to production.
 
-**Admin redirect:**
-`/admin/crm`
-→ `https://admin.olnoo.com/en?screen=crm-leads&project=olnoo`
+CRM rules: Postgres is the only current source of truth for new leads; do not create a second CRM database; `crm-overview` and `crm-leads` read the same data; status/notes persist in Postgres.
 
-## 2. OLNOO Admin
+## Legacy — do not remove, do not extend
 
-**Domain:**
-`https://admin.olnoo.com`
+- SQLite `data/crm.sqlite` in the `olnoo` repo (`lib/leads.ts`) — no longer receives new leads. Still backs the old `/admin/crm` UI, which is now unreachable via browser (redirected) but not deleted.
+- `olnoo` repo API routes `/api/admin/leads`, `/api/admin/leads/[id]`, `/api/admin/leads/export` — still live, still write to SQLite if called directly (the redirect only affects browser navigation to `/admin/crm`, not direct API calls). Known technical debt; not removed by design (out of scope for the CRM consolidation work).
 
-**Repository:**
-`https://github.com/RomanVaskin/olnoo-admin`
+## Social — known duplication, do not extend either side yet
 
-**Production server:**
-KZ VDS
+A working Social implementation (list/create/edit, `app/admin/social/`, `app/api/admin/social/*`) already exists in `RomanVaskin/olnoo`, built before Social was planned as an `olnoo-admin` module. `OLNOO_ARCHITECTURE.md` describes Social as a `Client → Project → Social` module inside `olnoo-admin` — no such implementation exists there yet.
 
-**Production path:**
-`/opt/olnoo/projects/olnoo-admin`
+Before building Social in `olnoo-admin`: decide what is reused vs rebuilt and which one becomes the single source of truth. Do not create a second Social implementation without that decision first.
 
-**Systemd service:**
-`olnoo-admin.service`
+## AI Router
 
-**Port:**
-`3140`
+- repo: `RomanVaskin/olnoo-ai-router`
+- default port (from its own `.env.example`, not independently confirmed against a running production process): `3010`
 
-**Technology:**
-Next.js 16.3.3
+Production path/systemd service on KZ are not confirmed — do not guess them; confirm via the same runtime-tracing method used for the two apps above (nginx config → port → systemd unit → `git remote -v`) if a task needs them.
 
-**Role:**
-Единая административная панель OLNOO.
+## Known repo look-alikes
 
-**Main modules:**
+- `RomanVaskin/olnoo-admin` = production `admin.olnoo.com`.
+- `RomanVaskin/olnoo-admin-48` — do **not** treat as production without separate confirmation.
+- `RomanVaskin/olnoolopisadmin` — this is Sportpolis admin, **not** `admin.olnoo.com`.
 
-- Projects
-- CRM
-- SEO
-- Social
-- Ads
-- Analytics
+## Agent capabilities (stable constraints)
 
-**Rule:**
-Не создавать отдельные приложения для CRM, SEO, Social, Ads или Analytics без реальной необходимости.
-
-**Предпочтительный путь:**
-добавлять новые функции как модули внутри OLNOO Admin.
-
-## 3. CRM
-
-**Admin screens:**
-
-CRM Overview:
-`/en?screen=crm-overview&project=<project-slug>`
-
-CRM Leads:
-`/en?screen=crm-leads&project=<project-slug>`
-
-**Current production example:**
-`project=olnoo`
-
-**Source of truth:**
-Postgres.
-
-**Main table:**
-`leads`
-
-**Project relation:**
-каждый лид связан с Project.
-
-**Project selection:**
-через `project=<project-slug>`.
-
-**Current working flow:**
-`olnoo.com contact form`
-→ `Postgres leads`
-→ `project=olnoo`
-→ `OLNOO Admin CRM Leads`
-→ `OLNOO Admin CRM Overview`
-
-**CRM rules:**
-
-- Postgres — единственный актуальный source of truth для новых лидов.
-- SQLite не использовать для новых лидов.
-- Не создавать вторую CRM-БД.
-- Не создавать отдельные mock CRM данные в Admin.
-- `crm-overview` и `crm-leads` должны читать одни и те же реальные данные.
-- Lead нельзя переносить между Projects через обычное редактирование.
-- Notes и status сохраняются в Postgres.
-- После reload изменения должны сохраняться.
-
-**Current migration:**
-`db/migrations/0004_crm_leads.sql`
-
-**Production migration applied:**
-Yes.
-
-## 4. SEO
-
-**Location:**
-OLNOO Admin.
-
-**Relationship:**
-`Client → Project → SEO`
-
-**Rules:**
-
-- один SEO intent = одна страница;
-- не создавать thin pages под синонимы;
-- публичный сайт должен иметь sitemap;
-- SEO Create/Improve используют весь cluster;
-- обязательны CTA и internal links;
-- использовать Quality Gate;
-- новый Project должен автоматически попадать в общие SEO проверки;
-- SEO должен быть привязан к Project, а не существовать отдельно.
-
-SEO изменения не должны создавать отдельные CRM или Project сущности.
-
-## 5. Social
-
-**Status:**
-Следующий модуль для развития.
-
-**Location:**
-OLNOO Admin.
-
-**Required relationship:**
-`Client → Project → Social`
-
-Social должен использовать существующий Project.
-
-Если Social создаёт лиды или потенциальные контакты:
-использовать существующую CRM, а не отдельное хранилище.
-
-Не создавать отдельный Social application без необходимости.
-
-## 6. Ads
-
-**Location:**
-OLNOO Admin.
-
-**Required relationship:**
-`Client → Project → Ads`
-
-Ads должен использовать существующий Project.
-
-Будущие рекламные лиды должны попадать в общую CRM.
-
-Не создавать отдельную CRM для Ads.
-
-## 7. Analytics
-
-**Location:**
-OLNOO Admin.
-
-**Required relationship:**
-`Client → Project → Analytics`
-
-Analytics должен агрегировать данные существующих модулей, а не создавать параллельные сущности.
-
-**Основная цель:**
-показывать результаты Project по каналам:
-
-- SEO
-- CRM
-- Social
-- Ads
-
-## 8. Main OLNOO relationship
-
-**Главная структура:**
-
-`Client`
-→ `Project`
-→ `SEO`
-→ `CRM`
-→ `Social`
-→ `Ads`
-→ `Analytics`
-
-Project — основной связующий объект между модулями.
-
-Один Client может иметь несколько Projects.
-
-Новый Project должен по возможности автоматически становиться доступным всем общим модулям.
-
-## 9. Production rules
-
-**Перед изменениями:**
-
-1. Определить, какой repo относится к задаче по этой карте.
-2. Работать только в нужном repo.
-3. Проверить `git status`.
-4. Не трогать чужие незакоммиченные изменения.
-5. Не менять nginx/systemd/GitHub Actions без необходимости.
-6. Не создавать новую БД или сервис, если задача решается существующим модулем.
-7. Не хранить secrets и тяжёлые media в Git.
-
-**После изменений:**
-
-1. build;
-2. typecheck, если используется;
-3. минимальная функциональная проверка;
-4. production E2E для критических пользовательских потоков;
-5. обновить этот файл, если изменилась архитектура/runtime;
-6. commit;
-7. push только в правильный repository.
-
-## 10. Agent execution rule
-
-Claude/Codex не должен заставлять пользователя вручную переносить результаты между Terminal и агентом, если агент сам имеет доступ к нужному инструменту.
-
-Не устраивать длинные диагностические циклы.
-
-**Рабочий порядок:**
-`problem → minimal fix → verification`
-
-Диагностика допускается только если без неё невозможно безопасно выполнить исправление.
-
-Не повторять уже выполненные проверки.
-
-**Не угадывать:**
-
-- repo;
-- path;
-- service;
-- port;
-- database;
-- source of truth.
-
-Если эти данные уже подтверждены в этом документе — использовать их.
+- GitHub repo read/write depends on the current session's permissions; a repo may need to be attached before it can be read or pushed to.
+- `git push` to a repo's `main` may require explicit user confirmation, particularly when the push triggers an auto-deploy.
+- Do not assume SSH access to the KZ server exists.
+- Do not assume direct network access to production domains (`olnoo.com`, `admin.olnoo.com`) exists from the agent's own environment — it may not.
+- If access is missing for a step, give the user one minimal, ready-to-run command for that step — not a long diagnostic sequence.

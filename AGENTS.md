@@ -1,3 +1,19 @@
+# Read first
+
+Before any OLNOO technical or product task, read:
+
+- `OLNOO_PROJECT_MAP.md` — confirmed production facts (domains, repos, paths, services, ports, DB, routes).
+- `OLNOO_ARCHITECTURE.md` — design/development rules for new and existing modules.
+
+Do not re-discover repo/path/service/port/database if it is already recorded there.
+
+## Task execution rules
+
+- Flow: **problem → minimal fix → verification.**
+- Do not run long diagnostic cycles. Diagnose only as far as needed to make a safe fix.
+- Do not create a second database or a second source of truth for something that already has one.
+- Do not change neighboring modules without necessity.
+
 # OLNOO Engineering & Product Rules
 
 ## Mandatory decision order
@@ -371,25 +387,11 @@ Preserve:
 
 # CRM direction
 
-After the SEO base, CRM/Leads is the next priority.
+CRM is live in production, not an MVP goal. Current flow:
 
-MVP:
+`olnoo.com` contact form → shared Postgres (`leads` table) → `admin.olnoo.com` CRM (Overview + Leads).
 
-Website form → existing email flow remains → Lead also appears in OLNOO Admin.
-
-Minimal lead fields:
-- name;
-- email;
-- phone if available;
-- company;
-- service;
-- message;
-- landing page;
-- referrer;
-- UTM;
-- locale;
-- source;
-- status.
+See `OLNOO_PROJECT_MAP.md` for exact tables, routes, and fields. Do not re-derive the schema — it does not include `phone`; do not add it without a real requirement.
 
 Statuses:
 - New

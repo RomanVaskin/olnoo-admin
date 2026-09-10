@@ -1,202 +1,32 @@
 # OLNOO Architecture
 
-## Purpose
-
-OLNOO должен масштабироваться так, чтобы рост количества клиентов не требовал пропорционального роста ручной работы.
-
-**Главный принцип:**
-больше клиентов → больше reusable функций и автоматизации → меньше ручного времени на одного клиента
+Design and development rules for OLNOO modules. Current production facts (repos, paths, services, ports, DB, routes) live in `OLNOO_PROJECT_MAP.md`, not here.
 
 ## Core hierarchy
 
-`Client`
-→ `Project`
-→ modules
+`Client → Project → modules`
 
-**Основные модули:**
-`SEO`
-`CRM`
-`Social`
-`Ads`
-`Analytics`
+Modules: `SEO`, `CRM`, `Social`, `Ads`, `Analytics`.
 
-Project — главный ключ между модулями.
+Project is the main connecting object between modules. One Client can have several Projects.
 
-## Architecture principles
+## Principles
 
-### 1. Не усложнять
+- **One source of truth.** Each entity has exactly one current data source (e.g. CRM leads live in Postgres, not Postgres + SQLite). A legacy store may remain temporarily, but must not receive new data.
+- **Reuse existing OLNOO module first.** Do not create a new service, repository, database, or app if the task can be solved inside an existing module.
+- **No new DB/service/repo unless necessary.**
+- **Modules live inside `olnoo-admin` where possible** — a separate repository is for a separate application, not for each functional module.
+- **Module data is project-scoped.** New project-scoped entities reuse the existing `Project` (via `project_id` FK, resolved through `projects.slug`) — do not create a parallel Client/Project concept.
+- **Leads from any channel (Website, SEO, Social, Ads, Telegram, ...) go into the shared CRM**, not a per-channel table.
+- **Client work should be reusable** where practical, rather than one-off per client.
+- **A second repetition of a manual action is a candidate for automation** — but automation must not violate the "don't overcomplicate" principle.
 
-Сначала использовать существующий модуль OLNOO.
+## SEO
 
-Не создавать:
-
-- новый сервис;
-- новый repository;
-- новую БД;
-- новую очередь;
-- отдельное приложение;
-
-если задача решается существующей архитектурой.
-
-### 2. Admin — единая точка управления
-
-CRM, SEO, Social, Ads и Analytics по возможности развиваются внутри `olnoo-admin`.
-
-Отдельный repository допустим для отдельного приложения, но не для каждого функционального модуля.
-
-### 3. Один source of truth
-
-Для каждой сущности должен быть один актуальный источник данных.
-
-Пример CRM:
-`Postgres leads`
-
-Нельзя одновременно использовать:
-`SQLite CRM + Postgres CRM`
-для одного production-потока.
-
-Legacy storage может сохраняться временно, но новые данные туда не должны записываться.
-
-### 4. Project-scoped architecture
-
-Все основные данные должны быть привязаны к Project.
-
-Пример:
-`project=olnoo`
-`project=aura`
-`project=property`
-
-CRM Leads, SEO, Social, Ads и Analytics должны фильтроваться по выбранному Project.
-
-### 5. Reusable first
-
-Клиентская задача должна по возможности улучшать общий продукт OLNOO.
-
-Перед созданием client-specific решения проверить:
-
-- можно ли решить существующим модулем;
-- можно ли сделать решение reusable;
-- не создаётся ли новая ручная операция;
-- будет ли решение работать для следующего клиента без переписывания.
-
-### 6. Automation rule
-
-Если одно и то же действие повторяется второй раз — рассматривать его как кандидата на автоматизацию.
-
-Но не автоматизировать ради автоматизации.
-
-Применять автоматизацию только там, где она реально уменьшает ручную работу или риск ошибок.
-
-## CRM architecture
-
-**Production CRM:**
-
-`public project/site`
-→ `Postgres CRM`
-→ `OLNOO Admin`
-
-Admin не является отдельным CRM storage.
-Admin — интерфейс к общей CRM.
-
-Новые источники лидов должны подключаться к этой же CRM:
-`Website`
-`SEO`
-`Social`
-`Ads`
-`Telegram`
-`other channels`
-
-Не создавать отдельную таблицу лидов для каждого канала, если общая модель `leads` уже подходит.
-
-## SEO architecture
-
-SEO всегда принадлежит Project.
-
-Один intent = одна страница.
-
-Не создавать страницы только ради вариаций одного и того же запроса.
-
-Create/Improve должны использовать:
-
-- полный cluster;
-- CTA;
-- internal links;
-- Quality Gate.
-
-Новый Project должен автоматически участвовать в общих SEO-проверках.
-
-## Social architecture
-
-Social принадлежит Project.
-
-Social не должен становиться отдельной системой пользователей/клиентов/проектов.
-
-Использовать существующие:
-
-- Client;
-- Project;
-- CRM;
-- Analytics.
-
-Если Social приводит lead:
-→ писать в общую CRM.
-
-## Ads architecture
-
-Ads принадлежит Project.
-
-Если реклама приводит lead:
-→ писать в общую CRM.
-
-Рекламные данные должны затем быть доступны Analytics.
-
-## Analytics architecture
-
-Analytics агрегирует существующие данные.
-
-Не создавать параллельные источники истины.
-
-**Целевая модель:**
-
-`Project`
-→ traffic
-→ leads
-→ conversions
-→ revenue
-
-с разбивкой по каналам.
+- One search intent = one page. Do not create thin pages for synonyms.
+- Public sites must have a sitemap.
+- Create/Improve use the full keyword cluster, and must include CTA + internal links + pass the Quality Gate.
 
 ## Change rule
 
-Если задача меняет:
-
-- domain;
-- repository;
-- production path;
-- systemd service;
-- port;
-- database/storage;
-- source of truth;
-- API relationship;
-- module relationship;
-- важный route;
-
-то документация обновляется в том же commit.
-
-Задача не считается полностью завершённой, пока документация не соответствует production.
-
-## Agent rule
-
-Перед работой Claude/Codex должен:
-
-1. прочитать `OLNOO_PROJECT_MAP.md`;
-2. прочитать этот файл;
-3. определить точный Project и repository;
-4. внести минимально необходимые изменения;
-5. проверить результат.
-
-Не проводить повторную широкую диагностику инфраструктуры, если production mapping уже зафиксирован.
-
-Не угадывать архитектуру по названиям repository.
-
-Не менять соседние модули без необходимости.
+If a task changes domain, repository, production path, systemd service, port, database/storage, source of truth, an API relationship, a module relationship, or an important route — update `OLNOO_PROJECT_MAP.md` in the same commit. The task is not done until the documentation matches production.
