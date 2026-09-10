@@ -15,7 +15,6 @@ type SocialChannel = (typeof CHANNELS)[number]
 type SocialPost = {
   id: string
   topic: string
-  category: string
   body: string
   telegramText: string
   instagramText: string
@@ -34,7 +33,6 @@ function fromApiPost(row: Record<string, unknown>): SocialPost {
   return {
     id: row.id as string,
     topic: row.topic as string,
-    category: (row.category as string) ?? '',
     body: (row.body as string) ?? '',
     telegramText: (row.telegram_text as string) ?? '',
     instagramText: (row.instagram_text as string) ?? '',
@@ -45,6 +43,17 @@ function fromApiPost(row: Record<string, unknown>): SocialPost {
     status: (row.status as SocialStatus) ?? 'idea',
     createdAt: row.created_at as string,
   }
+}
+
+/** A post has real per-channel overrides only if at least one channel field is non-empty and
+ * differs from body once trimmed — an empty or body-identical field is just unused/fallback,
+ * not an override. Drives whether "Different text per channel" opens automatically on edit. */
+function hasDistinctChannelText(post: SocialPost): boolean {
+  const body = post.body.trim()
+  return [post.telegramText, post.instagramText, post.threadsText, post.vkText].some((text) => {
+    const trimmed = text.trim()
+    return trimmed !== '' && trimmed !== body
+  })
 }
 
 function formatDate(value: string) {
@@ -69,7 +78,6 @@ function PostDetail({
 }) {
   const { t } = useI18n()
   const [topic, setTopic] = useState(post.topic)
-  const [category, setCategory] = useState(post.category)
   const [body, setBody] = useState(post.body)
   const [telegramText, setTelegramText] = useState(post.telegramText)
   const [instagramText, setInstagramText] = useState(post.instagramText)
@@ -78,12 +86,12 @@ function PostDetail({
   const [channels, setChannels] = useState<SocialChannel[]>(post.channels)
   const [publishDate, setPublishDate] = useState(post.publishDate)
   const [status, setStatus] = useState<SocialStatus>(post.status)
+  const [differentPerChannel, setDifferentPerChannel] = useState(() => hasDistinctChannelText(post))
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     setTopic(post.topic)
-    setCategory(post.category)
     setBody(post.body)
     setTelegramText(post.telegramText)
     setInstagramText(post.instagramText)
@@ -92,6 +100,7 @@ function PostDetail({
     setChannels(post.channels)
     setPublishDate(post.publishDate)
     setStatus(post.status)
+    setDifferentPerChannel(hasDistinctChannelText(post))
   }, [post])
 
   function toggleChannel(channel: SocialChannel) {
@@ -115,7 +124,16 @@ function PostDetail({
   }
 
   async function saveAll() {
-    await save({ topic, category, body, telegramText, instagramText, threadsText, vkText, channels, publishDate })
+    const patch: Record<string, unknown> = { topic, body, channels, publishDate }
+    // "Different text per channel" off just hides the per-channel fields — it never sends them,
+    // so any existing per-channel text already saved in the DB is left completely untouched.
+    if (differentPerChannel) {
+      patch.telegramText = telegramText
+      patch.instagramText = instagramText
+      patch.threadsText = threadsText
+      patch.vkText = vkText
+    }
+    await save(patch)
   }
 
   async function handleDelete() {
@@ -157,15 +175,6 @@ function PostDetail({
           </label>
 
           <label className="flex flex-col gap-1.5">
-            <span className="label-mono text-muted-foreground">Category</span>
-            <input
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
-            />
-          </label>
-
-          <label className="flex flex-col gap-1.5">
             <span className="label-mono text-muted-foreground">{t.socialView.content}</span>
             <textarea
               value={body}
@@ -190,42 +199,64 @@ function PostDetail({
             ))}
           </div>
 
-          <label className="flex flex-col gap-1.5">
-            <span className="label-mono text-muted-foreground">{t.socialChannel.telegram}</span>
-            <textarea
-              value={telegramText}
-              onChange={(e) => setTelegramText(e.target.value)}
-              rows={3}
-              className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+          <label className="flex items-center justify-between gap-4 border border-hairline bg-card px-4 py-3">
+            <span className="label-mono text-muted-foreground">{t.socialView.differentPerChannel}</span>
+            <input
+              type="checkbox"
+              checked={differentPerChannel}
+              onChange={(e) => setDifferentPerChannel(e.target.checked)}
+              className="size-4 accent-foreground"
             />
           </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="label-mono text-muted-foreground">{t.socialChannel.instagram}</span>
-            <textarea
-              value={instagramText}
-              onChange={(e) => setInstagramText(e.target.value)}
-              rows={3}
-              className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
-            />
-          </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="label-mono text-muted-foreground">{t.socialChannel.threads}</span>
-            <textarea
-              value={threadsText}
-              onChange={(e) => setThreadsText(e.target.value)}
-              rows={3}
-              className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
-            />
-          </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="label-mono text-muted-foreground">{t.socialChannel.vk}</span>
-            <textarea
-              value={vkText}
-              onChange={(e) => setVkText(e.target.value)}
-              rows={3}
-              className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
-            />
-          </label>
+
+          {differentPerChannel && (
+            <div className="flex flex-col gap-5">
+              {channels.includes('telegram') && (
+                <label className="flex flex-col gap-1.5">
+                  <span className="label-mono text-muted-foreground">{t.socialChannel.telegram}</span>
+                  <textarea
+                    value={telegramText}
+                    onChange={(e) => setTelegramText(e.target.value)}
+                    rows={3}
+                    className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+                  />
+                </label>
+              )}
+              {channels.includes('instagram') && (
+                <label className="flex flex-col gap-1.5">
+                  <span className="label-mono text-muted-foreground">{t.socialChannel.instagram}</span>
+                  <textarea
+                    value={instagramText}
+                    onChange={(e) => setInstagramText(e.target.value)}
+                    rows={3}
+                    className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+                  />
+                </label>
+              )}
+              {channels.includes('threads') && (
+                <label className="flex flex-col gap-1.5">
+                  <span className="label-mono text-muted-foreground">{t.socialChannel.threads}</span>
+                  <textarea
+                    value={threadsText}
+                    onChange={(e) => setThreadsText(e.target.value)}
+                    rows={3}
+                    className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+                  />
+                </label>
+              )}
+              {channels.includes('vk') && (
+                <label className="flex flex-col gap-1.5">
+                  <span className="label-mono text-muted-foreground">{t.socialChannel.vk}</span>
+                  <textarea
+                    value={vkText}
+                    onChange={(e) => setVkText(e.target.value)}
+                    rows={3}
+                    className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+                  />
+                </label>
+              )}
+            </div>
+          )}
 
           <label className="flex flex-col gap-1.5">
             <span className="label-mono text-muted-foreground">{t.socialView.publishDate}</span>
@@ -294,7 +325,6 @@ function CreateForm({
 }) {
   const { t } = useI18n()
   const [topic, setTopic] = useState('')
-  const [category, setCategory] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -305,7 +335,7 @@ function CreateForm({
       const res = await fetch('/api/social', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, topic, category }),
+        body: JSON.stringify({ project, topic }),
       })
       if (!res.ok) throw new Error('failed')
       onCreated(fromApiPost(await res.json()))
@@ -337,14 +367,6 @@ function CreateForm({
             <input
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
-            />
-          </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="label-mono text-muted-foreground">Category</span>
-            <input
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
               className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
             />
           </label>
@@ -391,10 +413,7 @@ export function SocialView({ project }: { project: string }) {
 
   const filtered = useMemo(() => {
     return posts.filter((p) => {
-      const matchesQuery =
-        !query ||
-        p.topic.toLowerCase().includes(query.toLowerCase()) ||
-        p.category.toLowerCase().includes(query.toLowerCase())
+      const matchesQuery = !query || p.topic.toLowerCase().includes(query.toLowerCase())
       const matchesStatus = status === 'All' || p.status === status
       return matchesQuery && matchesStatus
     })
@@ -471,7 +490,6 @@ export function SocialView({ project }: { project: string }) {
         <thead>
           <tr>
             <Th>Topic</Th>
-            <Th>Category</Th>
             <Th>{t.socialView.channels}</Th>
             <Th>{t.socialView.filterStatus}</Th>
             <Th>{t.socialView.publishDate}</Th>
@@ -485,7 +503,6 @@ export function SocialView({ project }: { project: string }) {
               className="cursor-pointer transition-colors hover:bg-muted/60"
             >
               <Td className="font-medium text-foreground">{p.topic}</Td>
-              <Td className="text-muted-foreground">{p.category || '—'}</Td>
               <Td>
                 <span className="label-mono text-muted-foreground">
                   {p.channels.map((c) => t.socialChannel[c]).join(', ') || '—'}
@@ -502,7 +519,6 @@ export function SocialView({ project }: { project: string }) {
               <Td className="text-muted-foreground">
                 <span className="label-mono">{t.socialView.noResults}</span>
               </Td>
-              <Td> </Td>
               <Td> </Td>
               <Td> </Td>
               <Td> </Td>
