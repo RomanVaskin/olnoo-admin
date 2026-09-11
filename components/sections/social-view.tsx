@@ -95,6 +95,8 @@ function PostDetail({
   const [deleting, setDeleting] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState('')
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const [uploadImageError, setUploadImageError] = useState('')
 
   useEffect(() => {
     setTopic(post.topic)
@@ -168,6 +170,40 @@ function PostDetail({
       setGenerateError(err instanceof Error ? err.message : t.socialView.generateVariantsError)
     } finally {
       setGenerating(false)
+    }
+  }
+
+  /** Uploads a JPEG to /api/social/upload-instagram-image (saved server-side under this app's own
+   * public/uploads/, never as base64 in Postgres) and immediately PATCHes the resulting public URL
+   * into instagram_image_url — same auto-save-on-action pattern as the Publish buttons below,
+   * rather than waiting for the general Save button, so the file is never left uploaded-but-
+   * unlinked if the user navigates away. Client-side type/size checks are just fast feedback; the
+   * server enforces them independently. */
+  async function handleImageUpload(file: File) {
+    setUploadImageError('')
+    if (file.type !== 'image/jpeg') {
+      setUploadImageError(t.socialView.uploadImageError)
+      return
+    }
+    setUploadingImage(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(`/api/social/upload-instagram-image?project=${encodeURIComponent(project)}`, {
+        method: 'POST',
+        body: form,
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.url) {
+        setUploadImageError((data && typeof data.error === 'string' && data.error) || t.socialView.uploadImageError)
+        return
+      }
+      setInstagramImageUrl(data.url)
+      await save({ instagramImageUrl: data.url })
+    } catch {
+      setUploadImageError(t.socialView.uploadImageError)
+    } finally {
+      setUploadingImage(false)
     }
   }
 
@@ -255,15 +291,36 @@ function PostDetail({
           </div>
 
           {channels.includes('instagram') && (
-            <label className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <span className="label-mono text-muted-foreground">{t.socialView.instagramImageUrl}</span>
-              <input
-                value={instagramImageUrl}
-                onChange={(e) => setInstagramImageUrl(e.target.value)}
-                placeholder="https://…"
-                className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
-              />
-            </label>
+              {instagramImageUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={instagramImageUrl}
+                  alt=""
+                  className="h-32 w-32 border border-hairline object-cover"
+                />
+              )}
+              <label className="label-mono inline-flex w-fit cursor-pointer items-center gap-2 border border-hairline px-3 py-2 text-foreground transition-colors hover:bg-muted/60">
+                {uploadingImage
+                  ? t.socialView.uploadingImage
+                  : instagramImageUrl
+                    ? t.socialView.replaceImage
+                    : t.socialView.uploadImage}
+                <input
+                  type="file"
+                  accept="image/jpeg"
+                  disabled={uploadingImage}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    e.target.value = ''
+                    if (file) handleImageUpload(file)
+                  }}
+                  className="hidden"
+                />
+              </label>
+              {uploadImageError && <p className="text-sm text-destructive">{uploadImageError}</p>}
+            </div>
           )}
 
           {body.trim() !== '' && channels.length > 0 && (

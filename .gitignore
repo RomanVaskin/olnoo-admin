@@ -23,6 +23,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# uploaded media (Social → Instagram image upload) — never committed, written at runtime
+/uploads/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
