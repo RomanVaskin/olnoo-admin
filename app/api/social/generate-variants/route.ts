@@ -18,10 +18,9 @@ export async function POST(req: Request) {
   const topic = typeof payload.topic === 'string' ? payload.topic : ''
   const body = typeof payload.body === 'string' ? payload.body : ''
   const channels = Array.isArray(payload.channels) ? payload.channels : []
-  const locale = typeof payload.locale === 'string' ? payload.locale : 'en'
 
   try {
-    const variants = await generateChannelVariants(pool, projectId, { topic, body, channels, locale })
+    const variants = await generateChannelVariants(pool, projectId, { topic, body, channels })
     return NextResponse.json({ variants })
   } catch (err) {
     if (err instanceof SocialAiError || err instanceof AiRouterError) {

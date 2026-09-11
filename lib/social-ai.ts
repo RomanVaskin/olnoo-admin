@@ -26,7 +26,7 @@ Hard rules:
 2. Never invent clients, companies, or names not present in the source Content or project context.
 3. Never invent numbers, statistics, or metrics not present in the source Content or project context.
 4. Never invent results or outcomes not present in the source Content or project context.
-5. Write in the requested locale.
+5. Write every variant in the same language as CONTENT below (its detected language is given as CONTENT LANGUAGE). Never translate into a different language. TOPIC, PROJECT CONTEXT, or any other signal never override this — only an explicit instruction written inside CONTENT itself could, and none is given here.
 6. Return ONLY strict JSON — no markdown, no code fences, no commentary before or after. The raw response is parsed as JSON directly.
 7. The JSON object must contain exactly the requested channel keys — no more, no fewer. Never include a key for a channel that was not requested.`
 
@@ -34,7 +34,7 @@ function buildUserPrompt(input: {
   topic: string
   body: string
   channels: SocialChannel[]
-  locale: string
+  contentLanguage: string
   projectContext: string
 }): string {
   return `TOPIC: ${input.topic || '(none given)'}
@@ -42,13 +42,21 @@ function buildUserPrompt(input: {
 CONTENT:
 ${input.body}
 
+CONTENT LANGUAGE: ${input.contentLanguage}
+
 PROJECT CONTEXT: ${input.projectContext || '(none given)'}
 
-LOCALE: ${input.locale}
-
-Generate one adapted variant for each of these channels only: ${input.channels.join(', ')}.
+Generate one adapted variant for each of these channels only: ${input.channels.join(', ')}. Write every variant in CONTENT LANGUAGE — do not translate.
 
 Return JSON with exactly these keys: ${JSON.stringify(input.channels)}.`
+}
+
+/** Detects Russian vs English from CONTENT's own characters — never from UI/interface locale.
+ * A single Cyrillic letter is a reliable signal the text is Russian; anything else (Latin,
+ * digits, punctuation, emoji) defaults to English. TOPIC is deliberately not inspected: the task
+ * is explicit that Content is the primary and only signal for output language. */
+function detectContentLanguage(body: string): 'ru' | 'en' {
+  return /[а-яё]/i.test(body) ? 'ru' : 'en'
 }
 
 function stripToJson(text: string): string {
@@ -103,14 +111,15 @@ export type GenerateVariantsInput = {
   topic: string
   body: string
   channels: string[]
-  locale: string
 }
 
 /**
  * Calls the existing OLNOO AI Router (lib/ai-router.ts, same client used by SEO clustering) to
- * adapt `body` into per-channel text for the requested channels only. Read-only against
- * Postgres (just looks up the project's name/domain for prompt context) — never writes
- * anything; saving the result is entirely the caller's/UI's decision.
+ * adapt `body` into per-channel text for the requested channels only. The output language is
+ * always detected from `body` itself (detectContentLanguage) — the caller's UI/interface locale
+ * is never accepted here and never influences generation, only the app's own interface strings.
+ * Read-only against Postgres (just looks up the project's name/domain for prompt context) —
+ * never writes anything; saving the result is entirely the caller's/UI's decision.
  */
 export async function generateChannelVariants(
   pool: Pool,
@@ -135,7 +144,7 @@ export async function generateChannelVariants(
     topic: input.topic,
     body: input.body,
     channels,
-    locale: input.locale,
+    contentLanguage: detectContentLanguage(input.body),
     projectContext,
   })
 

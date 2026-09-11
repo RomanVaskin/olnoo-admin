@@ -76,7 +76,7 @@ function PostDetail({
   onDeleted: (id: string) => void
   project: string
 }) {
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
   const [topic, setTopic] = useState(post.topic)
   const [body, setBody] = useState(post.body)
   const [telegramText, setTelegramText] = useState(post.telegramText)
@@ -135,10 +135,11 @@ function PostDetail({
   }
 
   /** Asks the OLNOO AI Router (via /api/social/generate-variants) to adapt the current, possibly
-   * unsaved, Content into per-channel text for the currently selected channels. Only fills the
-   * fields the response actually returned and turns the toggle on — nothing is persisted until
-   * the user clicks Save. A failure never touches existing field values; the button stays usable
-   * to retry. */
+   * unsaved, Content into per-channel text for the currently selected channels. The output
+   * language is detected server-side from Content itself, never from the UI's interface locale —
+   * this deliberately does not send `locale` at all. Only fills the fields the response actually
+   * returned and turns the toggle on — nothing is persisted until the user clicks Save. A failure
+   * never touches existing field values; the button stays usable to retry. */
   async function handleGenerateVariants() {
     setGenerating(true)
     setGenerateError('')
@@ -146,7 +147,7 @@ function PostDetail({
       const res = await fetch('/api/social/generate-variants', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, topic, body, channels, locale }),
+        body: JSON.stringify({ project, topic, body, channels }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
