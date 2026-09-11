@@ -89,6 +89,7 @@ function PublicationRow({
   const [accountId, setAccountId] = useState(publication.socialAccountId ?? '')
   const [externalUrl, setExternalUrl] = useState(publication.externalUrl)
   const [saving, setSaving] = useState(false)
+  const [actionError, setActionError] = useState('')
 
   useEffect(() => {
     setAccountId(publication.socialAccountId ?? '')
@@ -104,6 +105,25 @@ function PublicationRow({
         body: JSON.stringify(patch),
       })
       if (res.ok) onUpdated(fromApiPublication(await res.json()))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function publishToTelegram() {
+    setSaving(true)
+    setActionError('')
+    try {
+      const res = await fetch(
+        `/api/social-publications/${publication.id}/publish-telegram?project=${encodeURIComponent(project)}`,
+        { method: 'POST' },
+      )
+      const data = await res.json().catch(() => null)
+      if (res.ok && data) {
+        onUpdated(fromApiPublication(data))
+      } else {
+        setActionError((data && data.error) || 'Could not publish to Telegram.')
+      }
     } finally {
       setSaving(false)
     }
@@ -155,9 +175,18 @@ function PublicationRow({
         </span>
       )}
       {publication.error && <span className="text-sm text-destructive">{publication.error}</span>}
+      {actionError && <span className="text-sm text-destructive">{actionError}</span>}
 
       <div className="flex items-center gap-2 pt-1">
-        {publication.status !== 'published' ? (
+        {publication.status !== 'published' && publication.platform === 'telegram' ? (
+          <button
+            onClick={publishToTelegram}
+            disabled={saving}
+            className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+          >
+            {t.socialPublications.publishToTelegram}
+          </button>
+        ) : publication.status !== 'published' ? (
           <button
             onClick={() => save({ status: 'published', externalUrl })}
             disabled={saving}

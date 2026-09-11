@@ -380,6 +380,7 @@ export const ru: Messages = {
     publishedAt: 'Опубликовано',
     markPublished: 'Отметить как опубликовано',
     backToReady: 'Вернуть в Ready',
+    publishToTelegram: 'Опубликовать в Telegram',
   },
   settingsView: {
     title: 'Настройки',
