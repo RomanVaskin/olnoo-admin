@@ -65,6 +65,10 @@ Source of truth: Postgres (`olnoo-admin`), table `social_posts`, `project_id →
 
 Confirmed API routes (`olnoo-admin`): `GET/POST /api/social` (list filtered by `?project=<slug>`, create), `GET/PATCH/DELETE /api/social/[id]` (all project-scoped — a post id from another project cannot be read, edited, or deleted by supplying a different project slug or vice versa).
 
+Post fields (create/edit UI): Topic, Content (shared body), Channels (`telegram`/`instagram`/`threads`/`vk`), Publish date, Status, and an optional per-channel text override per selected channel. `category` is a legacy column still present in the table — no longer shown in create/edit, the Posts list, or search; existing rows keep whatever value they already had, and new rows never get one written.
+
+Per-channel text: every selected channel uses the shared Content by default. The "Different text per channel" toggle (off by default; auto-enabled when opening a post that already has a real override) reveals a text field for each *currently selected* channel when on — an empty field there falls back to Content. Turning the toggle off and saving clears the per-channel overrides for the channels selected at that moment; Content itself is never touched, and a channel's override is left alone while that channel isn't currently selected.
+
 Migration: `db/migrations/0005_social_posts.sql`.
 
 Data layer: `lib/social.ts`, reuses `resolveProjectId` from `lib/crm.ts` — no separate project-resolution mechanism.
@@ -83,15 +87,15 @@ No real OLNOO accounts are seeded by migration — they are added manually via t
 
 ### Publication tracking
 
-Per-channel publication status for each post, table `social_publications` (`project_id → projects.id`, `social_post_id → social_posts.id` cascade-deleted with the post, `social_account_id → social_accounts.id` set null if the account is deleted). `status` one of `draft`/`ready`/`published`/`failed`. One row is auto-created (status `draft`) the first time a post's Publications block is opened for each channel currently selected on that post — channels later deselected keep their existing row rather than being deleted.
+Per-channel publication status for each post, table `social_publications` (`project_id → projects.id`, `social_post_id → social_posts.id` cascade-deleted with the post, `social_account_id → social_accounts.id` set null if the account is deleted, plus `external_url`, `external_post_id`, `published_at`, `error`). `status` one of `draft`/`ready`/`published`/`failed`. One row is auto-created (status `draft`) for each channel as it's selected on the post — always as a side effect of the post's `channels` being written (`updateSocialPost`/`createSocialPost` in `lib/social.ts`), never from reading the Publications list. Channels later deselected keep their existing row rather than being deleted.
 
-API routes (`olnoo-admin`): `GET /api/social-publications?post=<id>&project=<slug>` (ensures rows exist for the post's current channels, then lists all of them), `PATCH /api/social-publications/[id]` (project-scoped; assigning a `social_account_id` is rejected with 400 if that account doesn't belong to the same project). Setting `status` to `published` sets `published_at` to now (if not already set); setting it to anything else clears `published_at`.
+API routes (`olnoo-admin`): `GET /api/social-publications?post=<id>&project=<slug>` (pure read — lists whatever publication rows already exist for the post; creates nothing), `PATCH /api/social-publications/[id]` (project-scoped; assigning a `social_account_id` is rejected with 400 if that account doesn't belong to the same project). Setting `status` to `published` sets `published_at` to now (if not already set); setting it to anything else clears `published_at`.
 
 MVP UI only: manual "Mark as published" (optionally with an external URL) and "Back to ready" inside the post's Publications block. No automated posting to any platform exists yet.
 
 `social_publications` is the only source of truth for whether a post is actually published — `social_posts.status` cannot manually claim `published`. All the reconciliation and creation logic lives in `lib/social.ts` (`syncPostStatusFromPublications`, `ensurePublicationsForChannels`, `isFullyPublished`) so `lib/social-publications.ts` can import it without a circular dependency; `status` becomes `published` only once every currently selected channel has a `published` publication, and is demoted back to `ready` the moment that stops holding. Read paths are strictly read-only — `listPublicationsForPost` never writes anything, not even to create a missing publication row. Reconciliation runs only after an operation that actually changes state: a publication's status changes (`updateSocialPublication` in `lib/social-publications.ts`), or the post's own selected channels change (`updateSocialPost`/`createSocialPost` in `lib/social.ts`, which is also where missing publication rows get created — always as a side effect of channels being set, never of a read). `updateSocialPost` also rejects `status: 'published'` outright (400) if the resulting channel set isn't actually fully published yet, and `createSocialPost` rejects creating a post already published — the API enforces this, not just the UI's disabled dropdown option. The Post UI computes the same fully/partially-published/ready/draft summary live from `social_publications` (`components/sections/social-publications.tsx`, `summarizePublications`) — nothing new is stored for this, it's derived on every read.
 
-Migration: `db/migrations/0007_social_accounts_publications.sql` (both tables).
+Migration: `db/migrations/0007_social_accounts_publications.sql` (both tables). Applied to production.
 
 ## AI Router
 
