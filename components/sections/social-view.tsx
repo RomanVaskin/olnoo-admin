@@ -76,7 +76,7 @@ function PostDetail({
   onDeleted: (id: string) => void
   project: string
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [topic, setTopic] = useState(post.topic)
   const [body, setBody] = useState(post.body)
   const [telegramText, setTelegramText] = useState(post.telegramText)
@@ -90,6 +90,8 @@ function PostDetail({
   const [publicationSummary, setPublicationSummary] = useState<PublicationSummary>('draft')
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [generateError, setGenerateError] = useState('')
 
   useEffect(() => {
     setTopic(post.topic)
@@ -130,6 +132,38 @@ function PostDetail({
   async function refreshPost() {
     const res = await fetch(`/api/social/${post.id}?project=${encodeURIComponent(project)}`)
     if (res.ok) onSaved(fromApiPost(await res.json()))
+  }
+
+  /** Asks the OLNOO AI Router (via /api/social/generate-variants) to adapt the current, possibly
+   * unsaved, Content into per-channel text for the currently selected channels. Only fills the
+   * fields the response actually returned and turns the toggle on — nothing is persisted until
+   * the user clicks Save. A failure never touches existing field values; the button stays usable
+   * to retry. */
+  async function handleGenerateVariants() {
+    setGenerating(true)
+    setGenerateError('')
+    try {
+      const res = await fetch('/api/social/generate-variants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, topic, body, channels, locale }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        const message = data && typeof data.error === 'string' ? data.error : t.socialView.generateVariantsError
+        throw new Error(message)
+      }
+      const variants = (data?.variants ?? {}) as Partial<Record<SocialChannel, string>>
+      if (typeof variants.telegram === 'string') setTelegramText(variants.telegram)
+      if (typeof variants.instagram === 'string') setInstagramText(variants.instagram)
+      if (typeof variants.threads === 'string') setThreadsText(variants.threads)
+      if (typeof variants.vk === 'string') setVkText(variants.vk)
+      setDifferentPerChannel(true)
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : t.socialView.generateVariantsError)
+    } finally {
+      setGenerating(false)
+    }
   }
 
   async function saveAll() {
@@ -214,6 +248,19 @@ function PostDetail({
               </label>
             ))}
           </div>
+
+          {body.trim() !== '' && channels.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={handleGenerateVariants}
+                disabled={generating}
+                className="label-mono border border-hairline px-4 py-2.5 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+              >
+                {generating ? t.socialView.generatingVariants : t.socialView.generateVariants}
+              </button>
+              {generateError && <p className="text-sm text-destructive">{generateError}</p>}
+            </div>
+          )}
 
           <label className="flex items-center justify-between gap-4 border border-hairline bg-card px-4 py-3">
             <span className="label-mono text-muted-foreground">{t.socialView.differentPerChannel}</span>
