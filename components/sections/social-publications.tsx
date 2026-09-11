@@ -148,6 +148,25 @@ function PublicationRow({
     }
   }
 
+  async function publishToInstagram() {
+    setSaving(true)
+    setActionError('')
+    try {
+      const res = await fetch(
+        `/api/social-publications/${publication.id}/publish-instagram?project=${encodeURIComponent(project)}`,
+        { method: 'POST' },
+      )
+      const data = await res.json().catch(() => null)
+      if (res.ok && data) {
+        onUpdated(fromApiPublication(data))
+      } else {
+        setActionError((data && data.error) || 'Could not publish to Instagram.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const channelAccounts = accounts.filter((a) => a.platform === publication.platform)
 
   return (
@@ -212,6 +231,14 @@ function PublicationRow({
             className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
           >
             {t.socialPublications.publishToVk}
+          </button>
+        ) : publication.status !== 'published' && publication.platform === 'instagram' ? (
+          <button
+            onClick={publishToInstagram}
+            disabled={saving}
+            className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+          >
+            {t.socialPublications.publishToInstagram}
           </button>
         ) : publication.status !== 'published' ? (
           <button

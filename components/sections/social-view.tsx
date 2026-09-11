@@ -18,6 +18,7 @@ type SocialPost = {
   body: string
   telegramText: string
   instagramText: string
+  instagramImageUrl: string
   threadsText: string
   vkText: string
   channels: SocialChannel[]
@@ -36,6 +37,7 @@ function fromApiPost(row: Record<string, unknown>): SocialPost {
     body: (row.body as string) ?? '',
     telegramText: (row.telegram_text as string) ?? '',
     instagramText: (row.instagram_text as string) ?? '',
+    instagramImageUrl: (row.instagram_image_url as string) ?? '',
     threadsText: (row.threads_text as string) ?? '',
     vkText: (row.vk_text as string) ?? '',
     channels,
@@ -81,6 +83,7 @@ function PostDetail({
   const [body, setBody] = useState(post.body)
   const [telegramText, setTelegramText] = useState(post.telegramText)
   const [instagramText, setInstagramText] = useState(post.instagramText)
+  const [instagramImageUrl, setInstagramImageUrl] = useState(post.instagramImageUrl)
   const [threadsText, setThreadsText] = useState(post.threadsText)
   const [vkText, setVkText] = useState(post.vkText)
   const [channels, setChannels] = useState<SocialChannel[]>(post.channels)
@@ -98,6 +101,7 @@ function PostDetail({
     setBody(post.body)
     setTelegramText(post.telegramText)
     setInstagramText(post.instagramText)
+    setInstagramImageUrl(post.instagramImageUrl)
     setThreadsText(post.threadsText)
     setVkText(post.vkText)
     setChannels(post.channels)
@@ -168,7 +172,7 @@ function PostDetail({
   }
 
   async function saveAll() {
-    const patch: Record<string, unknown> = { topic, body, channels, publishDate }
+    const patch: Record<string, unknown> = { topic, body, channels, publishDate, instagramImageUrl }
     if (differentPerChannel) {
       patch.telegramText = telegramText
       patch.instagramText = instagramText
@@ -249,6 +253,18 @@ function PostDetail({
               </label>
             ))}
           </div>
+
+          {channels.includes('instagram') && (
+            <label className="flex flex-col gap-1.5">
+              <span className="label-mono text-muted-foreground">{t.socialView.instagramImageUrl}</span>
+              <input
+                value={instagramImageUrl}
+                onChange={(e) => setInstagramImageUrl(e.target.value)}
+                placeholder="https://…"
+                className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+              />
+            </label>
+          )}
 
           {body.trim() !== '' && channels.length > 0 && (
             <div className="flex flex-col gap-2">

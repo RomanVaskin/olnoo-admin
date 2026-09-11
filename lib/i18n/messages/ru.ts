@@ -343,6 +343,7 @@ export const ru: Messages = {
     content: 'Контент',
     channels: 'Каналы',
     differentPerChannel: 'Разный текст для каналов',
+    instagramImageUrl: 'URL изображения для Instagram',
     generateVariants: 'Сгенерировать версии',
     generatingVariants: 'Генерация…',
     generateVariantsError: 'Не удалось сгенерировать версии. Попробуйте ещё раз.',
@@ -382,6 +383,7 @@ export const ru: Messages = {
     backToReady: 'Вернуть в Ready',
     publishToTelegram: 'Опубликовать в Telegram',
     publishToVk: 'Опубликовать в VK',
+    publishToInstagram: 'Опубликовать в Instagram',
   },
   settingsView: {
     title: 'Настройки',

@@ -420,7 +420,7 @@ Page/case/service → AI content → relevant channels → UTM → traffic → l
 
 Avoid manually writing repetitive content for every client if it can become a reusable content engine.
 
-Next integration plan: generate variants through the OLNOO AI Router → human review → Ready → automated posting through each platform's own API. Telegram and VK are connected (Bot API `sendMessage`, VK API `wall.post` — see `OLNOO_PROJECT_MAP.md`); Instagram/Threads have no platform API yet and stay manual "Mark as published". Roll platforms out one at a time, in this order: Telegram → VK → Instagram → Threads.
+Next integration plan: generate variants through the OLNOO AI Router → human review → Ready → automated posting through each platform's own API. Telegram, VK, and Instagram are connected (Bot API `sendMessage`, VK API `wall.post`, Instagram API with Instagram Login's media/media_publish — see `OLNOO_PROJECT_MAP.md`); Threads has no platform API yet and stays manual "Mark as published". Roll platforms out one at a time, in this order: Telegram → VK → Instagram → Threads.
 
 UX principle: Social must lead the user through one simple flow — Create content → adapt if needed → review → ready → publish → result. The user should never need to understand the underlying tables or API to use it.
 

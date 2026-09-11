@@ -341,6 +341,7 @@ export const en = {
     content: 'Content',
     channels: 'Channels',
     differentPerChannel: 'Different text per channel',
+    instagramImageUrl: 'Instagram image URL',
     generateVariants: 'Generate variants',
     generatingVariants: 'Generating…',
     generateVariantsError: 'Could not generate variants. Please try again.',
@@ -380,6 +381,7 @@ export const en = {
     backToReady: 'Back to ready',
     publishToTelegram: 'Publish to Telegram',
     publishToVk: 'Publish to VK',
+    publishToInstagram: 'Publish to Instagram',
   },
   settingsView: {
     title: 'Settings',

@@ -108,6 +108,7 @@ export type SocialPostFields = {
   body?: string
   telegramText?: string
   instagramText?: string
+  instagramImageUrl?: string
   threadsText?: string
   vkText?: string
   channels?: string[]
@@ -172,9 +173,9 @@ export async function createSocialPost(projectSlug: string | null, input: Social
   const { rows } = await pool.query(
     `
     INSERT INTO social_posts (
-      id, project_id, topic, category, body, telegram_text, instagram_text, threads_text, vk_text,
-      channels, publish_date, status
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      id, project_id, topic, category, body, telegram_text, instagram_text, instagram_image_url,
+      threads_text, vk_text, channels, publish_date, status
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     RETURNING *
     `,
     [
@@ -185,6 +186,7 @@ export async function createSocialPost(projectSlug: string | null, input: Social
       input.body ?? '',
       input.telegramText ?? '',
       input.instagramText ?? '',
+      input.instagramImageUrl ?? '',
       input.threadsText ?? '',
       input.vkText ?? '',
       channels.join(','),
@@ -243,6 +245,7 @@ export async function updateSocialPost(
   if (typeof input.body === 'string') set('body', input.body)
   if (typeof input.telegramText === 'string') set('telegram_text', input.telegramText)
   if (typeof input.instagramText === 'string') set('instagram_text', input.instagramText)
+  if (typeof input.instagramImageUrl === 'string') set('instagram_image_url', input.instagramImageUrl.trim())
   if (typeof input.threadsText === 'string') set('threads_text', input.threadsText)
   if (typeof input.vkText === 'string') set('vk_text', input.vkText)
   if (nextChannels) set('channels', nextChannels.join(','))

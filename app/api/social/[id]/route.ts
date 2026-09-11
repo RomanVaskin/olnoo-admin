@@ -24,6 +24,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     body: typeof body.body === 'string' ? body.body : undefined,
     telegramText: typeof body.telegramText === 'string' ? body.telegramText : undefined,
     instagramText: typeof body.instagramText === 'string' ? body.instagramText : undefined,
+    instagramImageUrl: typeof body.instagramImageUrl === 'string' ? body.instagramImageUrl : undefined,
     threadsText: typeof body.threadsText === 'string' ? body.threadsText : undefined,
     vkText: typeof body.vkText === 'string' ? body.vkText : undefined,
     channels: Array.isArray(body.channels) ? body.channels : undefined,
