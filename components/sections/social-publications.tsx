@@ -129,6 +129,25 @@ function PublicationRow({
     }
   }
 
+  async function publishToVk() {
+    setSaving(true)
+    setActionError('')
+    try {
+      const res = await fetch(
+        `/api/social-publications/${publication.id}/publish-vk?project=${encodeURIComponent(project)}`,
+        { method: 'POST' },
+      )
+      const data = await res.json().catch(() => null)
+      if (res.ok && data) {
+        onUpdated(fromApiPublication(data))
+      } else {
+        setActionError((data && data.error) || 'Could not publish to VK.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const channelAccounts = accounts.filter((a) => a.platform === publication.platform)
 
   return (
@@ -185,6 +204,14 @@ function PublicationRow({
             className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
           >
             {t.socialPublications.publishToTelegram}
+          </button>
+        ) : publication.status !== 'published' && publication.platform === 'vk' ? (
+          <button
+            onClick={publishToVk}
+            disabled={saving}
+            className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+          >
+            {t.socialPublications.publishToVk}
           </button>
         ) : publication.status !== 'published' ? (
           <button

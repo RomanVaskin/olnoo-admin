@@ -381,6 +381,7 @@ export const ru: Messages = {
     markPublished: 'Отметить как опубликовано',
     backToReady: 'Вернуть в Ready',
     publishToTelegram: 'Опубликовать в Telegram',
+    publishToVk: 'Опубликовать в VK',
   },
   settingsView: {
     title: 'Настройки',

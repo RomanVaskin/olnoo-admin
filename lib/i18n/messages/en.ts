@@ -379,6 +379,7 @@ export const en = {
     markPublished: 'Mark as published',
     backToReady: 'Back to ready',
     publishToTelegram: 'Publish to Telegram',
+    publishToVk: 'Publish to VK',
   },
   settingsView: {
     title: 'Settings',
