@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { OlnooLogo } from '@/components/olnoo-logo'
 import { LocaleSwitcher } from '@/components/locale-switcher'
@@ -29,6 +29,13 @@ import {
 } from '@/components/sections/client-view'
 
 type Mode = 'admin' | 'client'
+
+// Screens that cannot function without a real project slug (their API calls 400/return nothing
+// for "all") — as opposed to admin-overview/crm-overview, which have their own "All projects"
+// aggregate view. If one of these loads with no ?project=, we fall back to whatever project the
+// admin last had selected, remembered in localStorage — never a hardcoded slug.
+const PROJECT_REQUIRED_SCREENS = new Set(['social-posts', 'social-accounts'])
+const LAST_PROJECT_STORAGE_KEY = 'olnoo-admin-last-project'
 
 type NavItem = {
   id: string
@@ -113,11 +120,16 @@ export function AppShell() {
 
   const mode: Mode = searchParams.get('mode') === 'client' ? 'client' : 'admin'
   const active = searchParams.get('screen') || (mode === 'admin' ? 'admin-overview' : 'client-overview')
-  const project = searchParams.get('project') || 'all'
+  const rawProject = searchParams.get('project')
+  const project = rawProject || 'all'
 
   const updateParams = useCallback(
     (patch: Record<string, string | undefined>) => {
-      const params = new URLSearchParams(searchParams.toString())
+      // Read the live address bar rather than the searchParams snapshot above — this is the same
+      // data in the common case, but reading it fresh at the moment of every navigation guarantees
+      // an existing param (screen, project, ...) can never be dropped by a stale snapshot.
+      const liveSearch = typeof window !== 'undefined' ? window.location.search : `?${searchParams.toString()}`
+      const params = new URLSearchParams(liveSearch)
       for (const [key, value] of Object.entries(patch)) {
         if (value === undefined) {
           params.delete(key)
@@ -130,6 +142,27 @@ export function AppShell() {
     },
     [pathname, router, searchParams],
   )
+
+  // Remembers the last real project selected, and recovers it for a project-required screen that
+  // somehow ends up with no ?project= (e.g. a stale link, a bookmark) — never a hardcoded slug.
+  useEffect(() => {
+    if (rawProject) {
+      try {
+        window.localStorage.setItem(LAST_PROJECT_STORAGE_KEY, rawProject)
+      } catch {
+        // Private mode / disabled storage — this fallback simply won't be available, never fatal.
+      }
+      return
+    }
+    if (!PROJECT_REQUIRED_SCREENS.has(active)) return
+    let remembered: string | null = null
+    try {
+      remembered = window.localStorage.getItem(LAST_PROJECT_STORAGE_KEY)
+    } catch {
+      remembered = null
+    }
+    if (remembered) updateParams({ project: remembered })
+  }, [active, rawProject, updateParams])
 
   function switchMode(next: Mode) {
     updateParams({
@@ -284,8 +317,12 @@ export function AppShell() {
             <CrmOverview project={project} onProjectChange={setProject} />
           )}
           {active === 'crm-leads' && <LeadsView project={project} />}
-          {active === 'social-posts' && <SocialView project={project} />}
-          {active === 'social-accounts' && <SocialAccountsView project={project} />}
+          {/* project === 'all' here is always transient for these two: the recovery effect above
+              redirects to the remembered project on the very next tick, if one exists. Not
+              rendering yet avoids firing a project=all fetch these project-required screens
+              can't handle. */}
+          {active === 'social-posts' && project !== 'all' && <SocialView project={project} />}
+          {active === 'social-accounts' && project !== 'all' && <SocialAccountsView project={project} />}
           {active === 'settings' && <SettingsView />}
 
           {/* Client */}
