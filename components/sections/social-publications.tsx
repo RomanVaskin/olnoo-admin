@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { StatusPill } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
+import { shouldShowThreadsPublishButton } from '@/lib/social-publications-ui'
 
 const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
 type SocialChannel = (typeof CHANNELS)[number]
@@ -167,6 +168,25 @@ function PublicationRow({
     }
   }
 
+  async function publishToThreads() {
+    setSaving(true)
+    setActionError('')
+    try {
+      const res = await fetch(
+        `/api/social-publications/${publication.id}/publish-threads?project=${encodeURIComponent(project)}`,
+        { method: 'POST' },
+      )
+      const data = await res.json().catch(() => null)
+      if (res.ok && data) {
+        onUpdated(fromApiPublication(data))
+      } else {
+        setActionError((data && data.error) || 'Could not publish to Threads.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const channelAccounts = accounts.filter((a) => a.platform === publication.platform)
 
   return (
@@ -239,6 +259,14 @@ function PublicationRow({
             className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
           >
             {t.socialPublications.publishToInstagram}
+          </button>
+        ) : shouldShowThreadsPublishButton(publication.platform, publication.status) ? (
+          <button
+            onClick={publishToThreads}
+            disabled={saving}
+            className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+          >
+            {t.socialPublications.publishToThreads}
           </button>
         ) : publication.status !== 'published' ? (
           <button

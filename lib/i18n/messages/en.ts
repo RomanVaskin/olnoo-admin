@@ -386,6 +386,7 @@ export const en = {
     publishToTelegram: 'Publish to Telegram',
     publishToVk: 'Publish to VK',
     publishToInstagram: 'Publish to Instagram',
+    publishToThreads: 'Publish to Threads',
   },
   settingsView: {
     title: 'Settings',

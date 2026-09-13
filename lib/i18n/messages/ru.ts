@@ -388,6 +388,7 @@ export const ru: Messages = {
     publishToTelegram: 'Опубликовать в Telegram',
     publishToVk: 'Опубликовать в VK',
     publishToInstagram: 'Опубликовать в Instagram',
+    publishToThreads: 'Опубликовать в Threads',
   },
   settingsView: {
     title: 'Настройки',
