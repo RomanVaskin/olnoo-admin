@@ -3,27 +3,36 @@ import assert from 'node:assert/strict'
 import { Jimp } from 'jimp'
 import {
   isInstagramFeedRatioAllowed,
-  computeInstagramFeedCrop,
   computeInstagramFeedResize,
+  computeInstagramFeedContain,
   normalizeInstagramImageBuffer,
   INSTAGRAM_FEED_MIN_RATIO,
   INSTAGRAM_FEED_MAX_RATIO,
   INSTAGRAM_FEED_MAX_WIDTH,
 } from './social-instagram-image-normalize.ts'
 
+// JPEG re-encoding is lossy: even a pixel drawn from a solid fill color can quantize a couple of
+// levels off after compression/decompression. These checks care whether a pixel is (close to) the
+// original fill vs. white padding, not bit-exactness, so allow a small tolerance.
+function assertCloseToColor(px: Buffer | Uint8Array, [r, g, b]: [number, number, number]) {
+  assert.ok(Math.abs(px[0] - r) <= 8, `red channel ${px[0]} not close to ${r}`)
+  assert.ok(Math.abs(px[1] - g) <= 8, `green channel ${px[1]} not close to ${g}`)
+  assert.ok(Math.abs(px[2] - b) <= 8, `blue channel ${px[2]} not close to ${b}`)
+}
+
 test('a 1:1 square is already allowed', () => {
   assert.equal(isInstagramFeedRatioAllowed(1000, 1000), true)
-  assert.equal(computeInstagramFeedCrop(1000, 1000), null)
+  assert.equal(computeInstagramFeedContain(1000, 1000), null)
 })
 
 test('a landscape within 1.91:1 is already allowed', () => {
   assert.equal(isInstagramFeedRatioAllowed(1910, 1000), true)
-  assert.equal(computeInstagramFeedCrop(1910, 1000), null)
+  assert.equal(computeInstagramFeedContain(1910, 1000), null)
 })
 
 test('a portrait within 4:5 is already allowed', () => {
   assert.equal(isInstagramFeedRatioAllowed(800, 1000), true)
-  assert.equal(computeInstagramFeedCrop(800, 1000), null)
+  assert.equal(computeInstagramFeedContain(800, 1000), null)
 })
 
 test('exactly the 1.91:1 boundary is allowed (inclusive)', () => {
@@ -32,37 +41,6 @@ test('exactly the 1.91:1 boundary is allowed (inclusive)', () => {
 
 test('exactly the 4:5 boundary is allowed (inclusive)', () => {
   assert.equal(isInstagramFeedRatioAllowed(4000, 5000), true)
-})
-
-test('a too-tall portrait is cropped to exactly 4:5, centered on height', () => {
-  // 1000x2000 -> ratio 0.5, below the 0.8 minimum
-  assert.equal(isInstagramFeedRatioAllowed(1000, 2000), false)
-  const crop = computeInstagramFeedCrop(1000, 2000)
-  assert.ok(crop)
-  assert.equal(crop!.w, 1000) // width untouched
-  assert.equal(crop!.h, 1250) // 1000 / (4/5) = 1250
-  assert.equal(crop!.x, 0)
-  assert.equal(crop!.y, 375) // (2000 - 1250) / 2
-  assert.equal(crop!.w / crop!.h, 0.8)
-})
-
-test('a too-wide landscape is cropped to exactly 1.91:1, centered on width', () => {
-  // 3000x1000 -> ratio 3.0, above the 1.91 maximum
-  assert.equal(isInstagramFeedRatioAllowed(3000, 1000), false)
-  const crop = computeInstagramFeedCrop(3000, 1000)
-  assert.ok(crop)
-  assert.equal(crop!.h, 1000) // height untouched
-  assert.equal(crop!.w, 1910) // 1000 * 1.91 = 1910
-  assert.equal(crop!.y, 0)
-  assert.equal(crop!.x, 545) // (3000 - 1910) / 2
-  assert.equal(crop!.w / crop!.h, 1.91)
-})
-
-test('a landscape just past the 1.91:1 boundary is cropped to the 1.91:1 edge, not 4:5', () => {
-  assert.equal(isInstagramFeedRatioAllowed(2000, 1000), false) // ratio 2.0 > 1.91
-  const crop = computeInstagramFeedCrop(2000, 1000)
-  assert.ok(crop)
-  assert.equal(crop!.w / crop!.h, 1.91)
 })
 
 test('the documented constants match the official Instagram Feed range (4:5 to 1.91:1) and max width', () => {
@@ -85,31 +63,78 @@ test('computeInstagramFeedResize scales width down to 1440 proportionally, no di
   assert.equal(resize!.w / resize!.h, 6000 / 4000)
 })
 
-test('normalizeInstagramImageBuffer returns the original bytes unchanged when already valid', async () => {
+test('computeInstagramFeedContain pads a too-wide 3200x900 image top/bottom, no crop, canvas <= 1440 wide', () => {
+  // ratio 3.556 > 1.91 -> target 1.91:1. Natural canvas 3200x1675, over the 1440 cap, so canvas
+  // and image both scale down by 1440/3200 together.
+  const contain = computeInstagramFeedContain(3200, 900)
+  assert.ok(contain)
+  assert.equal(contain!.canvasWidth, 1440)
+  assert.equal(contain!.canvasHeight, 754) // round(1675 * 1440/3200)
+  assert.equal(contain!.imageWidth, 1440) // round(3200 * 1440/3200)
+  assert.equal(contain!.imageHeight, 405) // round(900 * 1440/3200) — the WHOLE original frame, just smaller
+  assert.equal(contain!.x, 0) // image spans the full canvas width — no left/right crop or gap
+  assert.equal(contain!.y, 174) // (754 - 405) / 2, centered — this is the white padding, not a crop
+  assert.equal(isInstagramFeedRatioAllowed(contain!.canvasWidth, contain!.canvasHeight), true)
+  assert.ok(contain!.canvasWidth <= INSTAGRAM_FEED_MAX_WIDTH)
+})
+
+test('computeInstagramFeedContain pads a too-tall 1000x2200 image left/right, no crop, canvas ratio 4:5', () => {
+  // ratio 0.4545 < 0.8 -> target 4:5. Natural canvas 1760x2200, over the 1440 cap, so canvas and
+  // image both scale down by 1440/1760 together.
+  const contain = computeInstagramFeedContain(1000, 2200)
+  assert.ok(contain)
+  assert.equal(contain!.canvasWidth, 1440)
+  assert.equal(contain!.canvasHeight, 1800) // round(2200 * 1440/1760)
+  assert.equal(contain!.imageWidth, 818) // round(1000 * 1440/1760) — the WHOLE original frame, just smaller
+  assert.equal(contain!.imageHeight, 1800) // round(2200 * 1440/1760) — matches canvas height exactly
+  assert.equal(contain!.y, 0) // image spans the full canvas height — no top/bottom crop or gap
+  assert.equal(contain!.x, 311) // (1440 - 818) / 2, centered — this is the white padding, not a crop
+  assert.equal(contain!.canvasWidth / contain!.canvasHeight, 0.8)
+  assert.equal(isInstagramFeedRatioAllowed(contain!.canvasWidth, contain!.canvasHeight), true)
+})
+
+test('computeInstagramFeedContain never upscales a small out-of-range image (canvas already under the cap)', () => {
+  // 1000x300 -> ratio 3.333 > 1.91, but the natural canvas (1000x524) is already under 1440, so no
+  // scaling of the image or canvas happens at all.
+  const contain = computeInstagramFeedContain(1000, 300)
+  assert.ok(contain)
+  assert.equal(contain!.imageWidth, 1000) // unscaled — the original image pixels, untouched
+  assert.equal(contain!.imageHeight, 300)
+  assert.equal(contain!.canvasWidth, 1000)
+  assert.ok(contain!.canvasWidth <= INSTAGRAM_FEED_MAX_WIDTH)
+})
+
+test('normalizeInstagramImageBuffer returns the original bytes unchanged when already valid and under the width cap', async () => {
   const image = new Jimp({ width: 1000, height: 1000, color: 0x336699ff })
   const original = await image.getBuffer('image/jpeg')
   const result = await normalizeInstagramImageBuffer(original)
   assert.ok(result.equals(original))
 })
 
-test('normalizeInstagramImageBuffer crops a 1000x2200 too-tall portrait to 4:5, no unnecessary resize', async () => {
-  const image = new Jimp({ width: 1000, height: 2200, color: 0x336699ff })
+test('normalizeInstagramImageBuffer leaves a 1200x1200 image completely unchanged', async () => {
+  const image = new Jimp({ width: 1200, height: 1200, color: 0x336699ff })
+  const original = await image.getBuffer('image/jpeg')
+  const result = await normalizeInstagramImageBuffer(original)
+  assert.ok(result.equals(original))
+})
+
+test('normalizeInstagramImageBuffer resizes a large but already-valid-ratio 6000x4000 image, no canvas/padding', async () => {
+  const image = new Jimp({ width: 6000, height: 4000, color: 0x336699ff }) // ratio 1.5, already valid
   const original = await image.getBuffer('image/jpeg')
   const result = await normalizeInstagramImageBuffer(original)
   assert.ok(!result.equals(original))
-  assert.equal(result[0], 0xff)
-  assert.equal(result[1], 0xd8)
-  assert.equal(result[2], 0xff)
   const reloaded = await Jimp.fromBuffer(result)
   assert.equal(isInstagramFeedRatioAllowed(reloaded.width, reloaded.height), true)
   assert.ok(reloaded.width <= INSTAGRAM_FEED_MAX_WIDTH)
-  // Width (1000) never needed a resize (well under the 1440 cap) — cropping to 4:5 fully explains
-  // the result on its own, height (1250) is not further scaled down.
-  assert.equal(reloaded.width, 1000)
-  assert.equal(reloaded.height, 1250)
+  assert.equal(reloaded.width, 1440)
+  assert.equal(reloaded.height, 960)
+  // Pure proportional resize, not a contain/pad: no white border introduced — every pixel along
+  // the resized image's own edge should still be the original solid fill color, not white.
+  const px = reloaded.bitmap.data.subarray(0, 4)
+  assertCloseToColor(px, [0x33, 0x66, 0x99])
 })
 
-test('normalizeInstagramImageBuffer crops a 3200x900 too-wide landscape to 1.91:1, then resizes to fit width 1440', async () => {
+test('normalizeInstagramImageBuffer keeps the entire 3200x900 too-wide frame, letterboxed on white, no crop', async () => {
   const image = new Jimp({ width: 3200, height: 900, color: 0x336699ff })
   const original = await image.getBuffer('image/jpeg')
   const result = await normalizeInstagramImageBuffer(original)
@@ -117,32 +142,45 @@ test('normalizeInstagramImageBuffer crops a 3200x900 too-wide landscape to 1.91:
   const reloaded = await Jimp.fromBuffer(result)
   assert.equal(isInstagramFeedRatioAllowed(reloaded.width, reloaded.height), true)
   assert.ok(reloaded.width <= INSTAGRAM_FEED_MAX_WIDTH)
-  // Cropping 3200x900 to 1.91:1 alone would give 1719x900 — still over the 1440 width cap, so the
-  // resize step must also fire on top of the crop.
   assert.equal(reloaded.width, 1440)
   assert.equal(reloaded.height, 754)
+  // Top edge (center column) must be white padding, not cropped-away original content.
+  const topPx = reloaded.bitmap.data.subarray((720) * 4, (720) * 4 + 4) // row 0, x=720 (center)
+  assert.equal(topPx[0], 0xff)
+  assert.equal(topPx[1], 0xff)
+  assert.equal(topPx[2], 0xff)
+  // Vertical center (where the original frame was placed) must show the original color, i.e. the
+  // whole original frame is present, not cropped out.
+  const centerY = Math.floor(754 / 2)
+  const centerIdx = (centerY * 1440 + 720) * 4
+  const centerPx = reloaded.bitmap.data.subarray(centerIdx, centerIdx + 4)
+  assertCloseToColor(centerPx, [0x33, 0x66, 0x99])
 })
 
-test('normalizeInstagramImageBuffer resizes a large but already-valid-ratio 6000x4000 image to width 1440', async () => {
-  const image = new Jimp({ width: 6000, height: 4000, color: 0x336699ff }) // ratio 1.5, already valid
+test('normalizeInstagramImageBuffer keeps the entire 1000x2200 too-tall frame, letterboxed on white, no crop', async () => {
+  const image = new Jimp({ width: 1000, height: 2200, color: 0x336699ff })
   const original = await image.getBuffer('image/jpeg')
   const result = await normalizeInstagramImageBuffer(original)
   assert.ok(!result.equals(original))
   const reloaded = await Jimp.fromBuffer(result)
   assert.equal(isInstagramFeedRatioAllowed(reloaded.width, reloaded.height), true)
-  assert.equal(reloaded.width, INSTAGRAM_FEED_MAX_WIDTH)
+  assert.ok(reloaded.width <= INSTAGRAM_FEED_MAX_WIDTH)
   assert.equal(reloaded.width, 1440)
-  assert.equal(reloaded.height, 960)
+  assert.equal(reloaded.height, 1800)
+  // Left edge (vertical center row) must be white padding, not cropped-away original content.
+  const centerRow = Math.floor(1800 / 2)
+  const leftIdx = (centerRow * 1440 + 0) * 4
+  const leftPx = reloaded.bitmap.data.subarray(leftIdx, leftIdx + 4)
+  assert.equal(leftPx[0], 0xff)
+  assert.equal(leftPx[1], 0xff)
+  assert.equal(leftPx[2], 0xff)
+  // Horizontal center must show the original color — the whole original frame is present.
+  const centerIdx = (centerRow * 1440 + 720) * 4
+  const centerPx = reloaded.bitmap.data.subarray(centerIdx, centerIdx + 4)
+  assertCloseToColor(centerPx, [0x33, 0x66, 0x99])
 })
 
-test('normalizeInstagramImageBuffer leaves a 1200x1200 image (valid ratio, width under the cap) completely unchanged', async () => {
-  const image = new Jimp({ width: 1200, height: 1200, color: 0x336699ff })
-  const original = await image.getBuffer('image/jpeg')
-  const result = await normalizeInstagramImageBuffer(original)
-  assert.ok(result.equals(original))
-})
-
-test('normalizeInstagramImageBuffer resizes an already-valid-ratio landscape whose width exceeds the cap', async () => {
+test('normalizeInstagramImageBuffer resizes an already-valid-ratio landscape whose width exceeds the cap, no padding', async () => {
   // ratio ~1.78 is already valid, but width 1600 > 1440 still needs a resize on its own.
   const image = new Jimp({ width: 1600, height: 900, color: 0x336699ff })
   const original = await image.getBuffer('image/jpeg')
