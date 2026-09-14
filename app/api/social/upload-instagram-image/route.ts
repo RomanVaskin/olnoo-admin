@@ -4,6 +4,7 @@ import path from 'node:path'
 import { NextResponse } from 'next/server'
 import { resolveProjectId } from '@/lib/crm'
 import { UPLOADS_ROOT, isValidProjectSlug } from '@/lib/social-instagram-uploads'
+import { normalizeInstagramImageBuffer } from '@/lib/social-instagram-image-normalize'
 
 const MAX_BYTES = 8 * 1024 * 1024 // Matches Instagram's own JPEG size limit — no need for a
 // separate, smaller-than-necessary cap.
@@ -47,12 +48,26 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'file is not a valid JPEG image' }, { status: 400 })
   }
 
+  // Guarantees a valid Instagram Feed aspect ratio (4:5–1.91:1) before the file ever reaches
+  // publishing — an already-valid image passes through byte-for-byte unchanged; an out-of-range
+  // one comes back centered-cropped to 4:5. Also doubles as a stricter decode check than the magic
+  // bytes above: a file that merely starts with FF D8 FF but isn't actually a valid JPEG fails here.
+  let normalized: Buffer
+  try {
+    normalized = await normalizeInstagramImageBuffer(bytes)
+  } catch {
+    return NextResponse.json({ error: 'file is not a valid JPEG image' }, { status: 400 })
+  }
+  if (normalized.length > MAX_BYTES) {
+    return NextResponse.json({ error: `file is too large (max ${MAX_BYTES / (1024 * 1024)}MB)` }, { status: 400 })
+  }
+
   // Filename is always a fresh random UUID — the original filename (and anything in it) is never
   // used, so there is no user-controlled path segment anywhere in the write target.
   const dir = path.join(UPLOADS_ROOT, project)
   await mkdir(dir, { recursive: true })
   const filename = `${randomUUID()}.jpg`
-  await writeFile(path.join(dir, filename), bytes)
+  await writeFile(path.join(dir, filename), normalized)
 
   const url = `${PUBLIC_SITE_URL}/api/social/instagram-image/${project}/${filename}`
   return NextResponse.json({ url })
