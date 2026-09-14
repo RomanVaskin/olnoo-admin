@@ -44,23 +44,23 @@ test('a too-tall portrait is cropped to exactly 4:5, centered on height', () => 
   assert.equal(crop!.w / crop!.h, 0.8)
 })
 
-test('a too-wide landscape is cropped to exactly 4:5, centered on width', () => {
+test('a too-wide landscape is cropped to exactly 1.91:1, centered on width', () => {
   // 3000x1000 -> ratio 3.0, above the 1.91 maximum
   assert.equal(isInstagramFeedRatioAllowed(3000, 1000), false)
   const crop = computeInstagramFeedCrop(3000, 1000)
   assert.ok(crop)
   assert.equal(crop!.h, 1000) // height untouched
-  assert.equal(crop!.w, 800) // 1000 * (4/5) = 800
+  assert.equal(crop!.w, 1910) // 1000 * 1.91 = 1910
   assert.equal(crop!.y, 0)
-  assert.equal(crop!.x, 1100) // (3000 - 800) / 2
-  assert.equal(crop!.w / crop!.h, 0.8)
+  assert.equal(crop!.x, 545) // (3000 - 1910) / 2
+  assert.equal(crop!.w / crop!.h, 1.91)
 })
 
-test('a landscape just past the 1.91:1 boundary is still cropped', () => {
+test('a landscape just past the 1.91:1 boundary is cropped to the 1.91:1 edge, not 4:5', () => {
   assert.equal(isInstagramFeedRatioAllowed(2000, 1000), false) // ratio 2.0 > 1.91
   const crop = computeInstagramFeedCrop(2000, 1000)
   assert.ok(crop)
-  assert.equal(crop!.w / crop!.h, 0.8)
+  assert.equal(crop!.w / crop!.h, 1.91)
 })
 
 test('the documented constants match the official Instagram Feed range (4:5 to 1.91:1)', () => {
@@ -89,14 +89,14 @@ test('normalizeInstagramImageBuffer crops a too-tall portrait to a valid 4:5 JPE
   assert.equal(reloaded.height, 1250)
 })
 
-test('normalizeInstagramImageBuffer crops a too-wide landscape to a valid 4:5 JPEG', async () => {
+test('normalizeInstagramImageBuffer crops a too-wide landscape to a valid 1.91:1 JPEG', async () => {
   const image = new Jimp({ width: 3000, height: 1000, color: 0x336699ff })
   const original = await image.getBuffer('image/jpeg')
   const result = await normalizeInstagramImageBuffer(original)
   assert.ok(!result.equals(original))
   const reloaded = await Jimp.fromBuffer(result)
   assert.equal(isInstagramFeedRatioAllowed(reloaded.width, reloaded.height), true)
-  assert.equal(reloaded.width, 800)
+  assert.equal(reloaded.width, 1910)
   assert.equal(reloaded.height, 1000)
 })
 

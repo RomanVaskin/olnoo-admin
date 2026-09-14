@@ -9,12 +9,6 @@ import { Jimp } from 'jimp'
 
 export const INSTAGRAM_FEED_MIN_RATIO = 4 / 5
 export const INSTAGRAM_FEED_MAX_RATIO = 1.91
-// Preferred normalized target for an out-of-range image (per product decision — a single fixed
-// target keeps this a one-formula normalization instead of two, and 4:5 is Instagram's own
-// recommended/most-space-efficient Feed ratio). A very wide source (e.g. a panorama) is cropped
-// down to 4:5 too, not just to the nearer 1.91:1 edge — more aggressive than the bare minimum for
-// that case, but simpler and still always inside the accepted range.
-export const INSTAGRAM_FEED_TARGET_RATIO = 4 / 5
 
 export type CropRect = { x: number; y: number; w: number; h: number }
 
@@ -25,36 +19,39 @@ export function isInstagramFeedRatioAllowed(width: number, height: number): bool
 }
 
 /**
- * Pure geometry: the centered crop rectangle that brings an out-of-range image to exactly 4:5, or
- * null if the image's ratio is already within Instagram Feed's accepted 4:5–1.91:1 range (nothing
- * to crop — the caller should keep the original bytes as-is, not re-encode them). Never upscales;
- * only ever crops within the source's existing width/height, so there is no quality loss beyond
- * the crop itself (no resampling/distortion).
+ * Pure geometry: the centered crop rectangle that brings an out-of-range image to the nearer edge
+ * of Instagram Feed's accepted range — 4:5 for a too-tall portrait, 1.91:1 for a too-wide
+ * landscape — or null if the image's ratio is already within that range (nothing to crop — the
+ * caller should keep the original bytes as-is, not re-encode them). Cropping to the nearer edge
+ * (rather than always 4:5) keeps as much of the original frame as the API allows — a wide
+ * landscape no longer loses most of its width to reach a portrait target it was never close to.
+ * Never upscales; only ever crops within the source's existing width/height, so there is no
+ * quality loss beyond the crop itself (no resampling/distortion).
  */
 export function computeInstagramFeedCrop(width: number, height: number): CropRect | null {
   if (isInstagramFeedRatioAllowed(width, height)) return null
 
   const ratio = width / height
-  if (ratio > INSTAGRAM_FEED_TARGET_RATIO) {
-    // Too wide relative to the target: crop width down, height unchanged.
-    const w = Math.max(1, Math.floor(height * INSTAGRAM_FEED_TARGET_RATIO))
+  if (ratio > INSTAGRAM_FEED_MAX_RATIO) {
+    // Too wide: crop width down to the 1.91:1 edge, height unchanged.
+    const w = Math.max(1, Math.floor(height * INSTAGRAM_FEED_MAX_RATIO))
     const x = Math.floor((width - w) / 2)
     return { x, y: 0, w, h: height }
   }
-  // Too tall relative to the target: crop height down, width unchanged.
-  const h = Math.max(1, Math.floor(width / INSTAGRAM_FEED_TARGET_RATIO))
+  // Too tall (ratio < INSTAGRAM_FEED_MIN_RATIO): crop height down to the 4:5 edge, width unchanged.
+  const h = Math.max(1, Math.floor(width / INSTAGRAM_FEED_MIN_RATIO))
   const y = Math.floor((height - h) / 2)
   return { x: 0, y, w: width, h }
 }
 
 /**
  * Decodes a JPEG buffer, and if its aspect ratio isn't already valid for Instagram Feed, returns a
- * centered-cropped (never stretched/distorted) JPEG buffer at exactly 4:5 instead. An
- * already-valid image's original bytes are returned completely unchanged — no re-encode, no
- * quality loss, no behavior change for the common case. Throws if the buffer isn't a decodable
- * image (the caller — the upload route — already checked the JPEG magic bytes first; this is the
- * second, stricter layer that would also catch a corrupt file that merely starts with the right
- * bytes).
+ * centered-cropped (never stretched/distorted) JPEG buffer at the nearer valid edge instead (4:5
+ * for too-tall, 1.91:1 for too-wide — see computeInstagramFeedCrop). An already-valid image's
+ * original bytes are returned completely unchanged — no re-encode, no quality loss, no behavior
+ * change for the common case. Throws if the buffer isn't a decodable image (the caller — the
+ * upload route — already checked the JPEG magic bytes first; this is the second, stricter layer
+ * that would also catch a corrupt file that merely starts with the right bytes).
  */
 export async function normalizeInstagramImageBuffer(buffer: Buffer): Promise<Buffer> {
   const image = await Jimp.fromBuffer(buffer)
