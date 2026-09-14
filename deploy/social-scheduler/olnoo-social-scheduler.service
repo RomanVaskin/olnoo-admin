@@ -1,0 +1,8 @@
+[Unit]
+Description=OLNOO Admin — Social scheduler sweep (publish due Ready posts)
+After=network.target olnoo-admin.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/olnoo/projects/olnoo-admin/.env.local
+ExecStart=/bin/bash -c 'curl -fsS -X POST -H "X-Scheduler-Token: $SOCIAL_SCHEDULER_TOKEN" http://127.0.0.1:3140/api/social-scheduler/run'

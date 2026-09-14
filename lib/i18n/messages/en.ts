@@ -350,6 +350,7 @@ export const en = {
     generatingVariants: 'Generating…',
     generateVariantsError: 'Could not generate variants. Please try again.',
     publishDate: 'Publish date',
+    publishDateTimezoneHint: 'your local time',
     deletePost: 'Delete post',
     confirmDelete: 'Delete post "{topic}"? This cannot be undone.',
     createError: 'Could not create post.',

@@ -352,6 +352,7 @@ export const ru: Messages = {
     generatingVariants: 'Генерация…',
     generateVariantsError: 'Не удалось сгенерировать версии. Попробуйте ещё раз.',
     publishDate: 'Дата публикации',
+    publishDateTimezoneHint: 'ваше местное время',
     deletePost: 'Удалить пост',
     confirmDelete: 'Удалить пост «{topic}»? Это действие необратимо.',
     createError: 'Не удалось создать пост.',

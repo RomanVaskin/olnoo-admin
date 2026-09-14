@@ -5,6 +5,7 @@ import { X } from 'lucide-react'
 import { SectionHeader, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
 import { SocialPublications, type PublicationSummary } from '@/components/sections/social-publications'
+import { toDatetimeLocalInputValue, formatPublishDate } from '@/lib/social-publish-date-format'
 
 const STATUSES = ['idea', 'draft', 'ready', 'published'] as const
 const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
@@ -56,13 +57,6 @@ function hasDistinctChannelText(post: SocialPost): boolean {
     const trimmed = text.trim()
     return trimmed !== '' && trimmed !== body
   })
-}
-
-function formatDate(value: string) {
-  if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '—'
-  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
 function PostDetail({
@@ -396,10 +390,12 @@ function PostDetail({
           )}
 
           <label className="flex flex-col gap-1.5">
-            <span className="label-mono text-muted-foreground">{t.socialView.publishDate}</span>
+            <span className="label-mono text-muted-foreground">
+              {t.socialView.publishDate} ({t.socialView.publishDateTimezoneHint})
+            </span>
             <input
-              type="date"
-              value={publishDate}
+              type="datetime-local"
+              value={toDatetimeLocalInputValue(publishDate)}
               onChange={(e) => setPublishDate(e.target.value)}
               className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
             />
@@ -654,7 +650,7 @@ export function SocialView({ project }: { project: string }) {
               <Td>
                 <StatusPill status={p.status} />
               </Td>
-              <Td className="font-mono text-xs text-muted-foreground">{formatDate(p.publishDate)}</Td>
+              <Td className="font-mono text-xs text-muted-foreground">{formatPublishDate(p.publishDate)}</Td>
             </tr>
           ))}
           {!loading && filtered.length === 0 && (

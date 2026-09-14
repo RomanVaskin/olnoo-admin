@@ -420,9 +420,11 @@ Page/case/service → AI content → relevant channels → UTM → traffic → l
 
 Avoid manually writing repetitive content for every client if it can become a reusable content engine.
 
-Next integration plan: generate variants through the OLNOO AI Router → human review → Ready → automated posting through each platform's own API. Telegram, VK, Instagram, and Threads are all connected (Bot API `sendMessage`, VK API `wall.post`, Instagram API with Instagram Login's media/media_publish, Threads API's threads/threads_publish — see `OLNOO_PROJECT_MAP.md`). Rolled out one at a time, in this order: Telegram → VK → Instagram → Threads.
+Integration status: generate variants through the OLNOO AI Router → human review → Ready → automated posting through each platform's own API. Telegram, VK, Instagram, and Threads are all connected (Bot API `sendMessage`, VK API `wall.post`, Instagram API with Instagram Login's media/media_publish, Threads API's threads/threads_publish — see `OLNOO_PROJECT_MAP.md`), rolled out one at a time in that order, plus a "Publish selected channels" fan-out over all four at once.
 
-UX principle: Social must lead the user through one simple flow — Create content → adapt if needed → review → ready → publish → result. The user should never need to understand the underlying tables or API to use it.
+Publishing itself is no longer manual-only: a Ready post with channels selected and a publish date/time set publishes itself once that time arrives — a systemd-timer-driven scheduler sweep (`OLNOO_PROJECT_MAP.md` → "Social scheduler") calling the same fan-out, not a new publish path. Manual publish (individual buttons or "Publish selected channels") still works the same as before for a post with no schedule set.
+
+UX principle: Social must lead the user through one simple flow — Create content → adapt if needed → review → ready → set a publish date/time (optional — auto-publishes once due) → publish → result. The user should never need to understand the underlying tables or API to use it.
 
 # Ads
 

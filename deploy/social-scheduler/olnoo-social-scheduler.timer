@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the OLNOO Admin Social scheduler every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=5s
+Persistent=false
+Unit=olnoo-social-scheduler.service
+
+[Install]
+WantedBy=timers.target
