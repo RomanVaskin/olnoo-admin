@@ -2,13 +2,17 @@ import { Jimp } from 'jimp'
 
 // Instagram Content Publishing API's documented image spec for Feed posts (developers.facebook.com
 // /docs/instagram-platform/content-publishing/ — confirmed current, not guessed): aspect ratio must
-// be between 4:5 (portrait) and 1.91:1 (landscape) inclusive; width is auto-scaled by Instagram's
-// own servers outside 320–1440px, so this only needs to fix ratio, not width. Publishing an image
-// outside that ratio range is exactly the "The aspect ratio is not supported." failure this file
-// exists to prevent at upload time, before the file ever reaches lib/social-instagram.ts.
+// be between 4:5 (portrait) and 1.91:1 (landscape) inclusive, and width must be at most 1440px
+// (Instagram's own servers scale a smaller width up, but a too-large width was observed to fail to
+// publish rather than being scaled down server-side — so this handles the max-width side itself).
+// Publishing an image outside the ratio range is the "The aspect ratio is not supported." failure
+// this file exists to prevent at upload time, before the file ever reaches lib/social-instagram.ts;
+// a too-wide-in-pixels image (valid ratio, e.g. 6000x4000) is the separate large-image failure this
+// same file also now prevents.
 
 export const INSTAGRAM_FEED_MIN_RATIO = 4 / 5
 export const INSTAGRAM_FEED_MAX_RATIO = 1.91
+export const INSTAGRAM_FEED_MAX_WIDTH = 1440
 
 export type CropRect = { x: number; y: number; w: number; h: number }
 
@@ -45,19 +49,46 @@ export function computeInstagramFeedCrop(width: number, height: number): CropRec
 }
 
 /**
- * Decodes a JPEG buffer, and if its aspect ratio isn't already valid for Instagram Feed, returns a
- * centered-cropped (never stretched/distorted) JPEG buffer at the nearer valid edge instead (4:5
- * for too-tall, 1.91:1 for too-wide — see computeInstagramFeedCrop). An already-valid image's
- * original bytes are returned completely unchanged — no re-encode, no quality loss, no behavior
- * change for the common case. Throws if the buffer isn't a decodable image (the caller — the
- * upload route — already checked the JPEG magic bytes first; this is the second, stricter layer
- * that would also catch a corrupt file that merely starts with the right bytes).
+ * Pure geometry: the proportional {w,h} to resize down to when width exceeds
+ * INSTAGRAM_FEED_MAX_WIDTH, or null if it's already within the limit (nothing to resize). Always
+ * scales both dimensions by the same factor — never distorts — and only ever scales down (this is
+ * only ever called with a width already over the cap, so it never upscales).
+ */
+export function computeInstagramFeedResize(width: number, height: number): { w: number; h: number } | null {
+  if (width <= INSTAGRAM_FEED_MAX_WIDTH) return null
+  const h = Math.max(1, Math.round((height / width) * INSTAGRAM_FEED_MAX_WIDTH))
+  return { w: INSTAGRAM_FEED_MAX_WIDTH, h }
+}
+
+/**
+ * Decodes a JPEG buffer and applies, in order: (1) a centered crop to the nearer valid edge if the
+ * aspect ratio isn't already within Instagram Feed's accepted range (4:5 for too-tall, 1.91:1 for
+ * too-wide — see computeInstagramFeedCrop; never stretched/distorted), then (2) a proportional
+ * resize down to INSTAGRAM_FEED_MAX_WIDTH if the (possibly just-cropped) width still exceeds it
+ * (see computeInstagramFeedResize — same aspect ratio, just smaller, never distorted). A large but
+ * already-valid-ratio image (e.g. 6000x4000) hits only the resize step; an out-of-range image hits
+ * both. An image that needs neither returns its original bytes completely unchanged — no
+ * re-encode, no quality loss, no behavior change for the common case. Throws if the buffer isn't a
+ * decodable image (the caller — the upload route — already checked the JPEG magic bytes first;
+ * this is the second, stricter layer that would also catch a corrupt file that merely starts with
+ * the right bytes).
  */
 export async function normalizeInstagramImageBuffer(buffer: Buffer): Promise<Buffer> {
   const image = await Jimp.fromBuffer(buffer)
-  const crop = computeInstagramFeedCrop(image.width, image.height)
-  if (!crop) return buffer
+  let changed = false
 
-  const cropped = image.crop({ x: crop.x, y: crop.y, w: crop.w, h: crop.h })
-  return cropped.getBuffer('image/jpeg', { quality: 92 })
+  const crop = computeInstagramFeedCrop(image.width, image.height)
+  if (crop) {
+    image.crop({ x: crop.x, y: crop.y, w: crop.w, h: crop.h })
+    changed = true
+  }
+
+  const resize = computeInstagramFeedResize(image.width, image.height)
+  if (resize) {
+    image.resize({ w: resize.w, h: resize.h })
+    changed = true
+  }
+
+  if (!changed) return buffer
+  return image.getBuffer('image/jpeg', { quality: 92 })
 }
