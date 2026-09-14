@@ -389,6 +389,10 @@ export const ru: Messages = {
     publishToVk: 'Опубликовать в VK',
     publishToInstagram: 'Опубликовать в Instagram',
     publishToThreads: 'Опубликовать в Threads',
+    publishSelected: 'Опубликовать в выбранные каналы',
+    publishingSelected: 'Публикация…',
+    alreadyPublished: 'Уже опубликовано',
+    resultsTitle: 'Результат публикации',
   },
   settingsView: {
     title: 'Настройки',

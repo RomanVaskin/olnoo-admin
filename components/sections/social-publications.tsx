@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { StatusPill } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
-import { shouldShowThreadsPublishButton } from '@/lib/social-publications-ui'
+import { shouldShowThreadsPublishButton, shouldShowPublishSelectedButton } from '@/lib/social-publications-ui'
 
 const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
 type SocialChannel = (typeof CHANNELS)[number]
@@ -46,6 +46,16 @@ function fromApiAccount(row: Record<string, unknown>): Account {
     name: (row.name as string) ?? '',
     username: (row.username as string) ?? '',
   }
+}
+
+type BulkOutcome = 'published' | 'failed' | 'already_published'
+
+type BulkResult = {
+  id: string
+  platform: SocialChannel
+  outcome: BulkOutcome
+  externalUrl: string
+  error: string
 }
 
 export type PublicationSummary = 'fully_published' | 'partially_published' | 'ready' | 'draft'
@@ -291,6 +301,30 @@ function PublicationRow({
   )
 }
 
+function BulkResultRow({ result }: { result: BulkResult }) {
+  const { t } = useI18n()
+
+  return (
+    <div className="flex flex-col gap-1 border-b border-hairline/60 py-2 text-sm last:border-0">
+      <div className="flex items-center justify-between gap-3">
+        <span className="label-mono text-foreground">{t.socialChannel[result.platform]}</span>
+        <StatusPill status={result.outcome === 'already_published' ? 'published' : result.outcome} />
+      </div>
+      {/* StatusPill already shows Published/Failed — this line only adds information for the
+          one outcome the pill can't distinguish on its own: already published before this run. */}
+      {result.outcome === 'already_published' && (
+        <span className="text-muted-foreground">{t.socialPublications.alreadyPublished}</span>
+      )}
+      {result.externalUrl && (
+        <a href={result.externalUrl} target="_blank" rel="noopener noreferrer" className="truncate text-foreground underline">
+          {result.externalUrl}
+        </a>
+      )}
+      {result.error && <span className="text-destructive">{result.error}</span>}
+    </div>
+  )
+}
+
 function SummaryBadge({ summary }: { summary: PublicationSummary }) {
   const { t } = useI18n()
   const label =
@@ -333,25 +367,28 @@ export function SocialPublications({
   const [publications, setPublications] = useState<Publication[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading] = useState(true)
+  const [bulkPublishing, setBulkPublishing] = useState(false)
+  const [bulkResults, setBulkResults] = useState<BulkResult[] | null>(null)
+  const [bulkError, setBulkError] = useState('')
   const channelsKey = channels.join(',')
 
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    Promise.all([
+  const loadPublications = useCallback(async () => {
+    const [publicationRows, accountRows] = await Promise.all([
       fetch(`/api/social-publications?post=${encodeURIComponent(postId)}&project=${encodeURIComponent(project)}`).then(
         (r) => r.json(),
       ),
       fetch(`/api/social-accounts?project=${encodeURIComponent(project)}`).then((r) => r.json()),
     ])
-      .then(([publicationRows, accountRows]) => {
-        if (cancelled) return
-        setPublications((publicationRows as Record<string, unknown>[]).map(fromApiPublication))
-        setAccounts((accountRows as Record<string, unknown>[]).map(fromApiAccount))
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    setPublications((publicationRows as Record<string, unknown>[]).map(fromApiPublication))
+    setAccounts((accountRows as Record<string, unknown>[]).map(fromApiAccount))
+  }, [postId, project])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    loadPublications().finally(() => {
+      if (!cancelled) setLoading(false)
+    })
     return () => {
       cancelled = true
     }
@@ -361,6 +398,29 @@ export function SocialPublications({
   function handleUpdated(updated: Publication) {
     setPublications((current) => current.map((p) => (p.id === updated.id ? updated : p)))
     onPostChanged?.()
+  }
+
+  async function publishSelected() {
+    setBulkPublishing(true)
+    setBulkError('')
+    setBulkResults(null)
+    try {
+      const res = await fetch(`/api/social-publications/publish-selected?project=${encodeURIComponent(project)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId }),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data) {
+        setBulkResults(data.results as BulkResult[])
+        await loadPublications()
+        onPostChanged?.()
+      } else {
+        setBulkError((data && data.error) || 'Could not publish the selected channels.')
+      }
+    } finally {
+      setBulkPublishing(false)
+    }
   }
 
   const visible = publications.filter((p) => channels.includes(p.platform))
@@ -380,6 +440,24 @@ export function SocialPublications({
       {loading && <span className="label-mono text-muted-foreground">{t.socialPublications.loading}</span>}
       {!loading && visible.length === 0 && (
         <p className="text-sm text-muted-foreground">{t.socialPublications.empty}</p>
+      )}
+      {!loading && shouldShowPublishSelectedButton(visible.length, summary) && (
+        <button
+          onClick={publishSelected}
+          disabled={bulkPublishing}
+          className="label-mono self-start border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+        >
+          {bulkPublishing ? t.socialPublications.publishingSelected : t.socialPublications.publishSelected}
+        </button>
+      )}
+      {bulkError && <span className="text-sm text-destructive">{bulkError}</span>}
+      {bulkResults && bulkResults.length > 0 && (
+        <div className="flex flex-col gap-1 border border-hairline bg-card p-4">
+          <span className="label-mono mb-1 text-muted-foreground">{t.socialPublications.resultsTitle}</span>
+          {bulkResults.map((r) => (
+            <BulkResultRow key={r.id} result={r} />
+          ))}
+        </div>
       )}
       {visible.map((p) => (
         <PublicationRow key={p.id} publication={p} accounts={accounts} project={project} onUpdated={handleUpdated} />

@@ -387,6 +387,10 @@ export const en = {
     publishToVk: 'Publish to VK',
     publishToInstagram: 'Publish to Instagram',
     publishToThreads: 'Publish to Threads',
+    publishSelected: 'Publish selected channels',
+    publishingSelected: 'Publishing…',
+    alreadyPublished: 'Already published',
+    resultsTitle: 'Last run',
   },
   settingsView: {
     title: 'Settings',

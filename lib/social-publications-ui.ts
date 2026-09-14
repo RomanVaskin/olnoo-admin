@@ -8,3 +8,10 @@
 export function shouldShowThreadsPublishButton(platform: string, status: string): boolean {
   return platform === 'threads' && status !== 'published'
 }
+
+/** The single "Publish selected channels" button only makes sense while there's at least one
+ * selected channel that isn't published yet — once every selected channel is published
+ * (summary === 'fully_published'), there is nothing left for it to do. */
+export function shouldShowPublishSelectedButton(visibleChannelCount: number, summary: string): boolean {
+  return visibleChannelCount > 0 && summary !== 'fully_published'
+}
