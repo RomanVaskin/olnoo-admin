@@ -19,6 +19,7 @@ import { CrmOverview } from '@/components/sections/crm-overview'
 import { LeadsView } from '@/components/sections/leads-view'
 import { SocialView } from '@/components/sections/social-view'
 import { SocialAccountsView } from '@/components/sections/social-accounts-view'
+import { AdsView } from '@/components/sections/ads-view'
 import { SettingsView } from '@/components/sections/settings-view'
 import { ClientCrm } from '@/components/sections/client-crm'
 import {
@@ -34,7 +35,7 @@ type Mode = 'admin' | 'client'
 // for "all") — as opposed to admin-overview/crm-overview, which have their own "All projects"
 // aggregate view. If one of these loads with no ?project=, we fall back to whatever project the
 // admin last had selected, remembered in localStorage — never a hardcoded slug.
-const PROJECT_REQUIRED_SCREENS = new Set(['social-posts', 'social-accounts'])
+const PROJECT_REQUIRED_SCREENS = new Set(['social-posts', 'social-accounts', 'ads'])
 const LAST_PROJECT_STORAGE_KEY = 'olnoo-admin-last-project'
 
 type NavItem = {
@@ -77,7 +78,7 @@ const adminGroups: NavGroup[] = [
         status: 'active',
         children: [{ id: 'social-posts' }, { id: 'social-accounts' }],
       },
-      { id: 'ads', status: 'soon' },
+      { id: 'ads', status: 'active' },
       { id: 'pr', status: 'soon' },
       { id: 'analytics', status: 'soon' },
     ],
@@ -323,6 +324,7 @@ export function AppShell() {
               can't handle. */}
           {active === 'social-posts' && project !== 'all' && <SocialView project={project} />}
           {active === 'social-accounts' && project !== 'all' && <SocialAccountsView project={project} />}
+          {active === 'ads' && project !== 'all' && <AdsView project={project} />}
           {active === 'settings' && <SettingsView />}
 
           {/* Client */}

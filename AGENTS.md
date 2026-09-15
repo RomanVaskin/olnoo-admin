@@ -438,6 +438,8 @@ Landing → Campaign → UTM → Leads → CRM
 
 Optimize based on leads/deals, not only clicks.
 
+Integration status: MVP screen shipped — a project-scoped campaign list (`?screen=ads&project=<slug>`) with manual Spend/Impressions/Clicks/Leads/Sales/Revenue entry and CPL/CAC/ROI computed from them (`OLNOO_PROJECT_MAP.md` → "Ads"). No Yandex Direct/Google Ads/VK/Meta/Telegram Ads API is connected yet — every metric is entered by hand for now; the schema anticipates a future sync job without redesign, but no integrations/accounts/queue exists yet.
+
 # Analytics
 
 Analytics should unify:
@@ -614,3 +616,13 @@ more clients → proportionally more people → proportionally more manual work.
 Target:
 
 more clients → more automation → more reusable capabilities → less manual time per client → stronger product.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

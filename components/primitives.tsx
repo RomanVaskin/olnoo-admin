@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useI18n } from '@/components/i18n-provider'
 import type { ModuleKey } from '@/lib/data'
 
-const GOOD = new Set(['Mapped', 'Live', 'Synced', 'Imported', 'Won', 'Active', 'OK', 'connected', 'published'])
+const GOOD = new Set(['Mapped', 'Live', 'Synced', 'Imported', 'Won', 'Active', 'OK', 'connected', 'published', 'active'])
 const BAD = new Set(['Missing', 'No page', 'Lost', 'Error', 'failed'])
 
 export function StatusPill({ status }: { status: string }) {
