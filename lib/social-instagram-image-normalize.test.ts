@@ -73,7 +73,7 @@ test('computeInstagramFeedContain pads a too-wide 3200x900 image top/bottom, no 
   assert.equal(contain!.imageWidth, 1440) // round(3200 * 1440/3200)
   assert.equal(contain!.imageHeight, 405) // round(900 * 1440/3200) — the WHOLE original frame, just smaller
   assert.equal(contain!.x, 0) // image spans the full canvas width — no left/right crop or gap
-  assert.equal(contain!.y, 174) // (754 - 405) / 2, centered — this is the white padding, not a crop
+  assert.equal(contain!.y, 174) // (754 - 405) / 2, centered — this is where the blurred background shows through, not a crop
   assert.equal(isInstagramFeedRatioAllowed(contain!.canvasWidth, contain!.canvasHeight), true)
   assert.ok(contain!.canvasWidth <= INSTAGRAM_FEED_MAX_WIDTH)
 })
@@ -88,7 +88,7 @@ test('computeInstagramFeedContain pads a too-tall 1000x2200 image left/right, no
   assert.equal(contain!.imageWidth, 818) // round(1000 * 1440/1760) — the WHOLE original frame, just smaller
   assert.equal(contain!.imageHeight, 1800) // round(2200 * 1440/1760) — matches canvas height exactly
   assert.equal(contain!.y, 0) // image spans the full canvas height — no top/bottom crop or gap
-  assert.equal(contain!.x, 311) // (1440 - 818) / 2, centered — this is the white padding, not a crop
+  assert.equal(contain!.x, 311) // (1440 - 818) / 2, centered — this is where the blurred background shows through, not a crop
   assert.equal(contain!.canvasWidth / contain!.canvasHeight, 0.8)
   assert.equal(isInstagramFeedRatioAllowed(contain!.canvasWidth, contain!.canvasHeight), true)
 })
@@ -134,7 +134,7 @@ test('normalizeInstagramImageBuffer resizes a large but already-valid-ratio 6000
   assertCloseToColor(px, [0x33, 0x66, 0x99])
 })
 
-test('normalizeInstagramImageBuffer keeps the entire 3200x900 too-wide frame, letterboxed on white, no crop', async () => {
+test('normalizeInstagramImageBuffer keeps the entire 3200x900 too-wide frame, blurred background fills the canvas, no crop', async () => {
   const image = new Jimp({ width: 3200, height: 900, color: 0x336699ff })
   const original = await image.getBuffer('image/jpeg')
   const result = await normalizeInstagramImageBuffer(original)
@@ -144,11 +144,12 @@ test('normalizeInstagramImageBuffer keeps the entire 3200x900 too-wide frame, le
   assert.ok(reloaded.width <= INSTAGRAM_FEED_MAX_WIDTH)
   assert.equal(reloaded.width, 1440)
   assert.equal(reloaded.height, 754)
-  // Top edge (center column) must be white padding, not cropped-away original content.
-  const topPx = reloaded.bitmap.data.subarray((720) * 4, (720) * 4 + 4) // row 0, x=720 (center)
-  assert.equal(topPx[0], 0xff)
-  assert.equal(topPx[1], 0xff)
-  assert.equal(topPx[2], 0xff)
+  // Top edge (center column) is background, not cropped-away original content — for a solid-fill
+  // source, a blurred cover-crop of it is still that same solid color (no internal edges to
+  // smear), so this must be close to the fill color, and specifically NOT the flat white/black a
+  // fixed-color canvas would have produced.
+  const topPx = reloaded.bitmap.data.subarray(720 * 4, 720 * 4 + 4) // row 0, x=720 (center)
+  assertCloseToColor(topPx, [0x33, 0x66, 0x99])
   // Vertical center (where the original frame was placed) must show the original color, i.e. the
   // whole original frame is present, not cropped out.
   const centerY = Math.floor(754 / 2)
@@ -157,7 +158,7 @@ test('normalizeInstagramImageBuffer keeps the entire 3200x900 too-wide frame, le
   assertCloseToColor(centerPx, [0x33, 0x66, 0x99])
 })
 
-test('normalizeInstagramImageBuffer keeps the entire 1000x2200 too-tall frame, letterboxed on white, no crop', async () => {
+test('normalizeInstagramImageBuffer keeps the entire 1000x2200 too-tall frame, blurred background fills the canvas, no crop', async () => {
   const image = new Jimp({ width: 1000, height: 2200, color: 0x336699ff })
   const original = await image.getBuffer('image/jpeg')
   const result = await normalizeInstagramImageBuffer(original)
@@ -167,17 +168,41 @@ test('normalizeInstagramImageBuffer keeps the entire 1000x2200 too-tall frame, l
   assert.ok(reloaded.width <= INSTAGRAM_FEED_MAX_WIDTH)
   assert.equal(reloaded.width, 1440)
   assert.equal(reloaded.height, 1800)
-  // Left edge (vertical center row) must be white padding, not cropped-away original content.
+  // Left edge (vertical center row) is background, not cropped-away original content — same
+  // solid-fill reasoning as above: must be close to the fill color, not flat white/black.
   const centerRow = Math.floor(1800 / 2)
   const leftIdx = (centerRow * 1440 + 0) * 4
   const leftPx = reloaded.bitmap.data.subarray(leftIdx, leftIdx + 4)
-  assert.equal(leftPx[0], 0xff)
-  assert.equal(leftPx[1], 0xff)
-  assert.equal(leftPx[2], 0xff)
+  assertCloseToColor(leftPx, [0x33, 0x66, 0x99])
   // Horizontal center must show the original color — the whole original frame is present.
   const centerIdx = (centerRow * 1440 + 720) * 4
   const centerPx = reloaded.bitmap.data.subarray(centerIdx, centerIdx + 4)
   assertCloseToColor(centerPx, [0x33, 0x66, 0x99])
+})
+
+test('normalizeInstagramImageBuffer background is derived from the source image, not a fixed fill color', async () => {
+  // Two out-of-range images with different solid colors, same too-wide geometry: if the background
+  // were a flat constant (white, black, or any fixed color), both would produce the same padding
+  // pixel regardless of source. Since it's actually a blurred cover-crop of the source image, the
+  // padding pixel must track the source color instead.
+  const blue = new Jimp({ width: 3200, height: 900, color: 0x336699ff })
+  const orange = new Jimp({ width: 3200, height: 900, color: 0xcc6600ff })
+
+  const blueResult = await normalizeInstagramImageBuffer(await blue.getBuffer('image/jpeg'))
+  const orangeResult = await normalizeInstagramImageBuffer(await orange.getBuffer('image/jpeg'))
+
+  const blueReloaded = await Jimp.fromBuffer(blueResult)
+  const orangeReloaded = await Jimp.fromBuffer(orangeResult)
+
+  const paddingIdx = 720 * 4 // row 0, x=720 (center) — inside the padding region for both
+  const bluePad = blueReloaded.bitmap.data.subarray(paddingIdx, paddingIdx + 4)
+  const orangePad = orangeReloaded.bitmap.data.subarray(paddingIdx, paddingIdx + 4)
+
+  assertCloseToColor(bluePad, [0x33, 0x66, 0x99])
+  assertCloseToColor(orangePad, [0xcc, 0x66, 0x00])
+  // Neither is a flat white/black canvas.
+  assert.ok(Math.abs(bluePad[0]! - 0xff) > 20 || Math.abs(bluePad[2]! - 0xff) > 20)
+  assert.ok(Math.abs(orangePad[0]! - 0x00) > 20 || Math.abs(orangePad[2]! - 0x00) > 20)
 })
 
 test('normalizeInstagramImageBuffer resizes an already-valid-ratio landscape whose width exceeds the cap, no padding', async () => {

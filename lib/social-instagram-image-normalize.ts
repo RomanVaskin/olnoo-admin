@@ -7,14 +7,22 @@ import { Jimp } from 'jimp'
 // production to fail to publish rather than being scaled down server-side, so this handles the
 // max-width side itself).
 //
-// Never crops: an out-of-range image is scaled down as a whole (proportionally, no distortion) to
-// fit entirely inside a white canvas at the nearer valid ratio edge, then centered — the same
-// "contain" behavior as CSS object-fit: contain, not object-fit: cover. Losing part of the user's
-// photo to an automatic crop was the wrong UX; letterboxing with white keeps the whole frame.
+// Never crops the user's own frame: an out-of-range image is scaled down as a whole
+// (proportionally, no distortion) to fit entirely inside a canvas at the nearer valid ratio edge,
+// then centered — the same "contain" behavior as CSS object-fit: contain, not object-fit: cover.
+// Losing part of the user's photo to an automatic crop was the wrong UX. The canvas itself is not
+// a flat color: it's a blurred, cropped-to-cover copy of the same image (cover crop is fine there —
+// it's purely decorative background, never the user's primary frame), so there's no dead white/
+// black letterboxing.
 
 export const INSTAGRAM_FEED_MIN_RATIO = 4 / 5
 export const INSTAGRAM_FEED_MAX_RATIO = 1.91
 export const INSTAGRAM_FEED_MAX_WIDTH = 1440
+// Box-blur radius for the decorative background, as a fraction of the canvas's shorter side —
+// strong enough that the background reads as an abstract color wash, not a legible duplicate of
+// the foreground. Capped at the blur plugin's own maximum supported radius (256).
+const BACKGROUND_BLUR_RATIO = 0.08
+const BACKGROUND_BLUR_MAX_RADIUS = 100
 
 export function isInstagramFeedRatioAllowed(width: number, height: number): boolean {
   if (width <= 0 || height <= 0) return false
@@ -35,8 +43,8 @@ export function computeInstagramFeedResize(width: number, height: number): { w: 
 }
 
 export type ContainLayout = {
-  /** Final white-background canvas size — already <= INSTAGRAM_FEED_MAX_WIDTH wide and at the
-   * nearer valid ratio edge (4:5 or 1.91:1). */
+  /** Final canvas size (the blurred background fills exactly this) — already
+   * <= INSTAGRAM_FEED_MAX_WIDTH wide and at the nearer valid ratio edge (4:5 or 1.91:1). */
   canvasWidth: number
   canvasHeight: number
   /** The (possibly proportionally downscaled, never upscaled, never cropped) size to draw the
@@ -100,14 +108,16 @@ export function computeInstagramFeedContain(width: number, height: number): Cont
 }
 
 /**
- * Decodes a JPEG buffer and makes it safe to publish to Instagram Feed without ever cropping any
- * of it out:
+ * Decodes a JPEG buffer and makes it safe to publish to Instagram Feed without ever cropping the
+ * user's own frame out:
  * - if the aspect ratio is already valid (4:5–1.91:1), the whole frame is kept; only a
  *   proportional resize is applied if the width still exceeds 1440px (computeInstagramFeedResize);
  * - if the ratio is out of range, the whole image is proportionally scaled down (never distorted,
- *   never upscaled) to fit entirely inside a white canvas at the nearer valid ratio edge, capped
- *   at 1440px wide, and centered — the missing space is filled with white
- *   (computeInstagramFeedContain).
+ *   never upscaled) to fit entirely inside a canvas at the nearer valid ratio edge, capped at
+ *   1440px wide, and centered (computeInstagramFeedContain); the canvas behind it is a blurred,
+ *   cover-cropped copy of the same image, filling the full canvas, so there's no dead flat-color
+ *   letterboxing — cropping is fine for this copy since it's purely decorative background, never
+ *   the primary frame shown to the viewer.
  * An image needing neither step returns its original bytes completely unchanged — no re-encode, no
  * quality loss, no behavior change for the common case. Throws if the buffer isn't a decodable
  * image (the caller — the upload route — already checked the JPEG magic bytes first; this is the
@@ -119,12 +129,19 @@ export async function normalizeInstagramImageBuffer(buffer: Buffer): Promise<Buf
 
   const contain = computeInstagramFeedContain(image.width, image.height)
   if (contain) {
+    const background = image.clone()
+    background.cover({ w: contain.canvasWidth, h: contain.canvasHeight })
+    const blurRadius = Math.min(
+      BACKGROUND_BLUR_MAX_RADIUS,
+      Math.max(1, Math.round(Math.min(contain.canvasWidth, contain.canvasHeight) * BACKGROUND_BLUR_RATIO)),
+    )
+    background.blur(blurRadius)
+
     if (contain.imageWidth !== image.width || contain.imageHeight !== image.height) {
       image.resize({ w: contain.imageWidth, h: contain.imageHeight })
     }
-    const canvas = new Jimp({ width: contain.canvasWidth, height: contain.canvasHeight, color: 0xffffffff })
-    canvas.blit({ src: image, x: contain.x, y: contain.y })
-    return canvas.getBuffer('image/jpeg', { quality: 92 })
+    background.blit({ src: image, x: contain.x, y: contain.y })
+    return background.getBuffer('image/jpeg', { quality: 92 })
   }
 
   const resize = computeInstagramFeedResize(image.width, image.height)

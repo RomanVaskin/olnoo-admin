@@ -50,9 +50,10 @@ export async function POST(req: Request) {
 
   // Guarantees a valid Instagram Feed aspect ratio (4:5–1.91:1) before the file ever reaches
   // publishing — an already-valid image passes through byte-for-byte unchanged; an out-of-range
-  // one comes back letterboxed on white at the nearer valid ratio, with the entire original frame
-  // preserved (never cropped). Also doubles as a stricter decode check than the magic bytes above:
-  // a file that merely starts with FF D8 FF but isn't actually a valid JPEG fails here.
+  // one comes back at the nearer valid ratio on a blurred background built from the same image,
+  // with the entire original frame preserved (never cropped). Also doubles as a stricter decode
+  // check than the magic bytes above: a file that merely starts with FF D8 FF but isn't actually a
+  // valid JPEG fails here.
   let normalized: Buffer
   try {
     normalized = await normalizeInstagramImageBuffer(bytes)
