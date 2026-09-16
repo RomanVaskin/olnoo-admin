@@ -11,7 +11,18 @@ export async function resolveProjectId(slug: string | null): Promise<number | nu
 export type CreateLeadInput = {
   project: string | null
   name: string
-  email: string
+  email?: string
+  phone?: string
+  contact?: string
+  pageUrl?: string
+  pagePath?: string
+  referrer?: string
+  locale?: string
+  utmSource?: string
+  utmMedium?: string
+  utmCampaign?: string
+  utmContent?: string
+  utmTerm?: string
   company?: string
   service?: string
   message?: string
@@ -24,7 +35,11 @@ export type CreateLeadResult = { error: string; status: number } | { row: Record
 /** Shared insert used by both the Admin UI's create form and the authenticated inbound API. */
 export async function createLeadRecord(input: CreateLeadInput): Promise<CreateLeadResult> {
   if (!input.name.trim()) return { error: 'name is required', status: 400 }
-  if (!/^\S+@\S+\.\S+$/.test(input.email)) return { error: 'a valid email is required', status: 400 }
+  const email = (input.email ?? '').trim()
+  const phone = (input.phone ?? '').trim()
+  const contact = (input.contact ?? '').trim()
+  if (!email && !phone && !contact) return { error: 'email, phone or contact is required', status: 400 }
+  if (email && !/^\S+@\S+\.\S+$/.test(email)) return { error: 'a valid email is required', status: 400 }
 
   const projectId = await resolveProjectId(input.project)
   if (!projectId) return { error: 'a known project is required', status: 400 }
@@ -33,8 +48,11 @@ export async function createLeadRecord(input: CreateLeadInput): Promise<CreateLe
   const { rows } = await pool.query(
     `
     INSERT INTO leads (
-      id, project_id, name, company, email, service, message, source, status, notes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'New', $9)
+      id, project_id, name, company, email, service, message, source, status, notes,
+      phone, contact, landing_page, page_path, referrer, locale,
+      utm_source, utm_medium, utm_campaign, utm_content, utm_term
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'New', $9,
+      $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
     RETURNING *
     `,
     [
@@ -42,11 +60,22 @@ export async function createLeadRecord(input: CreateLeadInput): Promise<CreateLe
       projectId,
       input.name.trim(),
       (input.company ?? '').trim(),
-      input.email.trim(),
+      email,
       (input.service ?? '').trim(),
       input.message ?? '',
       normalizeSource(input.source),
       input.notes ?? '',
+      phone || null,
+      contact || null,
+      input.pageUrl ?? '',
+      input.pagePath ?? '',
+      input.referrer ?? '',
+      input.locale ?? '',
+      input.utmSource ?? '',
+      input.utmMedium ?? '',
+      input.utmCampaign ?? '',
+      input.utmContent ?? '',
+      input.utmTerm ?? '',
     ],
   )
   return { row: rows[0] }

@@ -28,6 +28,17 @@ export async function POST(req: Request) {
     project: typeof body.project === 'string' ? body.project : null,
     name: body.name,
     email: typeof body.email === 'string' ? body.email : '',
+    phone: typeof body.phone === 'string' ? body.phone : undefined,
+    contact: typeof body.contact === 'string' ? body.contact : undefined,
+    pageUrl: typeof body.pageUrl === 'string' ? body.pageUrl : undefined,
+    pagePath: typeof body.pagePath === 'string' ? body.pagePath : undefined,
+    referrer: typeof body.referrer === 'string' ? body.referrer : undefined,
+    locale: typeof body.locale === 'string' ? body.locale : undefined,
+    utmSource: tracking(body, 'utmSource', 'utm_source'),
+    utmMedium: tracking(body, 'utmMedium', 'utm_medium'),
+    utmCampaign: tracking(body, 'utmCampaign', 'utm_campaign'),
+    utmContent: tracking(body, 'utmContent', 'utm_content'),
+    utmTerm: tracking(body, 'utmTerm', 'utm_term'),
     company: typeof body.company === 'string' ? body.company : undefined,
     service: typeof body.service === 'string' ? body.service : undefined,
     message: typeof body.message === 'string' ? body.message : undefined,
@@ -36,4 +47,10 @@ export async function POST(req: Request) {
 
   if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status })
   return NextResponse.json(result.row, { status: 201 })
+}
+
+// Accept both the data-layer names and the public OLNOO form's URL-style names.
+function tracking(body: Record<string, unknown>, camel: string, snake: string): string | undefined {
+  if (typeof body[camel] === 'string') return body[camel]
+  return typeof body[snake] === 'string' ? body[snake] : undefined
 }

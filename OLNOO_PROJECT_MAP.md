@@ -217,3 +217,15 @@ Production path/systemd service on KZ are not confirmed — do not guess them; c
 - Do not assume SSH access to the KZ server exists.
 - Do not assume direct network access to production domains (`olnoo.com`, `admin.olnoo.com`) exists from the agent's own environment — it may not.
 - If access is missing for a step, give the user one minimal, ready-to-run command for that step — not a long diagnostic sequence.
+
+## Prepared change: Ranvio inbound contacts (not deployed)
+
+A backward-compatible patch is prepared for the existing `/api/leads/inbound`:
+name plus email OR phone OR contact; an email, when supplied, must remain valid.
+Existing email payloads and OLNOO's direct-Postgres flow are unchanged.
+`0010_leads_contact.sql` adds only nullable `phone` and `contact`; existing tracking
+columns from 0004/0006 are reused. The endpoint accepts camelCase and snake_case UTM
+keys, plus pageUrl, pagePath, referrer and locale. Apply the migration before enabling
+this code. No migration or production change has been executed by this preparation.
+Ranvio explicitly opts into inbound via its server-side proxy, with project `ranvio`
+(which must exist) and the existing server-only `OLNOO_CRM_API_KEY` authorization.
