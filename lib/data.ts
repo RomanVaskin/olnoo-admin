@@ -57,6 +57,7 @@ export type Lead = {
   name: string
   company: string
   email: string
+  phone: string
   service: string
   source: 'SEO' | 'Ads' | 'Telegram' | 'Direct' | 'Referral'
   landingPage: string
@@ -398,6 +399,7 @@ export const leads: Lead[] = [
     name: 'Иван Петров',
     company: 'ABC Group',
     email: 'ivan@example.com',
+    phone: '',
     service: 'AI Agents',
     source: 'SEO',
     landingPage: '/ru/services/ai-agents',
@@ -421,6 +423,7 @@ export const leads: Lead[] = [
     name: 'Мария Орлова',
     company: 'Techline',
     email: 'maria@example.com',
+    phone: '',
     service: 'Business Automation',
     source: 'Direct',
     landingPage: '/ru/services/business-automation',
@@ -443,6 +446,7 @@ export const leads: Lead[] = [
     name: 'Дмитрий Соколов',
     company: 'Nordwind Freight',
     email: 'dmitry@example.com',
+    phone: '',
     service: 'Operational AI',
     source: 'Referral',
     landingPage: '/ru/cases/nordwind-freight',
@@ -466,6 +470,7 @@ export const leads: Lead[] = [
     name: 'Anna Weber',
     company: 'Meridian GmbH',
     email: 'anna@example.com',
+    phone: '',
     service: 'Market Entry',
     source: 'SEO',
     landingPage: '/en/services/market-entry',
@@ -490,6 +495,7 @@ export const leads: Lead[] = [
     name: 'Олег Кузнецов',
     company: 'RetailPro',
     email: 'oleg@example.com',
+    phone: '',
     service: 'CRM Automation',
     source: 'Ads',
     landingPage: '/ru/services/crm-automation',
@@ -509,6 +515,7 @@ export const leads: Lead[] = [
     name: 'Елена Смирнова',
     company: 'FinGroup',
     email: 'elena@example.com',
+    phone: '',
     service: 'Telegram Bots',
     source: 'Telegram',
     landingPage: '/ru/services/telegram-bots',
@@ -531,6 +538,7 @@ export const leads: Lead[] = [
     name: 'Павел Морозов',
     company: 'LogiTrans',
     email: 'pavel@example.com',
+    phone: '',
     service: 'Business Automation',
     source: 'SEO',
     landingPage: '/ru/services/business-automation',
@@ -550,6 +558,7 @@ export const leads: Lead[] = [
     name: 'Sofia Rossi',
     company: 'Aura Estate',
     email: 'sofia@example.com',
+    phone: '',
     service: 'AI Agents',
     source: 'Direct',
     landingPage: '/ru/services/ai-agents',

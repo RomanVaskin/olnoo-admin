@@ -89,6 +89,7 @@ export const ru: Messages = {
     rows: 'Строк',
   },
   field: {
+    phone: 'Телефон',
     email: 'Email',
     company: 'Компания',
     service: 'Услуга',

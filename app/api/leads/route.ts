@@ -9,7 +9,7 @@ export async function GET(req: Request) {
   const { rows } = await pool.query(
     `
     SELECT
-      l.id, l.project_id, l.name, l.company, l.email, l.service, l.message,
+      l.id, l.project_id, l.name, l.company, l.email, l.phone, l.service, l.message,
       l.source, l.landing_page, l.referrer, l.utm_source, l.utm_medium, l.utm_campaign,
       l.locale, l.status, l.notes, l.created_at, l.updated_at,
       p.slug AS project_slug, p.name AS project_name

@@ -7,6 +7,7 @@ export function fromApiLead(row: Record<string, unknown>): Lead {
     name: row.name as string,
     company: (row.company as string) ?? '',
     email: row.email as string,
+    phone: (row.phone as string) ?? '',
     service: (row.service as string) ?? '',
     source: row.source as Lead['source'],
     landingPage: (row.landing_page as string) ?? '',

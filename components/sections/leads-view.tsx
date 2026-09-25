@@ -86,6 +86,7 @@ function LeadDetail({
             <span className="label-mono text-muted-foreground">{t.leadsView.enquiry}</span>
             <dl className="flex flex-col gap-px border border-hairline bg-hairline">
               <Field label={t.field.email} value={lead.email} mono />
+              {lead.phone && <Field label={t.field.phone} value={lead.phone} href={`tel:${lead.phone}`} mono />}
               <Field label={t.field.company} value={lead.company} />
               <Field label={t.field.service} value={lead.service} />
             </dl>
@@ -249,12 +250,18 @@ function CreateField({
   )
 }
 
-function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function Field({ label, value, mono, href }: { label: string; value: string; mono?: boolean; href?: string }) {
   return (
     <div className="flex items-center justify-between gap-4 bg-card px-4 py-3">
       <dt className="label-mono shrink-0 text-muted-foreground">{label}</dt>
       <dd className={`truncate text-right text-sm text-foreground ${mono ? 'font-mono text-xs' : ''}`}>
-        {value}
+        {href ? (
+          <a href={href} className="hover:underline">
+            {value}
+          </a>
+        ) : (
+          value
+        )}
       </dd>
     </div>
   )

@@ -87,6 +87,7 @@ export const en = {
     rows: 'Rows',
   },
   field: {
+    phone: 'Phone',
     email: 'Email',
     company: 'Company',
     service: 'Service',
