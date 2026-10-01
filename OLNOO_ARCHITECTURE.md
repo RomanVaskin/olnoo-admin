@@ -21,6 +21,13 @@ Project is the main connecting object between modules. One Client can have sever
 - **Client work should be reusable** where practical, rather than one-off per client.
 - **A second repetition of a manual action is a candidate for automation** — but automation must not violate the "don't overcomplicate" principle.
 
+## CRM intake from messengers
+
+- **Record, never converse.** Messenger integrations (Telegram Business today) only turn a client's incoming message into a CRM lead. No auto-replies, no chatbot, no AI answers: the code calls no Bot API method that writes to a chat, and the bot is connected without reply rights. Managers answer clients in the messenger themselves.
+- **A click is not a lead.** A site click on a Telegram/MAX/phone link is a contact intent and stays an analytics micro-conversion (Metrika); a lead is a message actually received or a form actually submitted.
+- **One open lead per person per channel.** Follow-up messages never create another lead while one is open; after Won/Lost a new message is a new enquiry.
+- **No invented attribution.** A messenger message carries no ad attribution, so such leads are `source=Direct` (the CRM's direct/unknown value) — never Ads/Yandex Direct without confirmed attribution.
+
 ## SEO
 
 - One search intent = one page. Do not create thin pages for synonyms.

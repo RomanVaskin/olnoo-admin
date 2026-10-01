@@ -49,7 +49,8 @@ Confirmed API routes (`olnoo-admin`):
 - `GET/POST /api/leads` — list (filtered by `?project=<slug>`) and create; used by the Admin UI itself.
 - `PATCH/DELETE /api/leads/[id]` — edit and delete.
 - `GET /api/projects`, `GET /api/clients`.
-- `POST /api/leads/inbound` exists (API-key-authenticated server-to-server intake) but is **not currently used** — superseded by the direct-Postgres write above after the key-based path proved unreliable in production. Left in place; do not build new integrations against it without re-confirming it's wanted.
+- `POST /api/leads/inbound` — API-key-authenticated (`OLNOO_CRM_API_KEY`) server-to-server intake. **In use by DriveSet** (`driveset.ru` `/api/lead` proxy, `project=driveset`, phone-only leads). `olnoo.com` itself does not use it — it writes directly to Postgres (above) after the key-based path proved unreliable for it.
+- `POST /api/telegram/business-webhook` — Telegram Business intake (see "Telegram Business intake" below). Code is in place; **not yet connected to Telegram** (no bot token in production env, no webhook registered).
 
 Migration: `db/migrations/0004_crm_leads.sql` (added `leads` table + `projects.slug`). Applied to production.
 
@@ -229,3 +230,18 @@ keys, plus pageUrl, pagePath, referrer and locale. Apply the migration before en
 this code. No migration or production change has been executed by this preparation.
 Ranvio explicitly opts into inbound via its server-side proxy, with project `ranvio`
 (which must exist) and the existing server-only `OLNOO_CRM_API_KEY` authorization.
+
+## Telegram Business intake (implemented, not connected)
+
+Purpose: a client writes to a connected Telegram business account (first target: DriveSet) → one CRM lead; a manager replies in Telegram personally. No auto-replies, no chatbot — no code path calls `sendMessage` or any other chat-writing Bot API method.
+
+- Route: `POST /api/telegram/business-webhook` (`app/api/telegram/business-webhook/route.ts`). Pure update parsing: `lib/telegram-business-update.ts` (unit tests: `lib/telegram-business-update.test.ts`). I/O (owner check, dedup, insert): `lib/telegram-business.ts`. Lead insert reuses `createLeadRecord` (`lib/crm.ts`), which now optionally takes a transaction client.
+- Auth: header `X-Telegram-Bot-Api-Secret-Token` compared in constant time to `TELEGRAM_BUSINESS_WEBHOOK_SECRET` (this app has no auth layer, so the secret is the only gate). Wrong secret → 401; config missing → 503.
+- Accepted updates: `business_connection` (logged only) and `business_message`. Edits, deletions and any other update type are ignored. Ignored: messages from the owner (manager's own replies), bots, non-private chats.
+- Owner allow-list: the message's `business_connection_id` must resolve via the read-only `getBusinessConnection` (cached 10 min) to `TELEGRAM_BUSINESS_OWNER_USER_ID` with `is_enabled=true` — anyone can attach a public bot to their own business account, such connections are inert.
+- Lead fields: `project` = `TELEGRAM_BUSINESS_PROJECT`, `name` = Telegram first+last name (else `@username`, else `Telegram <id>`), `contact` = `tg:<telegram_user_id>` (dedup key; numeric id because usernames change), `message` = `Прямое обращение в Telegram (@username, id N).` + first message text/caption (media → `[фото]` etc., ≤2000 chars), `source` = `Direct`, `status` = `New`, email/phone empty. No migration: `leads.contact` from `0010_leads_contact.sql` (must be applied in production before enabling — check with `\d leads`). `contact` is not editable through `PATCH /api/leads/[id]`, so the key stays stable.
+- Dedup: in one transaction under `pg_advisory_xact_lock(hashtext('telegram-lead:<project_id>:tg:<id>'))`, an existing lead with that `contact` and status not in `Won`/`Lost` → nothing is created (follow-up messages and Telegram redeliveries); otherwise a new lead. After Won/Lost the next message creates a new lead.
+- Errors: transient DB/Bot API failure → 500 so Telegram redelivers (safe because of dedup); logged as `[tg-business]` in journald `olnoo-admin.service`, without message text.
+- Env (server-only, `/opt/olnoo/projects/olnoo-admin/.env.local`, none set yet): `TELEGRAM_BUSINESS_BOT_TOKEN` (a separate bot, not the Social `TELEGRAM_BOT_TOKEN`), `TELEGRAM_BUSINESS_WEBHOOK_SECRET`, `TELEGRAM_BUSINESS_OWNER_USER_ID` (numeric id of the business account), `TELEGRAM_BUSINESS_PROJECT` (e.g. `driveset`). `TELEGRAM_API_BASE_URL` (existing, non-secret) points tests at a mock Bot API.
+- Verified locally only (Postgres 16 + mock Bot API + `next dev`): wrong secret, owner/stranger connections, first message → lead, follow-ups/redelivery → same lead, 5 concurrent first messages → 1 lead, manager reply ignored, edits ignored, Won → next message creates a new lead; the only Bot API method called was `getBusinessConnection`. Not connected to real Telegram.
+- Enabling (manual, not done): BotFather bot with Business Mode → env → restart → `setWebhook` with `secret_token` and `allowed_updates=["business_connection","business_message"]` → connect the bot in the business account's Telegram Business → Chatbots settings without reply/manage-messages rights.

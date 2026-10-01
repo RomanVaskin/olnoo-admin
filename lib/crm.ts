@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { Pool, PoolClient } from 'pg'
 import { pool } from '@/lib/db'
 
 /** Resolves a URL-facing project slug (e.g. "olnoo") to the numeric projects.id, or null for "all"/unknown. */
@@ -32,8 +33,12 @@ export type CreateLeadInput = {
 
 export type CreateLeadResult = { error: string; status: number } | { row: Record<string, unknown> }
 
-/** Shared insert used by both the Admin UI's create form and the authenticated inbound API. */
-export async function createLeadRecord(input: CreateLeadInput): Promise<CreateLeadResult> {
+/**
+ * Shared insert used by the Admin UI's create form, the authenticated inbound API and the
+ * Telegram Business webhook. `db` defaults to the pool; pass a transaction client to run the
+ * insert inside a caller's transaction (the Telegram dedup lock).
+ */
+export async function createLeadRecord(input: CreateLeadInput, db: Pool | PoolClient = pool): Promise<CreateLeadResult> {
   if (!input.name.trim()) return { error: 'name is required', status: 400 }
   const email = (input.email ?? '').trim()
   const phone = (input.phone ?? '').trim()
@@ -45,7 +50,7 @@ export async function createLeadRecord(input: CreateLeadInput): Promise<CreateLe
   if (!projectId) return { error: 'a known project is required', status: 400 }
 
   const id = randomUUID()
-  const { rows } = await pool.query(
+  const { rows } = await db.query(
     `
     INSERT INTO leads (
       id, project_id, name, company, email, service, message, source, status, notes,
