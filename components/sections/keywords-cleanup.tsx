@@ -17,6 +17,7 @@ type Summary = {
   manual: number
   disputed: number
   aiDecided: number
+  geoAi: number
   pages: number
   seoContext: boolean
   usesCleanup: boolean
@@ -30,7 +31,7 @@ type JobView = {
   batchesDone: number
   batchesTotal: number
   error: string | null
-  result: { checked: number; downgraded: number; unresolved: number; heldNoContext: number } | null
+  result: { checked: number; downgraded: number; unresolved: number; heldNoContext: number; geoRejected: number } | null
 }
 type Row = {
   id: number
@@ -148,7 +149,7 @@ export function KeywordsCleanup() {
     if (projectId !== null) loadRows(projectId, filter)
   }, [filter])
 
-  async function start(resume = false, requeue?: 'disputed' | 'all') {
+  async function start(resume = false, requeue?: 'disputed' | 'all' | 'geo') {
     if (projectId === null) return
     setError(null)
     try {
@@ -264,6 +265,7 @@ export function KeywordsCleanup() {
               <span>{r.progress.doneChecked(n(job.result.checked))}</span>
               {job.result.downgraded > 0 && <span className="text-muted-foreground">{r.progress.doneDowngraded(n(job.result.downgraded))}</span>}
               {job.result.unresolved > 0 && <span className="text-muted-foreground">{r.progress.doneUnresolved(n(job.result.unresolved))}</span>}
+              {job.result.geoRejected > 0 && <span className="text-muted-foreground">{r.progress.doneGeoRejected(n(job.result.geoRejected))}</span>}
               {job.result.heldNoContext > 0 && <span className="text-destructive">{r.progress.doneHeld(n(job.result.heldNoContext))}</span>}
             </div>
           )}
@@ -292,6 +294,17 @@ export function KeywordsCleanup() {
                   className="label-mono text-destructive hover:text-foreground"
                 >
                   {r.recheckAll(n(summary.aiDecided))}
+                </button>
+              )}
+              {summary.geoAi > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(r.recheckGeoConfirm(n(summary.geoAi)))) void start(false, 'geo')
+                  }}
+                  className="label-mono text-blue hover:text-foreground"
+                >
+                  {r.recheckGeo(n(summary.geoAi))}
                 </button>
               )}
               {summary.disputed > 0 && (

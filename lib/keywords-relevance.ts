@@ -50,6 +50,8 @@ export type RelevanceSummary = {
   manual: number
   /** Keywords the AI (not a person) put in uncertain / geo_mismatch — what «Перепроверить спорные» re-sends. */
   disputed: number
+  /** Keywords the AI (not a person) put in geo_mismatch — what «Перепроверить другой регион» re-sends. */
+  geoAi: number
   /** Decisions made by the AI (classified and not manual) — what a full recheck re-sends. */
   aiDecided: number
   /** Pages of the project: with none (and no SEO context), the AI has no business context. */
@@ -71,14 +73,15 @@ export async function getRelevanceSummary(pool: Pool, projectId: number): Promis
             count(*) FILTER (WHERE k.relevance_status = 'irrelevant')::int AS irrelevant,
             count(*) FILTER (WHERE k.relevance_manual)::int AS manual,
             count(*) FILTER (WHERE k.relevance_status IN ('uncertain', 'geo_mismatch') AND NOT k.relevance_manual)::int AS disputed,
+            count(*) FILTER (WHERE k.relevance_status = 'geo_mismatch' AND NOT k.relevance_manual)::int AS geo_ai,
             count(*) FILTER (WHERE k.relevance_status IS NOT NULL AND NOT k.relevance_manual)::int AS ai_decided,
             (SELECT count(*)::int FROM pages WHERE project_id = $1) AS pages,
             (SELECT relevance_cleanup_at IS NOT NULL FROM projects WHERE id = $1) AS uses_cleanup
      FROM keywords k WHERE k.project_id = $1`,
     [projectId],
   )
-  const { ai_decided, uses_cleanup, ...r } = rows[0]
-  return { ...r, aiDecided: ai_decided, seoContext: seoContextKnowsBusiness(await getProjectSeoContext(pool, projectId)), usesCleanup: uses_cleanup === true }
+  const { ai_decided, geo_ai, uses_cleanup, ...r } = rows[0]
+  return { ...r, aiDecided: ai_decided, geoAi: geo_ai, seoContext: seoContextKnowsBusiness(await getProjectSeoContext(pool, projectId)), usesCleanup: uses_cleanup === true }
 }
 
 type Batch = {
@@ -102,6 +105,8 @@ export type RelevanceResult = {
   unresolved: number
   /** Rows kept as 'uncertain' instead of an exclusion because the project has no page data. */
   heldNoContext: number
+  /** geo_mismatch answers turned into 'uncertain': the place is inside the target region or no region was named. */
+  geoRejected: number
   llmCalls: number
 }
 
@@ -115,6 +120,9 @@ export type RelevanceJob = {
   llmCalls: number
   downgraded: number
   heldNoContext: number
+  geoRejected: number
+  /** The explicit target region of the SEO context ('' when none) — what a geo_mismatch is checked against. */
+  targetRegion: string
   /** What the AI can know about the project (explicit SEO context or page data); exclusions it cannot back are held. */
   contextCaps: ContextCaps
   /** The AI knows at least the business or the region. */
@@ -210,6 +218,8 @@ export async function createRelevanceJob(pool: Pool, projectId: number, opts: Re
     llmCalls: 0,
     downgraded: 0,
     heldNoContext: 0,
+    geoRejected: 0,
+    targetRegion: seoContext?.region ?? '',
     contextCaps: caps,
     hasContext: caps.business || caps.region,
     byStatus: emptyCounts(),
@@ -262,11 +272,13 @@ async function runBatch(pool: Pool, job: RelevanceJob, batch: Batch, llm: LlmCal
   const counts = emptyCounts()
   let downgraded = 0
   let held = 0
+  let geoRejected = 0
   for (const item of items) {
     const group = sent.get(item.keywordId)!
-    const d = decide(item.status, item.confidence, item.reason, job.contextCaps)
+    const d = decide(item.status, item.confidence, item.reason, job.contextCaps, { queryRegion: item.queryRegion, targetRegion: job.targetRegion })
     if (d.downgraded) downgraded += group.ids.length
     if (d.held) held += group.ids.length
+    if (d.geoRejected) geoRejected += group.ids.length
     counts[d.status] += group.ids.length
     for (const id of group.ids) {
       ids.push(id)
@@ -294,6 +306,7 @@ async function runBatch(pool: Pool, job: RelevanceJob, batch: Batch, llm: LlmCal
     job.processedKeywords += rowCount ?? 0
     job.downgraded += downgraded
     job.heldNoContext += held
+    job.geoRejected += geoRejected
     for (const s of RELEVANCE_STATUSES) job.byStatus[s] += counts[s]
   } catch (err) {
     await client.query('ROLLBACK')
@@ -372,6 +385,7 @@ export async function runRelevanceJob(pool: Pool, job: RelevanceJob, opts: Relev
       downgraded: job.downgraded,
       unresolved,
       heldNoContext: job.heldNoContext,
+      geoRejected: job.geoRejected,
       llmCalls: job.llmCalls,
     }
   } catch (err) {
@@ -417,6 +431,19 @@ export async function requeueDisputedKeywords(pool: Pool, projectId: number): Pr
 }
 
 /**
+ * Puts only the AI's geo_mismatch keywords back to «not checked» — the cheapest recheck after a
+ * geography rule changed. Manual decisions and every other status are untouched.
+ */
+export async function requeueGeoMismatchKeywords(pool: Pool, projectId: number): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE keywords SET relevance_status = NULL, relevance_confidence = NULL, relevance_reason = NULL, relevance_checked_at = NULL
+     WHERE project_id = $1 AND relevance_status = 'geo_mismatch' AND NOT relevance_manual`,
+    [projectId],
+  )
+  return rowCount ?? 0
+}
+
+/**
  * Full recheck: puts EVERY AI decision back to «not checked» (for when the project's SEO context
  * changed substantially). Manual decisions are never touched; keywords, frequencies, imports and
  * clusters are not touched either. Until the cleanup that follows has re-checked them the reset
@@ -444,12 +471,14 @@ export async function startRelevanceJob(
     reviewManual = false,
     requeueDisputed = false,
     requeueAll = false,
-  }: { resume?: boolean; reviewManual?: boolean; requeueDisputed?: boolean; requeueAll?: boolean } = {},
+    requeueGeo = false,
+  }: { resume?: boolean; reviewManual?: boolean; requeueDisputed?: boolean; requeueAll?: boolean; requeueGeo?: boolean } = {},
 ): Promise<RelevanceJob> {
   const existing = jobs.get(projectId)
   if (existing?.status === 'running') return existing
   if (!(resume && existing?.status === 'failed')) {
     if (requeueAll) await requeueAllAiDecisions(pool, projectId)
+    else if (requeueGeo) await requeueGeoMismatchKeywords(pool, projectId)
     else if (requeueDisputed) await requeueDisputedKeywords(pool, projectId)
   }
   const job = resume && existing?.status === 'failed' ? existing : await createRelevanceJob(pool, projectId, { reviewManual })

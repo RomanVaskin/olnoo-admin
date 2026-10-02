@@ -6,6 +6,7 @@ import {
   cleanReason,
   decide,
   parseRelevanceResponse,
+  regionsOverlap,
   planRelevanceBatches,
   contextCaps,
   contextPageCount,
@@ -58,8 +59,8 @@ test('AI answer validation: unknown ids/statuses/confidences and repeats are dro
     sent,
   )
   assert.deepEqual(items, [
-    { keywordId: 1, status: 'target', confidence: 92, reason: 'Основная услуга проекта' },
-    { keywordId: 2, status: 'irrelevant', confidence: 88, reason: 'x' },
+    { keywordId: 1, status: 'target', confidence: 92, reason: 'Основная услуга проекта' , queryRegion: '' },
+    { keywordId: 2, status: 'irrelevant', confidence: 88, reason: 'x' , queryRegion: '' },
   ])
   assert.equal(parseRelevanceResponse('not json', sent), null)
   assert.equal(parseRelevanceResponse('{"results":"nope"}', sent), null)
@@ -98,7 +99,7 @@ test('without page data an exclusion is never saved (held as uncertain); target/
 })
 
 test('the prompt makes a city a geo_mismatch only against a region the context names', () => {
-  assert.match(RELEVANCE_SYSTEM_PROMPT, /POSITIVELY shows/)
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /NEVER get "geo_mismatch"/)
   assert.match(RELEVANCE_SYSTEM_PROMPT, /NEVER a reason for "geo_mismatch"/)
   assert.equal(contextPageCount([{ url: 'https://x/', title: null, h1: null, description: null }, { url: 'https://x/a', title: 'T', h1: null, description: null }]), 1)
 })
@@ -141,4 +142,32 @@ test('project context for the AI carries the explicit SEO context, planned direc
   assert.match(text, /PLANNED[^\n]*\n- оклейка фургонов/)
   assert.match(text, /NOT OFFERED[^\n]*\n- пылесосы\n- полировальные машинки/)
   assert.match(buildProjectContext({ name: 'P', domain: 'd' }, []), /BUSINESS TYPE: \(not specified\)/)
+})
+
+test('regionsOverlap: oblast towns overlap the target region, other regions do not (no city lists)', () => {
+  const target = 'Москва + Московская область'
+  for (const place of ['Московская область', 'Москва', 'г. Москва', 'Московская обл.']) assert.equal(regionsOverlap(place, target), true, place)
+  for (const place of ['Приморский край', 'Ростовская область', 'Краснодарский край', '', 'Санкт-Петербург']) assert.equal(regionsOverlap(place, target), false, place)
+  assert.equal(regionsOverlap('Ленинградская область', 'Санкт-Петербург и Ленинградская область'), true)
+  assert.equal(regionsOverlap('Московская область', 'Ленинградская область'), false)
+})
+
+test('decide: with an explicit target region geo_mismatch needs a query_region outside it', () => {
+  const geo = (queryRegion: string) => ({ queryRegion, targetRegion: 'Москва + Московская область' })
+  const caps = { business: true, region: true }
+  const inside = decide('geo_mismatch', 95, 'Другой регион', caps, geo('Московская область'))
+  assert.deepEqual({ status: inside.status, geoRejected: inside.geoRejected }, { status: 'uncertain', geoRejected: true })
+  assert.equal(decide('geo_mismatch', 95, 'Другой регион', caps, geo('')).geoRejected, true)
+  const outside = decide('geo_mismatch', 95, 'Другой регион', caps, geo('Приморский край'))
+  assert.deepEqual({ status: outside.status, geoRejected: outside.geoRejected }, { status: 'geo_mismatch', geoRejected: false })
+  assert.equal(decide('target', 95, 'Основная услуга', caps, geo('')).status, 'target')
+  // Region known only from pages (no explicit target region): behaviour as before.
+  assert.equal(decide('geo_mismatch', 95, 'Другой регион', caps).status, 'geo_mismatch')
+})
+
+test('parseRelevanceResponse keeps query_region', () => {
+  const raw = JSON.stringify({ results: [{ keyword_id: 1, relevance_status: 'geo_mismatch', confidence: 90, reason: 'x', query_region: ' Приморский   край ' }, { keyword_id: 2, relevance_status: 'target', confidence: 90, reason: 'x' }] })
+  const items = parseRelevanceResponse(raw, new Set([1, 2]))!
+  assert.equal(items[0].queryRegion, 'Приморский край')
+  assert.equal(items[1].queryRegion, '')
 })

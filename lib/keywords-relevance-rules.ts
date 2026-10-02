@@ -40,6 +40,8 @@ export type RelevanceDecision = {
   downgraded: boolean
   /** Saved as 'uncertain' only because the project has no page data to judge against (see `decide`). */
   held: boolean
+  /** A geo_mismatch the AI could not back up (place inside the target region, or no region named) — saved as 'uncertain'. */
+  geoRejected: boolean
 }
 
 const DEFAULT_REASONS: Record<RelevanceStatus, string> = {
@@ -66,6 +68,34 @@ export function cleanReason(raw: unknown, status: RelevanceStatus): string {
 /** What the AI can actually know about the project: whether it knows the business, and whether it knows the region. */
 export type ContextCaps = { business: boolean; region: boolean }
 
+const GENERIC_REGION_WORDS = new Set([
+  'область', 'обл', 'край', 'республика', 'респ', 'округ', 'район', 'город', 'федеральный', 'автономный', 'и', 'г', 'в',
+  'region', 'oblast', 'state', 'county', 'province', 'district', 'city', 'and', 'the', 'of', 'metro', 'area',
+])
+
+/** Crude region fingerprint: 4-letter prefixes of the meaningful words («Москва» and «Московская область» both give «моск»). */
+function regionStems(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((w) => w.length >= 3 && !GENERIC_REGION_WORDS.has(w))
+      .map((w) => w.slice(0, 4)),
+  )
+}
+
+/**
+ * True when the region the AI says a place belongs to is (a part of) the target region, e.g. place
+ * region «Московская область» vs target «Москва и Московская область». Deliberately generous: a false
+ * "overlap" only turns a geo_mismatch into 'uncertain', never the other way round.
+ */
+export function regionsOverlap(placeRegion: string, targetRegion: string): boolean {
+  const place = regionStems(placeRegion)
+  for (const stem of regionStems(targetRegion)) if (place.has(stem)) return true
+  return false
+}
+
 const NO_BUSINESS_REASON = 'Нет данных о проекте (заполните SEO-контекст или загрузите страницы) — решите вручную'
 const NO_REGION_REASON = 'Регион проекта не задан (заполните SEO-контекст или загрузите страницы) — решите вручную'
 
@@ -75,16 +105,39 @@ const NO_REGION_REASON = 'Регион проекта не задан (запо�
  * needs a known business (SEO context or page data), `geo_mismatch` needs a known region. Otherwise
  * it becomes 'uncertain' whatever confidence the AI claims. A boolean `caps` means both at once.
  */
-export function decide(status: RelevanceStatus, confidence: number, rawReason: unknown, caps: ContextCaps | boolean = true): RelevanceDecision {
+export function decide(
+  status: RelevanceStatus,
+  confidence: number,
+  rawReason: unknown,
+  caps: ContextCaps | boolean = true,
+  geo?: { queryRegion: string; targetRegion: string },
+): RelevanceDecision {
   const known = typeof caps === 'boolean' ? { business: caps, region: caps } : caps
   if (status === 'irrelevant' && !known.business) {
-    return { status: 'uncertain', confidence, reason: NO_BUSINESS_REASON, downgraded: false, held: true }
+    return { status: 'uncertain', confidence, reason: NO_BUSINESS_REASON, downgraded: false, held: true, geoRejected: false }
   }
   if (status === 'geo_mismatch' && !known.region) {
-    return { status: 'uncertain', confidence, reason: NO_REGION_REASON, downgraded: false, held: true }
+    return { status: 'uncertain', confidence, reason: NO_REGION_REASON, downgraded: false, held: true, geoRejected: false }
+  }
+  // With an explicit target region a geo_mismatch must name the region the place belongs to, and that
+  // region must not be (part of) the target one — a settlement of the target oblast is never "another region".
+  if (status === 'geo_mismatch' && geo?.targetRegion) {
+    if (!geo.queryRegion) {
+      return { status: 'uncertain', confidence, reason: 'Не указано, к какому региону относится место из запроса — решите вручную', downgraded: false, held: false, geoRejected: true }
+    }
+    if (regionsOverlap(geo.queryRegion, geo.targetRegion)) {
+      return {
+        status: 'uncertain',
+        confidence,
+        reason: cleanReason(`Место из запроса относится к целевому региону (${geo.queryRegion}) — оцените по остальному смыслу запроса`, 'uncertain'),
+        downgraded: false,
+        held: false,
+        geoRejected: true,
+      }
+    }
   }
   const applied = applyConfidenceThreshold(status, confidence)
-  if (!applied.downgraded) return { status, confidence, reason: cleanReason(rawReason, status), downgraded: false, held: false }
+  if (!applied.downgraded) return { status, confidence, reason: cleanReason(rawReason, status), downgraded: false, held: false, geoRejected: false }
   const original = cleanReason(rawReason, status)
   return {
     status: 'uncertain',
@@ -92,10 +145,11 @@ export function decide(status: RelevanceStatus, confidence: number, rawReason: u
     reason: cleanReason(`Низкая уверенность AI (${confidence}%): ${original}`, 'uncertain'),
     downgraded: true,
     held: false,
+    geoRejected: false,
   }
 }
 
-export type AiRelevanceItem = { keywordId: number; status: RelevanceStatus; confidence: number; reason: string }
+export type AiRelevanceItem = { keywordId: number; status: RelevanceStatus; confidence: number; reason: string; queryRegion: string }
 
 function stripToJson(text: string): string {
   let t = text.trim()
@@ -134,7 +188,7 @@ export function parseRelevanceResponse(raw: string, sentIds: Set<number>): AiRel
     if (!Number.isInteger(id) || !sentIds.has(id) || seen.has(id)) continue
     if (!isRelevanceStatus(status) || !Number.isFinite(confidence)) continue
     seen.add(id)
-    items.push({ keywordId: id, status, confidence: Math.max(0, Math.min(100, Math.round(confidence))), reason: typeof e.reason === 'string' ? e.reason : '' })
+    items.push({ keywordId: id, status, confidence: Math.max(0, Math.min(100, Math.round(confidence))), reason: typeof e.reason === 'string' ? e.reason : '', queryRegion: typeof e.query_region === 'string' ? e.query_region.replace(/\s+/g, ' ').trim().slice(0, 80) : '' })
   }
   return items.length ? items : null
 }
@@ -147,18 +201,19 @@ relevance_status — exactly one of:
 - "target": the query is about a service/product the business offers (including a specific model, brand, car/object type, price, cost, "near me"-style commercial wording). Someone searching it could become a client.
 - "informational": about the business topic but the searcher wants to learn (how, which is better, what is, instructions, reviews/comparisons), not to order.
 - "uncertain": potentially relevant but you cannot tell from the context, or the business must decide — e.g. a segment the site does not clearly serve (commercial/special vehicles, taxi, fleets), buying the material/goods themselves when the site only provides a service, ambiguous wording.
-- "geo_mismatch": about the business's service but explicitly tied to a city/region that the context POSITIVELY shows the business does NOT serve — the context must name the business's own city/region and the query a different one. A city that IS the business's region is not a mismatch. If the context does not state where the business works, a city or region in a query is NEVER a reason for "geo_mismatch": classify the query as if the city were not there (usually "target"), or use "uncertain".
+- "geo_mismatch": about the business's service but tied to a place that lies OUTSIDE the target region. The TARGET REGION in the context may be a city, a metro area or a whole oblast/krai/republic/state: EVERY settlement inside it — the towns and cities of the oblast/krai/republic/state named there, not only the city that is named — is part of the target geography and must NEVER get "geo_mismatch". Use "geo_mismatch" only when you are confident that the place in the query lies outside the target region (another region or country), and then also fill "query_region" with the region/country that place belongs to. If you are not sure which region a place belongs to, or whether it is inside the target region, do NOT use "geo_mismatch": classify the query by its remaining intent (usually "target"), or use "uncertain". If the context does not state where the business works, a city or region in a query is NEVER a reason for "geo_mismatch": classify the query as if the place were not there, or use "uncertain".
 - "irrelevant": has nothing to do with this business (other topics, other industries, unrelated products).
 
 Rules:
-0. Use the SEO context literally: MAIN SERVICES and PLANNED / ADDITIONAL DIRECTIONS are part of the business (planned ones count even when no page exists) → "target" (or "informational" for how-to/choice queries); a query that is mainly about something in NOT OFFERED (buying that item, equipment, tools, materials for doing it yourself) → "irrelevant", with high confidence. The TARGET REGION and its cities are never a mismatch; a query without any city has no geographic problem.
+0. Use the SEO context literally: MAIN SERVICES and PLANNED / ADDITIONAL DIRECTIONS are part of the business (planned ones count even when no page exists) → "target" (or "informational" for how-to/choice queries); a query that is mainly about something in NOT OFFERED (buying that item, equipment, tools, materials for doing it yourself) → "irrelevant", with high confidence. The TARGET REGION, its cities and every settlement inside it are never a mismatch; a query without any place has no geographic problem.
 1. Do not be aggressive. Being a "similar" query from Wordstat does NOT make a query irrelevant, and a popular one is not automatically a target. When in doubt prefer "uncertain" over "irrelevant"/"geo_mismatch". Missing information about the business is never evidence against a query.
 2. Never change, correct or translate a query; you only return its keyword_id.
 3. "confidence" is an integer 0-100: how sure you are of THIS status.
 4. "reason" is ONE short sentence in RUSSIAN (at most 12 words) that a business owner can read, e.g. «Основная услуга проекта», «Указан регион вне региона проекта», «Запрос не относится к бизнесу проекта». No reasoning chains, no quotes of the query.
 5. Return a result for EVERY keyword_id you were given, each exactly once.
 6. Return ONLY strict JSON, no markdown, no commentary:
-{"results":[{"keyword_id":number,"relevance_status":"target"|"informational"|"uncertain"|"geo_mismatch"|"irrelevant","confidence":number,"reason":string}]}`
+{"results":[{"keyword_id":number,"relevance_status":"target"|"informational"|"uncertain"|"geo_mismatch"|"irrelevant","confidence":number,"reason":string,"query_region":string}]}
+   "query_region": only for "geo_mismatch" — the short official name of the region/country the place named in the query belongs to; an empty string for every other status.`
 
 export type ContextPage = { url: string; title: string | null; h1: string | null; description: string | null }
 
