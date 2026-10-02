@@ -3,6 +3,7 @@ import { callAiRouter, type AiRouterMessage } from './ai-router.ts'
 import {
   buildProjectContext,
   buildRelevanceUserPrompt,
+  contextPageCount,
   decide,
   isRelevanceStatus,
   parseRelevanceResponse,
@@ -43,6 +44,10 @@ export type RelevanceSummary = {
   geo_mismatch: number
   irrelevant: number
   manual: number
+  /** Keywords the AI (not a person) put in uncertain / geo_mismatch — what «Перепроверить спорные» re-sends. */
+  disputed: number
+  /** Pages of the project: with none, the AI has no business context. */
+  pages: number
   /** projects.relevance_cleanup_at is set: clustering only takes target/informational. */
   usesCleanup: boolean
 }
@@ -57,6 +62,8 @@ export async function getRelevanceSummary(pool: Pool, projectId: number): Promis
             count(*) FILTER (WHERE k.relevance_status = 'geo_mismatch')::int AS geo_mismatch,
             count(*) FILTER (WHERE k.relevance_status = 'irrelevant')::int AS irrelevant,
             count(*) FILTER (WHERE k.relevance_manual)::int AS manual,
+            count(*) FILTER (WHERE k.relevance_status IN ('uncertain', 'geo_mismatch') AND NOT k.relevance_manual)::int AS disputed,
+            (SELECT count(*)::int FROM pages WHERE project_id = $1) AS pages,
             (SELECT relevance_cleanup_at IS NOT NULL FROM projects WHERE id = $1) AS uses_cleanup
      FROM keywords k WHERE k.project_id = $1`,
     [projectId],
@@ -84,6 +91,8 @@ export type RelevanceResult = {
   downgraded: number
   /** Rows the AI never answered for; they stay unclassified and are picked up by the next run. */
   unresolved: number
+  /** Rows kept as 'uncertain' instead of an exclusion because the project has no page data. */
+  heldNoContext: number
   llmCalls: number
 }
 
@@ -96,6 +105,9 @@ export type RelevanceJob = {
   batches: Batch[]
   llmCalls: number
   downgraded: number
+  heldNoContext: number
+  /** The project has pages with data to judge against; without them exclusions are held back. */
+  hasContext: boolean
   byStatus: Record<RelevanceStatus, number>
   error: string | null
   result: RelevanceResult | null
@@ -184,6 +196,8 @@ export async function createRelevanceJob(pool: Pool, projectId: number, opts: Re
     batches: batches.map((groups, index) => ({ index, groups, status: 'pending', orphan: false })),
     llmCalls: 0,
     downgraded: 0,
+    heldNoContext: 0,
+    hasContext: contextPageCount(pageRows) > 0,
     byStatus: emptyCounts(),
     error: null,
     result: null,
@@ -233,10 +247,12 @@ async function runBatch(pool: Pool, job: RelevanceJob, batch: Batch, llm: LlmCal
   const reasons: string[] = []
   const counts = emptyCounts()
   let downgraded = 0
+  let held = 0
   for (const item of items) {
     const group = sent.get(item.keywordId)!
-    const d = decide(item.status, item.confidence, item.reason)
+    const d = decide(item.status, item.confidence, item.reason, job.hasContext)
     if (d.downgraded) downgraded += group.ids.length
+    if (d.held) held += group.ids.length
     counts[d.status] += group.ids.length
     for (const id of group.ids) {
       ids.push(id)
@@ -263,6 +279,7 @@ async function runBatch(pool: Pool, job: RelevanceJob, batch: Batch, llm: LlmCal
     await client.query('COMMIT')
     job.processedKeywords += rowCount ?? 0
     job.downgraded += downgraded
+    job.heldNoContext += held
     for (const s of RELEVANCE_STATUSES) job.byStatus[s] += counts[s]
   } catch (err) {
     await client.query('ROLLBACK')
@@ -340,6 +357,7 @@ export async function runRelevanceJob(pool: Pool, job: RelevanceJob, opts: Relev
       byStatus: job.byStatus,
       downgraded: job.downgraded,
       unresolved,
+      heldNoContext: job.heldNoContext,
       llmCalls: job.llmCalls,
     }
   } catch (err) {
@@ -369,14 +387,33 @@ export function getRelevanceJob(projectId: number): RelevanceJob | null {
   return jobs.get(projectId) ?? null
 }
 
-/** Starts a background run (or returns the running one). `resume` redoes only the failed batches of a failed run. */
+/**
+ * Puts the keywords the AI judged uncertain / geo_mismatch back to «not checked» so the next
+ * cleanup re-sends them (e.g. after the project got page data). A person's manual decisions are
+ * never touched; clustering input does not change (both statuses were excluded anyway).
+ * Returns how many keywords were reset.
+ */
+export async function requeueDisputedKeywords(pool: Pool, projectId: number): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE keywords SET relevance_status = NULL, relevance_confidence = NULL, relevance_reason = NULL, relevance_checked_at = NULL
+     WHERE project_id = $1 AND relevance_status IN ('uncertain', 'geo_mismatch') AND NOT relevance_manual`,
+    [projectId],
+  )
+  return rowCount ?? 0
+}
+
+/**
+ * Starts a background run (or returns the running one). `resume` redoes only the failed batches of
+ * a failed run; `requeueDisputed` first resets the AI's uncertain / geo_mismatch keywords (not manual ones).
+ */
 export async function startRelevanceJob(
   pool: Pool,
   projectId: number,
-  { resume = false, reviewManual = false }: { resume?: boolean; reviewManual?: boolean } = {},
+  { resume = false, reviewManual = false, requeueDisputed = false }: { resume?: boolean; reviewManual?: boolean; requeueDisputed?: boolean } = {},
 ): Promise<RelevanceJob> {
   const existing = jobs.get(projectId)
   if (existing?.status === 'running') return existing
+  if (requeueDisputed && !(resume && existing?.status === 'failed')) await requeueDisputedKeywords(pool, projectId)
   const job = resume && existing?.status === 'failed' ? existing : await createRelevanceJob(pool, projectId, { reviewManual })
   if (job !== existing) jobs.set(projectId, job)
   void runRelevanceJob(pool, job).catch((err) => {

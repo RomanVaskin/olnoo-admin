@@ -7,8 +7,10 @@ import {
   decide,
   parseRelevanceResponse,
   planRelevanceBatches,
+  contextPageCount,
   RELEVANCE_CONFIDENCE_THRESHOLDS,
   RELEVANCE_CONTEXT_PAGES,
+  RELEVANCE_SYSTEM_PROMPT,
 } from './keywords-relevance-rules.ts'
 
 test('confidence below the status threshold forces "uncertain"; at or above keeps the status; uncertain stays', () => {
@@ -78,4 +80,21 @@ test('project context is compact: capped page list, clipped fields, no page data
   assert.ok(ctx.length < 20000)
   assert.match(ctx, /PROJECT: Проект \(https:\/\/x\.ru\)/)
   assert.match(buildProjectContext({ name: 'P', domain: 'd' }, []), /no page data available/)
+})
+
+test('without page data an exclusion is never saved (held as uncertain); target/informational are unaffected', () => {
+  for (const status of ['geo_mismatch', 'irrelevant'] as const) {
+    const d = decide(status, 99, 'Запрос не относится к бизнесу проекта', false)
+    assert.deepEqual({ status: d.status, held: d.held, downgraded: d.downgraded }, { status: 'uncertain', held: true, downgraded: false })
+    assert.match(d.reason, /Нет данных о проекте/)
+    assert.equal(decide(status, 99, 'Причина', true).status, status, 'with context the exclusion stands')
+  }
+  assert.equal(decide('target', 90, 'Основная услуга проекта', false).status, 'target')
+  assert.equal(decide('informational', 90, 'Информационный запрос по теме проекта', false).status, 'informational')
+})
+
+test('the prompt makes a city a geo_mismatch only against a region the context names', () => {
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /POSITIVELY shows/)
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /NEVER a reason for "geo_mismatch"/)
+  assert.equal(contextPageCount([{ url: 'https://x/', title: null, h1: null, description: null }, { url: 'https://x/a', title: 'T', h1: null, description: null }]), 1)
 })

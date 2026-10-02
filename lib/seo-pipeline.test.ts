@@ -80,6 +80,7 @@ async function withProject(t: TestContext, queries: string[], fn: (pool: Pool, p
         `__test-${Date.now()}-${Math.random().toString(36).slice(2)}.example`,
       ])
     ).rows[0].id
+    await pool.query(`INSERT INTO pages (project_id, url, title, h1) VALUES ($1, 'https://x.example/okleyka', 'Оклейка авто в Москве', 'Оклейка авто')`, [projectId])
     await pool.query(`INSERT INTO keywords (project_id, query, frequency, region) SELECT $1, q, 100, '' FROM unnest($2::text[]) AS t(q)`, [projectId, queries])
     await fn(pool, projectId)
   } finally {

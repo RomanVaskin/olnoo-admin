@@ -808,7 +808,7 @@ type CleanupJobView = {
   processedKeywords: number
   batchesDone: number
   batchesTotal: number
-  result: { checked: number; downgraded: number; unresolved: number } | null
+  result: { checked: number; downgraded: number; unresolved: number; heldNoContext: number } | null
 }
 
 type PipelineView = {
@@ -880,6 +880,9 @@ function ClusteringProgress({ pipeline, onResume }: { pipeline: PipelineView; on
       {pipeline.status === 'done' && clustering?.result && (
         <>
           {cleanup?.result && <span className="text-muted-foreground">{t.relevance.progress.doneChecked(n(cleanup.result.checked))}</span>}
+          {(cleanup?.result?.heldNoContext ?? 0) > 0 && (
+            <span className="text-destructive">{t.relevance.progress.doneHeld(n(cleanup?.result?.heldNoContext ?? 0))}</span>
+          )}
           <span>{p.doneKeywords(n(clustering.result.keywords))}</span>
           <span>{p.doneClusters(n(clustering.result.clustersCreated))}</span>
           {clustering.result.addedToReviewed > 0 && <span>{p.doneAttached(n(clustering.result.addedToReviewed))}</span>}

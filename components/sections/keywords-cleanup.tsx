@@ -15,6 +15,8 @@ type Summary = {
   geo_mismatch: number
   irrelevant: number
   manual: number
+  disputed: number
+  pages: number
   usesCleanup: boolean
 }
 type JobView = {
@@ -24,7 +26,7 @@ type JobView = {
   batchesDone: number
   batchesTotal: number
   error: string | null
-  result: { checked: number; downgraded: number; unresolved: number } | null
+  result: { checked: number; downgraded: number; unresolved: number; heldNoContext: number } | null
 }
 type Row = {
   id: number
@@ -142,14 +144,14 @@ export function KeywordsCleanup() {
     if (projectId !== null) loadRows(projectId, filter)
   }, [filter])
 
-  async function start(resume = false) {
+  async function start(resume = false, requeue?: 'disputed') {
     if (projectId === null) return
     setError(null)
     try {
       const res = await fetch('/api/keywords/relevance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, resume }),
+        body: JSON.stringify({ projectId, resume, requeue }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || r.saveError)
@@ -233,6 +235,7 @@ export function KeywordsCleanup() {
             ))}
           </dl>
 
+          {summary.pages === 0 && summary.total > 0 && <p className="text-sm text-destructive">{r.noPagesHint}</p>}
           {!running && summary.usesCleanup && unclassified > 0 && <p className="text-sm">{r.newKeywords(n(unclassified))}</p>}
           {!running && unclassified === 0 && summary.total > 0 && <p className="text-sm text-muted-foreground">{r.allChecked}</p>}
           <p className="text-xs text-muted-foreground">{summary.usesCleanup ? r.usesCleanupHint : r.legacyHint}</p>
@@ -255,6 +258,7 @@ export function KeywordsCleanup() {
               <span>{r.progress.doneChecked(n(job.result.checked))}</span>
               {job.result.downgraded > 0 && <span className="text-muted-foreground">{r.progress.doneDowngraded(n(job.result.downgraded))}</span>}
               {job.result.unresolved > 0 && <span className="text-muted-foreground">{r.progress.doneUnresolved(n(job.result.unresolved))}</span>}
+              {job.result.heldNoContext > 0 && <span className="text-destructive">{r.progress.doneHeld(n(job.result.heldNoContext))}</span>}
             </div>
           )}
           {job?.status === 'failed' && (
@@ -273,6 +277,17 @@ export function KeywordsCleanup() {
 
           {!running && (excluded > 0 || summary.uncertain > 0) && (
             <div className="flex flex-wrap gap-4">
+              {summary.disputed > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(r.recheckConfirm(n(summary.disputed)))) void start(false, 'disputed')
+                  }}
+                  className="label-mono text-blue hover:text-foreground"
+                >
+                  {r.recheckDisputed(n(summary.disputed))}
+                </button>
+              )}
               {excluded > 0 && (
                 <button type="button" onClick={() => setFilter(summary.irrelevant > 0 ? 'irrelevant' : 'geo_mismatch')} className="label-mono text-blue hover:text-foreground">
                   {r.viewExcluded}

@@ -31,7 +31,14 @@ function judge(query: string): Answer {
   return { status: 'target', confidence: 92, reason: 'Основная услуга проекта' }
 }
 
-function fakeAi(opts: { failOn?: (queries: string[]) => boolean; malformedOn?: (queries: string[]) => boolean; omit?: (q: string) => boolean } = {}) {
+function fakeAi(
+  opts: {
+    failOn?: (queries: string[]) => boolean
+    malformedOn?: (queries: string[]) => boolean
+    omit?: (q: string) => boolean
+    judge?: (q: string, prompt: string) => Answer | undefined
+  } = {},
+) {
   const calls: { queries: string[]; prompt: string }[] = []
   const llm = async (messages: AiRouterMessage[]) => {
     assert.equal(messages[0].content, RELEVANCE_SYSTEM_PROMPT)
@@ -45,7 +52,7 @@ function fakeAi(opts: { failOn?: (queries: string[]) => boolean; malformedOn?: (
       results: items
         .filter((i) => !opts.omit?.(i.query))
         .map((i) => {
-          const a = judge(i.query)
+          const a = opts.judge?.(i.query, messages[1].content) ?? judge(i.query)
           return { keyword_id: i.id, relevance_status: a.status, confidence: a.confidence, reason: a.reason }
         }),
     })
@@ -53,7 +60,7 @@ function fakeAi(opts: { failOn?: (queries: string[]) => boolean; malformedOn?: (
   return { llm, calls }
 }
 
-async function withProject(t: TestContext, queries: string[], fn: (pool: Pool, projectId: number) => Promise<void>) {
+async function withProject(t: TestContext, queries: string[], fn: (pool: Pool, projectId: number) => Promise<void>, opts: { pages?: boolean } = {}) {
   const pool = new Pool({ connectionString: DATABASE_URL })
   try {
     await pool.query('SELECT relevance_status FROM keywords LIMIT 1')
@@ -70,7 +77,9 @@ async function withProject(t: TestContext, queries: string[], fn: (pool: Pool, p
         `__test-${Date.now()}-${Math.random().toString(36).slice(2)}.example`,
       ])
     ).rows[0].id
-    await pool.query(`INSERT INTO pages (project_id, url, title, h1) VALUES ($1, 'https://x.example/okleyka', 'Оклейка авто в Москве', 'Оклейка авто')`, [projectId])
+    if (opts.pages !== false) {
+      await pool.query(`INSERT INTO pages (project_id, url, title, h1) VALUES ($1, 'https://x.example/okleyka', 'Оклейка авто в Москве', 'Оклейка авто')`, [projectId])
+    }
     if (queries.length) {
       await pool.query(
         `INSERT INTO keywords (project_id, query, frequency, region) SELECT $1, q, 100, '' FROM unnest($2::text[]) AS t(q)`,
@@ -315,5 +324,56 @@ test('the list API filters by status and by "unclassified"', async (t) => {
     const uncertain = await listKeywordRelevance(pool, projectId, { status: 'uncertain', limit: 50, offset: 0 })
     assert.deepEqual(uncertain.rows.map((r) => r.query).sort(), ['оклейка авто сомнение', 'оклейка авто такси'])
     assert.equal((await listKeywordRelevance(pool, projectId, { limit: 4, offset: 0 })).rows.length, 4)
+  })
+})
+
+test('a project with no pages: exclusions are held as uncertain, nothing is excluded blind', async (t) => {
+  await withProject(
+    t,
+    ['оклейка авто москва', 'защита ip68', 'оклейка авто цена'],
+    async (pool, projectId) => {
+      // The AI blindly says "other region" for Moscow and "irrelevant" for junk, with high confidence.
+      const ai = fakeAi({ judge: (q) => (q.includes('москва') ? { status: 'geo_mismatch', confidence: 90, reason: 'Указан город вне региона проекта' } : undefined) })
+      const job = await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
+      assert.equal(job.hasContext, false)
+      assert.equal(job.result?.heldNoContext, 2)
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто москва')).s, 'uncertain')
+      assert.equal((await statusOf(pool, projectId, 'защита ip68')).s, 'uncertain')
+      assert.match((await statusOf(pool, projectId, 'защита ip68')).r, /Нет данных о проекте/)
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто цена')).s, 'target')
+      assert.equal((await getRelevanceSummary(pool, projectId)).pages, 0)
+    },
+    { pages: false },
+  )
+})
+
+test('recheck disputed: only the AI uncertain / geo_mismatch keywords go back to the AI; manual ones and other statuses stay', async (t) => {
+  await withProject(t, ['оклейка авто москва', 'химчистка салона москва', 'оклейка авто такси', 'защита ip68', 'оклейка авто цена', 'полировка фар москва'], async (pool, projectId) => {
+    // First (blind) run: Moscow queries wrongly marked as another region.
+    await cleanupKeywordsForProject(pool, projectId, {
+      llm: fakeAi({ judge: (q) => (q.includes('москва') ? { status: 'geo_mismatch', confidence: 90, reason: 'Указан город вне региона проекта' } : undefined) }).llm,
+    })
+    const idOf = async (q: string) => (await pool.query('SELECT id FROM keywords WHERE project_id = $1 AND query = $2', [projectId, q])).rows[0].id
+    // A person decided one of the disputed ones by hand: it must be left alone.
+    await setKeywordRelevance(pool, { projectId, keywordId: await idOf('полировка фар москва'), status: 'irrelevant' })
+    const before = await getRelevanceSummary(pool, projectId)
+    assert.deepEqual({ geo: before.geo_mismatch, uncertain: before.uncertain, disputed: before.disputed }, { geo: 2, uncertain: 1, disputed: 3 })
+
+    const { requeueDisputedKeywords } = await import('./keywords-relevance.ts')
+    assert.equal(await requeueDisputedKeywords(pool, projectId), 3)
+    assert.deepEqual(await statusOf(pool, projectId, 'оклейка авто москва'), { s: null, c: null, r: null, m: false })
+    assert.equal((await statusOf(pool, projectId, 'защита ip68')).s, 'irrelevant')
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто цена')).s, 'target')
+    assert.deepEqual(await statusOf(pool, projectId, 'полировка фар москва'), { s: 'irrelevant', c: null, r: 'Решение пользователя', m: true })
+
+    // Second run with context (the page says "в Москве"): the AI now accepts the Moscow queries.
+    const ai = fakeAi({ judge: (q, prompt) => (q.includes('москва') && prompt.includes('в Москве') ? { status: 'target', confidence: 92, reason: 'Основная услуга проекта' } : undefined) })
+    const job = await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
+    assert.deepEqual(ai.calls.flatMap((c) => c.queries).sort(), ['химчистка салона москва', 'оклейка авто москва', 'оклейка авто такси'].sort())
+    assert.equal(job.hasContext, true)
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто москва')).s, 'target')
+    assert.equal((await statusOf(pool, projectId, 'химчистка салона москва')).s, 'target')
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).s, 'uncertain', 'genuinely unclear stays unclear')
+    assert.equal((await statusOf(pool, projectId, 'полировка фар москва')).s, 'irrelevant', 'manual decision untouched')
   })
 })

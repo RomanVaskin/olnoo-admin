@@ -33,7 +33,14 @@ export const RELEVANCE_CONTEXT_FIELD_CHARS = 140
 export const RELEVANCE_REASON_MAX_CHARS = 160
 export const RELEVANCE_CONCURRENCY = 3
 
-export type RelevanceDecision = { status: RelevanceStatus; confidence: number; reason: string; downgraded: boolean }
+export type RelevanceDecision = {
+  status: RelevanceStatus
+  confidence: number
+  reason: string
+  downgraded: boolean
+  /** Saved as 'uncertain' only because the project has no page data to judge against (see `decide`). */
+  held: boolean
+}
 
 const DEFAULT_REASONS: Record<RelevanceStatus, string> = {
   target: 'Целевой запрос по услуге проекта',
@@ -56,16 +63,27 @@ export function cleanReason(raw: unknown, status: RelevanceStatus): string {
   return text.length > RELEVANCE_REASON_MAX_CHARS ? `${text.slice(0, RELEVANCE_REASON_MAX_CHARS - 1)}…` : text
 }
 
-/** Turns one validated AI answer into what is saved (threshold applied, reason cleaned). */
-export function decide(status: RelevanceStatus, confidence: number, rawReason: unknown): RelevanceDecision {
+const NO_CONTEXT_REASON = 'Нет данных о проекте (страницы не загружены) — решите вручную или загрузите страницы'
+
+/**
+ * Turns one validated AI answer into what is saved (threshold applied, reason cleaned).
+ * Without any page data (`hasContext` false) the AI only knows the project name and domain, so it
+ * cannot know the business region or services: an exclusion (geo_mismatch / irrelevant) is then
+ * never saved — it becomes 'uncertain' — whatever confidence the AI claims.
+ */
+export function decide(status: RelevanceStatus, confidence: number, rawReason: unknown, hasContext = true): RelevanceDecision {
+  if (!hasContext && (status === 'geo_mismatch' || status === 'irrelevant')) {
+    return { status: 'uncertain', confidence, reason: NO_CONTEXT_REASON, downgraded: false, held: true }
+  }
   const applied = applyConfidenceThreshold(status, confidence)
-  if (!applied.downgraded) return { status, confidence, reason: cleanReason(rawReason, status), downgraded: false }
+  if (!applied.downgraded) return { status, confidence, reason: cleanReason(rawReason, status), downgraded: false, held: false }
   const original = cleanReason(rawReason, status)
   return {
     status: 'uncertain',
     confidence,
     reason: cleanReason(`Низкая уверенность AI (${confidence}%): ${original}`, 'uncertain'),
     downgraded: true,
+    held: false,
   }
 }
 
@@ -121,11 +139,11 @@ relevance_status — exactly one of:
 - "target": the query is about a service/product the business offers (including a specific model, brand, car/object type, price, cost, "near me"-style commercial wording). Someone searching it could become a client.
 - "informational": about the business topic but the searcher wants to learn (how, which is better, what is, instructions, reviews/comparisons), not to order.
 - "uncertain": potentially relevant but you cannot tell from the context, or the business must decide — e.g. a segment the site does not clearly serve (commercial/special vehicles, taxi, fleets), buying the material/goods themselves when the site only provides a service, ambiguous wording.
-- "geo_mismatch": about the business's service but explicitly tied to a city/region the business evidently does NOT serve according to its context. A city that IS the business's region is not a mismatch. If the business region is not evident from the context, use "uncertain", not "geo_mismatch".
+- "geo_mismatch": about the business's service but explicitly tied to a city/region that the context POSITIVELY shows the business does NOT serve — the context must name the business's own city/region and the query a different one. A city that IS the business's region is not a mismatch. If the context does not state where the business works, a city or region in a query is NEVER a reason for "geo_mismatch": classify the query as if the city were not there (usually "target"), or use "uncertain".
 - "irrelevant": has nothing to do with this business (other topics, other industries, unrelated products).
 
 Rules:
-1. Do not be aggressive. Being a "similar" query from Wordstat does NOT make a query irrelevant, and a popular one is not automatically a target. When in doubt prefer "uncertain" over "irrelevant"/"geo_mismatch".
+1. Do not be aggressive. Being a "similar" query from Wordstat does NOT make a query irrelevant, and a popular one is not automatically a target. When in doubt prefer "uncertain" over "irrelevant"/"geo_mismatch". Missing information about the business is never evidence against a query.
 2. Never change, correct or translate a query; you only return its keyword_id.
 3. "confidence" is an integer 0-100: how sure you are of THIS status.
 4. "reason" is ONE short sentence in RUSSIAN (at most 12 words) that a business owner can read, e.g. «Основная услуга проекта», «Указан регион вне региона проекта», «Запрос не относится к бизнесу проекта». No reasoning chains, no quotes of the query.
@@ -164,6 +182,11 @@ export function buildProjectContext(project: { name: string; domain: string }, p
   return `PROJECT: ${project.name} (${project.domain})
 PAGES (${lines.length}${pages.length > lines.length ? ` of ${pages.length}` : ''}):
 ${lines.length ? lines.join('\n') : '(no page data available — judge from the project name and domain only; prefer "uncertain" when the business or its region is unclear)'}`
+}
+
+/** Pages that actually say something about the business — the AI's only source for services and region. */
+export function contextPageCount(pages: ContextPage[]): number {
+  return pages.filter((p) => p.title || p.h1 || p.description).length
 }
 
 export function buildRelevanceUserPrompt(context: string, items: { keywordId: number; query: string }[]): string {
