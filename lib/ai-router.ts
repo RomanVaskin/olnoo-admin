@@ -22,7 +22,14 @@ export class AiRouterError extends Error {}
 /** Calls the OLNOO AI Router's /v1/generate endpoint and returns the raw text content. */
 export async function callAiRouter(
   messages: AiRouterMessage[],
-  opts: { maxTokens?: number; temperature?: number } = {},
+  opts: {
+    maxTokens?: number
+    temperature?: number
+    /** Provider-neutral reasoning level; omitted = the Router's/provider's default (unchanged behaviour). */
+    reasoningMode?: 'off' | 'low' | 'medium' | 'high'
+    /** Label for the Router's cost log, e.g. "seo-relevance-cleanup". */
+    task?: string
+  } = {},
 ): Promise<string> {
   const baseUrl = process.env.AI_ROUTER_URL || 'http://127.0.0.1:3010'
   const token = process.env.OLNOO_ROUTER_TOKEN
@@ -42,7 +49,8 @@ export async function callAiRouter(
       maxTokens: opts.maxTokens ?? 12000,
       allowFallback: true,
       webSearch: false,
-      metadata: { application: 'olnoo-admin' },
+      ...(opts.reasoningMode ? { reasoningMode: opts.reasoningMode } : {}),
+      metadata: { application: 'olnoo-admin', ...(opts.task ? { task: opts.task } : {}) },
     }),
   }).catch((err) => {
     throw new AiRouterError(

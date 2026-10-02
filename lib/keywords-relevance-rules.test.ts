@@ -16,6 +16,7 @@ import {
   RELEVANCE_CONFIDENCE_THRESHOLDS,
   RELEVANCE_CONTEXT_PAGES,
   RELEVANCE_SYSTEM_PROMPT,
+  relevanceMaxOutputTokens,
 } from './keywords-relevance-rules.ts'
 
 test('confidence below the status threshold forces "uncertain"; at or above keeps the status; uncertain stays', () => {
@@ -170,4 +171,91 @@ test('parseRelevanceResponse keeps query_region', () => {
   const items = parseRelevanceResponse(raw, new Set([1, 2]))!
   assert.equal(items[0].queryRegion, 'Приморский край')
   assert.equal(items[1].queryRegion, '')
+})
+
+// ---- Compact answer format ----
+
+const SENT = new Set([1, 2, 3, 4, 5, 6])
+const compact = (rows: unknown[]) => JSON.stringify({ r: rows })
+
+test('compact rows are restored into the same internal classification objects', () => {
+  const items = parseRelevanceResponse(
+    compact([
+      [1, 't', 98],
+      [2, 'i', 91],
+      [3, 'u', 55, 'Нужно решение: сегмент не подтверждён'],
+      [4, 'x', 96, 'Запрос не относится к бизнесу проекта'],
+      [5, 'g', 97, 'Приморский край', 'Указан регион вне региона проекта'],
+    ]),
+    SENT,
+  )!
+  assert.deepEqual(items, [
+    { keywordId: 1, status: 'target', confidence: 98, reason: '', queryRegion: '' },
+    { keywordId: 2, status: 'informational', confidence: 91, reason: '', queryRegion: '' },
+    { keywordId: 3, status: 'uncertain', confidence: 55, reason: 'Нужно решение: сегмент не подтверждён', queryRegion: '' },
+    { keywordId: 4, status: 'irrelevant', confidence: 96, reason: 'Запрос не относится к бизнесу проекта', queryRegion: '' },
+    { keywordId: 5, status: 'geo_mismatch', confidence: 97, reason: 'Указан регион вне региона проекта', queryRegion: 'Приморский край' },
+  ])
+})
+
+test('target / informational without an AI reason get the server default reason; uncertain and geo reasons are kept', () => {
+  const [t, i, u, g] = parseRelevanceResponse(
+    compact([[1, 't', 90], [2, 'i', 80], [3, 'u', 60, 'Неясный интент запроса'], [4, 'g', 90, 'Ростовская область', 'Другой регион']]),
+    SENT,
+  )!
+  assert.equal(decide(t.status, t.confidence, t.reason).reason, 'Целевой запрос по услуге проекта')
+  assert.equal(decide(i.status, i.confidence, i.reason).reason, 'Информационный запрос по теме проекта')
+  assert.equal(decide(u.status, u.confidence, u.reason).reason, 'Неясный интент запроса')
+  const geo = decide(g.status, g.confidence, g.reason, true, { queryRegion: g.queryRegion, targetRegion: 'Москва' })
+  assert.deepEqual({ status: geo.status, reason: geo.reason, geoRejected: geo.geoRejected }, { status: 'geo_mismatch', reason: 'Другой регион', geoRejected: false })
+  assert.equal(g.queryRegion, 'Ростовская область')
+})
+
+test('a geo row without a reason gets one that names the region (no extra output tokens needed)', () => {
+  const [g] = parseRelevanceResponse(compact([[1, 'g', 90, 'Приморский край']]), SENT)!
+  assert.equal(g.reason, 'Указан другой регион: Приморский край')
+  assert.equal(g.queryRegion, 'Приморский край')
+})
+
+test('malformed or partial compact output never invents a classification: bad rows are dropped, unusable answers are null', () => {
+  const items = parseRelevanceResponse(
+    compact([
+      [1, 't', 98],
+      [2], // too short
+      [3, 'z', 90], // unknown status code
+      [4, 't', 'high'], // no numeric confidence
+      'oops',
+      [99, 't', 90], // id that was not sent
+      [1, 'x', 99, 'Повтор'], // repeated id: first one wins
+      [6, 'i', 70],
+    ]),
+    SENT,
+  )!
+  assert.deepEqual(items.map((x) => [x.keywordId, x.status]), [[1, 'target'], [6, 'informational']])
+  assert.equal(parseRelevanceResponse(compact([[2], 'oops']), SENT), null)
+  assert.equal(parseRelevanceResponse('{"r":[[1,"t",98],[2,"i"', SENT), null, 'a truncated answer is unusable, not half-saved')
+  assert.equal(parseRelevanceResponse('Конечно! Вот результат', SENT), null)
+  assert.equal(parseRelevanceResponse('{"r":"nope"}', SENT), null)
+})
+
+test('the previous verbose object answer is still accepted', () => {
+  const items = parseRelevanceResponse(
+    JSON.stringify({ results: [{ keyword_id: 1, relevance_status: 'geo_mismatch', confidence: 90, reason: 'Другой регион', query_region: 'Приморский край' }] }),
+    SENT,
+  )!
+  assert.deepEqual(items, [{ keywordId: 1, status: 'geo_mismatch', confidence: 90, reason: 'Другой регион', queryRegion: 'Приморский край' }])
+})
+
+test('the prompt asks for the compact form: no reason for target/informational, no query echo', () => {
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /\{"r":\[\[keyword_id,"t",confidence\]/)
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /"t" and "i": exactly \[keyword_id,code,confidence\] — NO reason/)
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /Do not repeat the query text/)
+  assert.doesNotMatch(RELEVANCE_SYSTEM_PROMPT, /"results"/)
+})
+
+test('output token limit is derived from the batch, doubled on retry and capped at the Router default', () => {
+  assert.equal(relevanceMaxOutputTokens(100), 5500)
+  assert.equal(relevanceMaxOutputTokens(1), 1045)
+  assert.equal(relevanceMaxOutputTokens(100, 1), 11000)
+  assert.equal(relevanceMaxOutputTokens(250, 1), 12000)
 })

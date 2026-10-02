@@ -2,6 +2,7 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { Pool } from 'pg'
 import type { AiRouterMessage } from './ai-router.ts'
+import type { LlmCallOptions } from './keywords-relevance.ts'
 import { importKeywordFiles } from './keywords-import.ts'
 import {
   cleanupKeywordsForProject,
@@ -39,25 +40,37 @@ function fakeAi(
     malformedOn?: (queries: string[]) => boolean
     omit?: (q: string) => boolean
     judge?: (q: string, prompt: string) => Answer | undefined
+    /** Answer in the old verbose object form instead of the compact rows the prompt asks for. */
+    legacy?: boolean
+    /** Replace the serialized answer (e.g. to break it). */
+    transform?: (rows: unknown[], call: number) => string | undefined
   } = {},
 ) {
-  const calls: { queries: string[]; prompt: string }[] = []
-  const llm = async (messages: AiRouterMessage[]) => {
+  const calls: { queries: string[]; prompt: string; opts: LlmCallOptions | undefined }[] = []
+  const llm = async (messages: AiRouterMessage[], callOpts?: LlmCallOptions) => {
     assert.equal(messages[0].content, RELEVANCE_SYSTEM_PROMPT)
     const lines = messages[1].content.split('\n').filter((l) => /^\d+\t/.test(l))
     const items = lines.map((l) => ({ id: Number(l.split('\t')[0]), query: l.split('\t')[1] }))
     const queries = items.map((i) => i.query)
-    calls.push({ queries, prompt: messages[1].content })
+    calls.push({ queries, prompt: messages[1].content, opts: callOpts })
     if (opts.failOn?.(queries)) throw new Error('AI Router request failed (502)')
     if (opts.malformedOn?.(queries)) return 'Конечно! Вот результат: ...'
-    return JSON.stringify({
-      results: items
-        .filter((i) => !opts.omit?.(i.query))
-        .map((i) => {
-          const a = opts.judge?.(i.query, messages[1].content) ?? judge(i.query)
-          return { keyword_id: i.id, relevance_status: a.status, confidence: a.confidence, reason: a.reason, query_region: a.queryRegion ?? '' }
-        }),
+    const answers = items
+      .filter((i) => !opts.omit?.(i.query))
+      .map((i) => ({ id: i.id, a: opts.judge?.(i.query, messages[1].content) ?? judge(i.query) }))
+    if (opts.legacy) {
+      return JSON.stringify({
+        results: answers.map(({ id, a }) => ({ keyword_id: id, relevance_status: a.status, confidence: a.confidence, reason: a.reason, query_region: a.queryRegion ?? '' })),
+      })
+    }
+    // What the prompt asks for: t/i without a reason, u/x with one, g with region and reason.
+    const rows = answers.map(({ id, a }) => {
+      const code = { target: 't', informational: 'i', uncertain: 'u', geo_mismatch: 'g', irrelevant: 'x' }[a.status]
+      if (a.status === 'target' || a.status === 'informational') return [id, code, a.confidence]
+      if (a.status === 'geo_mismatch') return [id, code, a.confidence, a.queryRegion ?? '', a.reason]
+      return [id, code, a.confidence, a.reason]
     })
+    return opts.transform?.(rows, calls.length) ?? JSON.stringify({ r: rows })
   }
   return { llm, calls }
 }
@@ -653,4 +666,69 @@ test('recheck geo: only AI geo_mismatch goes back to the AI; manual, uncertain, 
     },
     { pages: false },
   )
+})
+
+// ---- Compact answers, output limit, reasoning mode ----
+
+test('cleanup asks the Router for a batch-sized output limit and cheap reasoning, and saves default reasons for target/informational', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    const ai = fakeAi()
+    await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
+    assert.equal(ai.calls.length, 1)
+    assert.deepEqual(ai.calls[0].opts, { maxTokens: 6 * 45 + 1000, reasoningMode: 'off', task: 'seo-relevance-cleanup' })
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто цена')).r, 'Целевой запрос по услуге проекта')
+    assert.equal((await statusOf(pool, projectId, 'какой пленкой лучше оклеить автомобиль')).r, 'Информационный запрос по теме проекта')
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).r, 'Нужно решение: сегмент не подтверждён сайтом')
+    assert.equal((await statusOf(pool, projectId, 'защита ip68')).r, 'Запрос не относится к бизнесу проекта')
+  })
+})
+
+test('a geo_mismatch keeps its region and reason through the compact answer', async (t) => {
+  await withProject(
+    t,
+    ['оклейка авто владивосток'],
+    async (pool, projectId) => {
+      await saveProjectSeoContext(pool, projectId, { ...DETAILING, region: 'Москва + Московская область' })
+      const job = await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi().llm })
+      assert.equal(job.result?.geoRejected, 0)
+      const row = await statusOf(pool, projectId, 'оклейка авто владивосток')
+      assert.equal(row.s, 'geo_mismatch')
+      assert.equal(row.r, 'Указан регион вне региона проекта')
+    },
+    { pages: false },
+  )
+})
+
+test('a malformed compact row leaves only that keyword unclassified; nothing is guessed or lost', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    const badId = (await pool.query('SELECT id FROM keywords WHERE project_id = $1 AND query = $2', [projectId, 'оклейка авто такси'])).rows[0].id as number
+    // The model keeps mangling the same row, in the first call and in the second-chance call.
+    const ai = fakeAi({ transform: (rows) => JSON.stringify({ r: rows.map((r) => ((r as unknown[])[0] === badId ? [badId] : r)) }) })
+    const job = await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
+    assert.equal(job.result?.unresolved, 1)
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).s, null)
+    const rows = (await pool.query('SELECT query, relevance_status AS s FROM keywords WHERE project_id = $1', [projectId])).rows
+    assert.equal(rows.filter((r) => r.s === null).length, 1, 'exactly the malformed row stays NULL (not checked)')
+    assert.equal(rows.filter((r) => r.s !== null).length, 5)
+    assert.equal(await countKeywords(pool, projectId), 6)
+  })
+})
+
+test('an unusable answer is retried once with a doubled output limit', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    const ai = fakeAi({ transform: (rows, call) => (call === 1 ? '{"r":[[1,"t",9' : undefined) })
+    await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
+    assert.equal(ai.calls.length, 2)
+    assert.equal(ai.calls[0].opts?.maxTokens, 6 * 45 + 1000)
+    assert.equal(ai.calls[1].opts?.maxTokens, (6 * 45 + 1000) * 2)
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто цена')).s, 'target')
+  })
+})
+
+test('the previous verbose answer still classifies correctly', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi({ legacy: true }).llm })
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).s, 'uncertain')
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто цена')).s, 'target')
+  })
 })

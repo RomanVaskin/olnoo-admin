@@ -11,6 +11,7 @@ import {
   isRelevanceStatus,
   parseRelevanceResponse,
   planRelevanceBatches,
+  relevanceMaxOutputTokens,
   RELEVANCE_BATCH_SIZE,
   RELEVANCE_CONCURRENCY,
   RELEVANCE_STATUSES,
@@ -28,7 +29,8 @@ import { getProjectSeoContext } from './project-seo-context.ts'
 
 export class RelevanceError extends Error {}
 
-export type LlmCall = (messages: AiRouterMessage[]) => Promise<string>
+export type LlmCallOptions = { maxTokens?: number; reasoningMode?: 'off' | 'low' | 'medium' | 'high'; task?: string }
+export type LlmCall = (messages: AiRouterMessage[], opts?: LlmCallOptions) => Promise<string>
 
 export type RelevanceOptions = {
   /** Injected in tests; production uses the AI Router. */
@@ -233,12 +235,12 @@ export async function createRelevanceJob(pool: Pool, projectId: number, opts: Re
   }
 }
 
-async function withRetry<T>(job: RelevanceJob, attempt: () => Promise<T>): Promise<T> {
+async function withRetry<T>(job: RelevanceJob, attempt: (attempt: number) => Promise<T>): Promise<T> {
   let lastError: unknown
   for (let i = 0; i < 2; i++) {
     try {
       job.llmCalls += 1
-      return await attempt()
+      return await attempt(i)
     } catch (err) {
       lastError = err
     }
@@ -253,12 +255,16 @@ async function withRetry<T>(job: RelevanceJob, attempt: () => Promise<T>): Promi
  */
 async function runBatch(pool: Pool, job: RelevanceJob, batch: Batch, llm: LlmCall): Promise<void> {
   const sent = new Map(batch.groups.map((g) => [g.repId, g]))
-  const items = await withRetry(job, async () => {
+  const items = await withRetry(job, async (attempt) => {
     const parsed = parseRelevanceResponse(
-      await llm([
-        { role: 'system', content: RELEVANCE_SYSTEM_PROMPT },
-        { role: 'user', content: buildRelevanceUserPrompt(job.context, batch.groups.map((g) => ({ keywordId: g.repId, query: g.query }))) },
-      ]),
+      await llm(
+        [
+          { role: 'system', content: RELEVANCE_SYSTEM_PROMPT },
+          { role: 'user', content: buildRelevanceUserPrompt(job.context, batch.groups.map((g) => ({ keywordId: g.repId, query: g.query }))) },
+        ],
+        // Bulk classification needs no deep reasoning; the output limit is sized to the batch (retry: doubled).
+        { maxTokens: relevanceMaxOutputTokens(batch.groups.length, attempt), reasoningMode: 'off', task: 'seo-relevance-cleanup' },
+      ),
       new Set(sent.keys()),
     )
     if (!parsed) throw new RelevanceError('AI Router вернул ответ, который не удалось разобрать.')
@@ -353,7 +359,7 @@ async function stillUnclassified(pool: Pool, job: RelevanceJob): Promise<number[
  * again on the same job redoes only the failed batches.
  */
 export async function runRelevanceJob(pool: Pool, job: RelevanceJob, opts: RelevanceOptions = {}): Promise<RelevanceJob> {
-  const llm = opts.llm ?? ((messages) => callAiRouter(messages))
+  const llm = opts.llm ?? ((messages, o) => callAiRouter(messages, o))
   job.status = 'running'
   job.error = null
   try {
