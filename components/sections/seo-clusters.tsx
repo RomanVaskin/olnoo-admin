@@ -795,6 +795,7 @@ type ClusteringJobView = {
   batchesDone: number
   batchesTotal: number
   failedBatches: number
+  batchErrors: string[]
   mergePass: number
   mergeCallsDone: number
   error: string | null
@@ -802,6 +803,7 @@ type ClusteringJobView = {
 }
 
 type CleanupJobView = {
+  batchErrors: string[]
   totalKeywords: number
   processedKeywords: number
   batchesDone: number
@@ -896,6 +898,11 @@ function ClusteringProgress({ pipeline, onResume }: { pipeline: PipelineView; on
         <>
           <span className="text-destructive">{pipeline.error}</span>
           {failedBatches && <span className="font-mono text-xs text-muted-foreground">{failedBatches}</span>}
+          {(pipeline.failedIn === 'cleanup' ? cleanup?.batchErrors : clustering?.batchErrors)?.map((message) => (
+            <span key={message} className="break-words font-mono text-xs text-muted-foreground">
+              {message}
+            </span>
+          ))}
           {pipeline.resumable && (
             <button
               type="button"

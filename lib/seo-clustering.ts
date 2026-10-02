@@ -253,7 +253,13 @@ type BatchState = {
   error?: string
   /** Second-chance batch for keywords the AI left out of their first batch. */
   orphan: boolean
+  /** How many times this batch's keywords were halved after a failed call. */
+  splits: number
 }
+
+/** A failed batch is halved (at most this many times) so a call that is too big for the AI to answer gets smaller. */
+const MAX_BATCH_SPLITS = 2
+const MIN_SPLIT_SIZE = 40
 
 export type ClusteringJobStatus = 'running' | 'failed' | 'done'
 export type ClusteringPhase = 'batches' | 'merge' | 'saving' | 'done'
@@ -302,6 +308,8 @@ export type ClusteringJobView = {
   batchesDone: number
   batchesTotal: number
   failedBatches: number
+  /** Distinct reasons of the failed batches (short), so the screen can say why. */
+  batchErrors: string[]
   mergePass: number
   mergeCallsDone: number
   error: string | null
@@ -320,6 +328,7 @@ export function viewClusteringJob(job: ClusteringJob): ClusteringJobView {
     batchesDone: done.length,
     batchesTotal: job.batches.length,
     failedBatches: job.batches.filter((b) => b.status === 'failed').length,
+    batchErrors: [...new Set(job.batches.filter((b) => b.status === 'failed' && b.error).map((b) => b.error!.slice(0, 240)))].slice(0, 3),
     mergePass: job.mergePass,
     mergeCallsDone: job.mergeCallsDone,
     error: job.error,
@@ -405,7 +414,7 @@ export async function createClusteringJob(pool: Pool, projectId: number, opts: C
     totalKeywords: keywords.size,
     excludedByCleanup,
     toCluster: toCluster.length,
-    batches: batches.map((b, index) => ({ index, keywordIds: b.map((k) => k.id), status: 'pending', units: [], orphan: false })),
+    batches: batches.map((b, index) => ({ index, keywordIds: b.map((k) => k.id), status: 'pending', units: [], orphan: false, splits: 0 })),
     mergePass: 0,
     mergeCallsDone: 0,
     llmCalls: 0,
@@ -498,8 +507,28 @@ async function runPendingBatches(job: ClusteringJob, llm: LlmCall, concurrency: 
         await runBatch(job, batch, llm)
         batch.status = 'done'
       } catch (err) {
-        batch.status = 'failed'
-        batch.error = err instanceof Error ? err.message : String(err)
+        const message = err instanceof Error ? err.message : String(err)
+        if (batch.splits < MAX_BATCH_SPLITS && batch.keywordIds.length > MIN_SPLIT_SIZE) {
+          // A call that failed twice is most likely too big to answer (long output cut off or timed out):
+          // replace it by two halves, run those, and keep the finished batches untouched.
+          const half = Math.ceil(batch.keywordIds.length / 2)
+          let next = Math.max(...job.batches.map((b) => b.index)) + 1
+          const children: BatchState[] = [batch.keywordIds.slice(0, half), batch.keywordIds.slice(half)].map((keywordIds) => ({
+            index: next++,
+            keywordIds,
+            status: 'pending',
+            units: [],
+            orphan: batch.orphan,
+            splits: batch.splits + 1,
+          }))
+          job.batches.splice(job.batches.indexOf(batch), 1, ...children)
+          queue.unshift(...children)
+          console.warn(`[clustering] batch of ${batch.keywordIds.length} keywords failed (${message.slice(0, 200)}); retrying as ${children.map((c) => c.keywordIds.length).join(' + ')}`)
+        } else {
+          batch.status = 'failed'
+          batch.error = message
+          console.error(`[clustering] batch of ${batch.keywordIds.length} keywords failed: ${message.slice(0, 300)}`)
+        }
       }
       touch(job)
     }
@@ -675,7 +704,7 @@ export async function runClusteringJob(pool: Pool, job: ClusteringJob, opts: Clu
     if (missing.length && !job.batches.some((b) => b.orphan)) {
       const extra = planBatches(missing.map((id) => job.keywords.get(id)!), { batchSize: opts.batchSize ?? CLUSTER_BATCH_SIZE })
       for (const b of extra) {
-        job.batches.push({ index: job.batches.length, keywordIds: b.map((k) => k.id), status: 'pending', units: [], orphan: true })
+        job.batches.push({ index: job.batches.length, keywordIds: b.map((k) => k.id), status: 'pending', units: [], orphan: true, splits: 0 })
       }
       await runPendingBatches(job, llm, concurrency)
       if (job.batches.some((b) => b.status === 'failed')) {

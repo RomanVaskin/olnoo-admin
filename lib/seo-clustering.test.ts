@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { Pool } from 'pg'
 import type { AiRouterMessage } from './ai-router.ts'
 import { MERGE_SYSTEM_PROMPT, stem } from './seo-clustering-batch.ts'
-import { createClusteringJob, generateClustersForProject, runClusteringJob } from './seo-clustering.ts'
+import { createClusteringJob, generateClustersForProject, runClusteringJob, viewClusteringJob } from './seo-clustering.ts'
 
 // Batched clustering against a real Postgres with a fake AI Router; skipped without a DB.
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://olnoo_admin:CHANGE_ME@localhost:5432/olnoo_admin'
@@ -213,5 +213,33 @@ test('keywords the AI leaves out get a second batch, then join their intent or b
     )).rows[0].n
     assert.equal(polish, 1)
     await assertEveryKeywordOnce(pool, projectId)
+  })
+})
+
+test('a batch too big for the AI to answer is halved automatically and the run still finishes', async (t) => {
+  await withProject(t, dataset(60), async (pool, projectId) => {
+    // Fake AI: any call with more than 130 keywords fails (like an answer cut off at the output limit).
+    const { llm, calls } = fakeLlm({ failOn: (content) => promptKeywords(content).length > 130 })
+    const job = await generateClustersForProject(pool, projectId, { llm, batchSize: 250 })
+    assert.equal(job.status, 'done')
+    assert.ok(job.batches.length > 4, 'big batches were replaced by halves')
+    assert.ok(job.batches.every((b) => b.status === 'done' && b.keywordIds.length <= 130))
+    assert.ok(calls.filter((c) => c.kind === 'batch').length > job.batches.length, 'the failed attempts were made')
+    assert.equal((await savedClusters(pool, projectId)).length, SERVICES.length)
+    await assertEveryKeywordOnce(pool, projectId)
+  })
+})
+
+test('when even small batches fail the run stops with the reason visible, saved clusters untouched', async (t) => {
+  await withProject(t, dataset(20), async (pool, projectId) => {
+    await generateClustersForProject(pool, projectId, { llm: fakeLlm().llm, batchSize: 250 })
+    const before = await savedClusters(pool, projectId)
+    const { llm } = fakeLlm({ failOn: (content) => content.includes('тонировка') })
+    const job = await runClusteringJob(pool, await createClusteringJob(pool, projectId, { batchSize: 250 }), { llm, batchSize: 250 })
+    assert.equal(job.status, 'failed')
+    const view = viewClusteringJob(job)
+    assert.ok(view.failedBatches >= 1)
+    assert.match(view.batchErrors.join(' '), /AI Router request failed \(502\)/)
+    assert.deepEqual(await savedClusters(pool, projectId), before)
   })
 })

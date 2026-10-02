@@ -116,6 +116,7 @@ export type RelevanceJobView = {
   batchesDone: number
   batchesTotal: number
   failedBatches: number
+  batchErrors: string[]
   error: string | null
   result: RelevanceResult | null
 }
@@ -130,6 +131,7 @@ export function viewRelevanceJob(job: RelevanceJob): RelevanceJobView {
     batchesDone: job.batches.filter((b) => b.status === 'done').length,
     batchesTotal: job.batches.length,
     failedBatches: job.batches.filter((b) => b.status === 'failed').length,
+    batchErrors: [...new Set(job.batches.filter((b) => b.status === 'failed' && b.error).map((b) => b.error!.slice(0, 240)))].slice(0, 3),
     error: job.error,
     result: job.result,
   }
