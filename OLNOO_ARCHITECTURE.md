@@ -33,6 +33,7 @@ Project is the main connecting object between modules. One Client can have sever
 - One search intent = one page. Do not create thin pages for synonyms.
 - Public sites must have a sitemap.
 - Create/Improve use the full keyword cluster, and must include CTA + internal links + pass the Quality Gate.
+- AI clustering of any size runs in batches and then merges clusters across batches by search intent; one intent must never end up as several clusters because of batch boundaries. Human-reviewed clusters are kept on re-runs.
 - A bulk keyword import is one batch: one operation, one transaction, recorded with the exact keywords it brought. Correcting a mistaken import = «Удалить импорт» (deletes only what is proven to come from that import; anything ambiguous is shown and kept) and importing the files into the right project — no separate transfer feature.
 
 ## Change rule

@@ -1,5 +1,24 @@
-import type { Pool } from 'pg'
-import { callAiRouter } from './ai-router.ts'
+import type { Pool, PoolClient } from 'pg'
+import { callAiRouter, type AiRouterMessage } from './ai-router.ts'
+import {
+  chunk,
+  CLUSTER_BATCH_MAX_CHARS,
+  CLUSTER_BATCH_SIZE,
+  buildMergeUserPrompt,
+  MERGE_CHUNK_SIZE,
+  MERGE_MAX_PASSES,
+  MERGE_ORDERINGS,
+  MERGE_SYSTEM_PROMPT,
+  normalizeQuery,
+  parseMergeResponse,
+  planBatches,
+  promptLine,
+  stemSignature,
+  stripToJson,
+  UnitGroups,
+  type MergeGroup,
+  type MergeUnit,
+} from './seo-clustering-batch.ts'
 
 export class ClusteringError extends Error {}
 
@@ -50,12 +69,6 @@ export type SavedCluster = {
   keywords: { id: number; query: string; frequency: number | null }[]
 }
 
-// MVP: cluster the whole project in a single AI Router call — no batching/merge. The
-// Router rejects any message content over 32000 chars; this leaves a small safety margin
-// so projects near the edge (many keywords and/or many pages) fail the size check below
-// rather than hit the Router's 400 VALIDATION_ERROR.
-const MAX_PROMPT_CHARS = 90000
-
 // Below this confidence a cluster is surfaced for manual review instead of being
 // auto-labelled "Existing page" / "No page".
 const REVIEW_CONFIDENCE_THRESHOLD = 50
@@ -100,7 +113,7 @@ Output JSON shape, exactly:
 }`
 
 function formatKeywordsForPrompt(keywords: ClusterKeywordInput[]): string {
-  return keywords.map((k) => `- ${k.query} (frequency: ${k.frequency ?? 0})`).join('\n')
+  return keywords.map(promptLine).join('\n')
 }
 
 function formatPagesForPrompt(pages: ClusterPageInput[]): string {
@@ -124,14 +137,6 @@ EXISTING PAGES (${pages.length}):
 ${formatPagesForPrompt(pages)}
 
 Cluster the keywords above by search intent and return the JSON described in your instructions.`
-}
-
-function stripToJson(text: string): string {
-  let t = text.trim()
-  if (t.startsWith('```')) {
-    t = t.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '')
-  }
-  return t.trim()
 }
 
 function parseClusterResponse(raw: string): RawCluster[] {
@@ -198,10 +203,6 @@ function parseClusterResponse(raw: string): RawCluster[] {
   return result
 }
 
-function normalizeQuery(q: string): string {
-  return q.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
 function normalizePageUrl(url: string): string {
   try {
     const u = new URL(url)
@@ -222,122 +223,556 @@ function isNonSeoUtilityPage(pageUrl: string): boolean {
   return NON_SEO_PAGE_LAST_SEGMENTS.has(lastSegment)
 }
 
-/**
- * Drops hallucinated keywords/pages, recomputes frequency from real data, derives a UI status,
- * and enforces that every keyword id is claimed by at most one cluster — `usedKeywordIds` is
- * shared across all clusters in a run and mutated in place, so whichever cluster claims a
- * keyword first (AI response order) keeps it and every later duplicate is dropped.
- */
-function reconcileCluster(
-  raw: RawCluster,
-  keywordByQuery: Map<string, ClusterKeywordInput[]>,
-  pageByUrl: Map<string, ClusterPageInput>,
-  usedKeywordIds: Set<number>,
-): {
-  name: string
-  primaryKeywordId: number | null
-  intent: Intent
-  totalFrequency: number
-  recommendedPageId: number | null
+export type LlmCall = (messages: AiRouterMessage[]) => Promise<string>
+
+export type ClusteringOptions = {
+  /** Injected in tests; production uses the AI Router. */
+  llm?: LlmCall
+  batchSize?: number
+  mergeChunkSize?: number
+  /** Parallel AI Router calls. */
+  concurrency?: number
+}
+
+type Unit = MergeUnit & {
+  keywordIds: number[]
   confidence: number
   needsNewPage: boolean
+  excludeFromSeo: boolean
   reason: string
-  status: string
+  /** seo_clusters.id of a human-reviewed cluster (fixed units only). */
+  clusterId?: number
+}
+
+type BatchState = {
+  index: number
   keywordIds: number[]
-} | null {
-  // A single keyword TEXT can exist as several DB rows (one per Wordstat region) —
-  // every row sharing text the model placed in this cluster belongs in it — but a keyword id
-  // already claimed by an earlier cluster in this run is skipped, never assigned twice.
-  const matched: ClusterKeywordInput[] = []
-  const seen = new Set<number>()
-  for (const q of raw.keywords) {
-    for (const kw of keywordByQuery.get(normalizeQuery(q)) ?? []) {
-      if (!seen.has(kw.id) && !usedKeywordIds.has(kw.id)) {
-        seen.add(kw.id)
-        matched.push(kw)
-      }
+  status: 'pending' | 'running' | 'done' | 'failed'
+  units: Unit[]
+  error?: string
+  /** Second-chance batch for keywords the AI left out of their first batch. */
+  orphan: boolean
+}
+
+export type ClusteringJobStatus = 'running' | 'failed' | 'done'
+export type ClusteringPhase = 'batches' | 'merge' | 'saving' | 'done'
+
+export type ClusteringResult = {
+  keywords: number
+  processed: number
+  clustersCreated: number
+  addedToReviewed: number
+  needsReviewKeywords: number
+  llmCalls: number
+}
+
+/** A clustering run. Lives in server memory (single Node process): survives batch errors, not a restart. */
+export type ClusteringJob = {
+  id: string
+  projectId: number
+  status: ClusteringJobStatus
+  phase: ClusteringPhase
+  totalKeywords: number
+  toCluster: number
+  batches: BatchState[]
+  mergePass: number
+  mergeCallsDone: number
+  llmCalls: number
+  error: string | null
+  result: ClusteringResult | null
+  startedAt: string
+  updatedAt: string
+  // Snapshot taken at start; the run never touches keywords added later.
+  keywords: Map<number, ClusterKeywordInput>
+  pages: ClusterPageInput[]
+  fixedUnits: Unit[]
+}
+
+export type ClusteringJobView = {
+  id: string
+  projectId: number
+  status: ClusteringJobStatus
+  phase: ClusteringPhase
+  totalKeywords: number
+  processedKeywords: number
+  batchesDone: number
+  batchesTotal: number
+  failedBatches: number
+  mergePass: number
+  mergeCallsDone: number
+  error: string | null
+  result: ClusteringResult | null
+}
+
+export function viewClusteringJob(job: ClusteringJob): ClusteringJobView {
+  const done = job.batches.filter((b) => b.status === 'done')
+  return {
+    id: job.id,
+    projectId: job.projectId,
+    status: job.status,
+    phase: job.phase,
+    totalKeywords: job.totalKeywords,
+    processedKeywords: job.totalKeywords - job.toCluster + done.filter((b) => !b.orphan).reduce((n, b) => n + b.keywordIds.length, 0),
+    batchesDone: done.length,
+    batchesTotal: job.batches.length,
+    failedBatches: job.batches.filter((b) => b.status === 'failed').length,
+    mergePass: job.mergePass,
+    mergeCallsDone: job.mergeCallsDone,
+    error: job.error,
+    result: job.result,
+  }
+}
+
+function touch(job: ClusteringJob) {
+  job.updatedAt = new Date().toISOString()
+}
+
+/**
+ * Plans a run: keywords already in a human-reviewed cluster (review_status <> 'pending') keep
+ * their cluster and are not re-clustered; every other keyword is split into batches.
+ */
+export async function createClusteringJob(pool: Pool, projectId: number, opts: ClusteringOptions = {}): Promise<ClusteringJob> {
+  const { rows: keywordRows } = await pool.query(
+    `SELECT id, query, frequency FROM keywords WHERE project_id = $1 ORDER BY frequency DESC NULLS LAST, id ASC`,
+    [projectId],
+  )
+  if (keywordRows.length === 0) {
+    throw new ClusteringError('This project has no keywords to cluster yet — import Wordstat data first.')
+  }
+  const { rows: pageRows } = await pool.query(
+    `SELECT id, url, title, h1, description, locale FROM pages WHERE project_id = $1 ORDER BY url ASC`,
+    [projectId],
+  )
+  const { rows: reviewed } = await pool.query(
+    `SELECT sc.id, sc.name, sc.intent, sc.confidence, sc.reason, pk.query AS primary_keyword, rp.url AS page_url,
+            COALESCE(array_agg(sck.keyword_id) FILTER (WHERE sck.keyword_id IS NOT NULL), '{}') AS keyword_ids
+     FROM seo_clusters sc
+     LEFT JOIN seo_cluster_keywords sck ON sck.cluster_id = sc.id
+     LEFT JOIN keywords pk ON pk.id = sc.primary_keyword_id
+     LEFT JOIN pages rp ON rp.id = COALESCE(sc.confirmed_page_id, sc.recommended_page_id)
+     WHERE sc.project_id = $1 AND sc.review_status <> 'pending'
+     GROUP BY sc.id, pk.query, rp.url
+     ORDER BY sc.id`,
+    [projectId],
+  )
+
+  const keywords = new Map<number, ClusterKeywordInput>(keywordRows.map((r) => [r.id, { id: r.id, query: r.query, frequency: r.frequency }]))
+  const fixedIds = new Set<number>()
+  const fixedUnits: Unit[] = reviewed.map((r) => {
+    const ids = (r.keyword_ids as number[]).filter((id) => keywords.has(id))
+    ids.forEach((id) => fixedIds.add(id))
+    const kws = ids.map((id) => keywords.get(id)!)
+    return {
+      ...unitStats(kws),
+      uid: `r${r.id}`,
+      clusterId: r.id,
+      fixed: true,
+      name: r.name,
+      intent: (r.intent ?? 'mixed') as Unit['intent'],
+      primaryKeyword: r.primary_keyword ?? kws[0]?.query ?? r.name,
+      recommendedPageUrl: r.page_url ?? null,
+      keywordIds: ids,
+      confidence: r.confidence ?? 100,
+      needsNewPage: false,
+      excludeFromSeo: false,
+      reason: r.reason ?? '',
+    }
+  })
+
+  const toCluster = [...keywords.values()].filter((k) => !fixedIds.has(k.id))
+  const batches = planBatches(toCluster, { batchSize: opts.batchSize ?? CLUSTER_BATCH_SIZE, maxChars: CLUSTER_BATCH_MAX_CHARS })
+  const now = new Date().toISOString()
+  return {
+    id: `${projectId}-${Date.now().toString(36)}`,
+    projectId,
+    status: 'running',
+    phase: 'batches',
+    totalKeywords: keywords.size,
+    toCluster: toCluster.length,
+    batches: batches.map((b, index) => ({ index, keywordIds: b.map((k) => k.id), status: 'pending', units: [], orphan: false })),
+    mergePass: 0,
+    mergeCallsDone: 0,
+    llmCalls: 0,
+    error: null,
+    result: null,
+    startedAt: now,
+    updatedAt: now,
+    keywords,
+    pages: pageRows,
+    fixedUnits,
+  }
+}
+
+function unitStats(kws: ClusterKeywordInput[]): { totalFrequency: number; topKeywords: string[] } {
+  const sorted = [...kws].sort((a, b) => (b.frequency ?? 0) - (a.frequency ?? 0))
+  return {
+    totalFrequency: kws.reduce((sum, k) => sum + (k.frequency ?? 0), 0),
+    topKeywords: [...new Set(sorted.map((k) => k.query))].slice(0, 4),
+  }
+}
+
+async function withRetry<T>(job: ClusteringJob, attempt: () => Promise<T>): Promise<T> {
+  let lastError: unknown
+  for (let i = 0; i < 2; i++) {
+    try {
+      job.llmCalls += 1
+      return await attempt()
+    } catch (err) {
+      lastError = err
     }
   }
-  if (matched.length === 0) return null
-  for (const kw of matched) usedKeywordIds.add(kw.id)
+  throw lastError
+}
 
-  const totalFrequency = matched.reduce((sum, k) => sum + (k.frequency ?? 0), 0)
+/** One batch → units (clusters restricted to this batch's own keyword ids). */
+async function runBatch(job: ClusteringJob, batch: BatchState, llm: LlmCall): Promise<void> {
+  const kws = batch.keywordIds.map((id) => job.keywords.get(id)!)
+  const raw = await withRetry(job, async () =>
+    parseClusterResponse(
+      await llm([
+        { role: 'system', content: CLUSTERING_SYSTEM_PROMPT },
+        { role: 'user', content: buildClusteringUserPrompt(kws, job.pages) },
+      ]),
+    ),
+  )
+  const byQuery = new Map<string, ClusterKeywordInput[]>()
+  for (const k of kws) {
+    const key = normalizeQuery(k.query)
+    byQuery.set(key, [...(byQuery.get(key) ?? []), k])
+  }
+  const used = new Set<number>()
+  batch.units = []
+  raw.forEach((c, i) => {
+    const matched: ClusterKeywordInput[] = []
+    for (const q of c.keywords) {
+      for (const k of byQuery.get(normalizeQuery(q)) ?? []) {
+        if (!used.has(k.id)) {
+          used.add(k.id)
+          matched.push(k)
+        }
+      }
+    }
+    if (!matched.length) return
+    const primary = byQuery.get(normalizeQuery(c.primaryKeyword))?.some((k) => matched.includes(k)) ? c.primaryKeyword : null
+    batch.units.push({
+      ...unitStats(matched),
+      uid: `b${batch.index}c${i}`,
+      fixed: false,
+      name: c.name,
+      intent: c.intent,
+      primaryKeyword: primary ?? unitStats(matched).topKeywords[0],
+      recommendedPageUrl: c.recommendedPageUrl,
+      keywordIds: matched.map((k) => k.id),
+      confidence: c.confidence,
+      needsNewPage: c.needsNewPage,
+      excludeFromSeo: c.excludeFromSeo,
+      reason: c.reason,
+    })
+  })
+}
 
-  const primaryCandidates = keywordByQuery.get(normalizeQuery(raw.primaryKeyword))?.filter((k) => seen.has(k.id))
-  let primary =
-    primaryCandidates && primaryCandidates.length > 0
-      ? primaryCandidates.reduce((best, k) => ((k.frequency ?? 0) > (best.frequency ?? 0) ? k : best), primaryCandidates[0])
-      : matched.reduce((best, k) => ((k.frequency ?? 0) > (best.frequency ?? 0) ? k : best), matched[0])
+async function runPendingBatches(job: ClusteringJob, llm: LlmCall, concurrency: number): Promise<void> {
+  const queue = job.batches.filter((b) => b.status === 'pending' || b.status === 'failed')
+  const worker = async () => {
+    for (let batch = queue.shift(); batch; batch = queue.shift()) {
+      batch.status = 'running'
+      batch.error = undefined
+      touch(job)
+      try {
+        await runBatch(job, batch, llm)
+        batch.status = 'done'
+      } catch (err) {
+        batch.status = 'failed'
+        batch.error = err instanceof Error ? err.message : String(err)
+      }
+      touch(job)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker))
+}
 
-  let recommendedPage = raw.recommendedPageUrl ? pageByUrl.get(normalizePageUrl(raw.recommendedPageUrl)) ?? null : null
+function missingKeywordIds(job: ClusteringJob): number[] {
+  const assigned = new Set<number>()
+  for (const b of job.batches) for (const u of b.units) u.keywordIds.forEach((id) => assigned.add(id))
+  const fixed = new Set(job.fixedUnits.flatMap((u) => u.keywordIds))
+  return [...job.keywords.keys()].filter((id) => !assigned.has(id) && !fixed.has(id))
+}
+
+/** Merges per-batch clusters by search intent: deterministic pre-merge, then AI merge passes. */
+async function mergeUnits(
+  job: ClusteringJob,
+  units: Unit[],
+  llm: LlmCall,
+  chunkSize: number,
+  concurrency: number,
+): Promise<Map<string, Unit[]>> {
+  const byUid = new Map(units.map((u) => [u.uid, u]))
+  const groups = new UnitGroups(units)
+  const overrides = new Map<string, MergeGroup>()
+
+  // Same intent + same stem signature of the main keyword ("оклейки авто" / "авто оклейка") is
+  // the same cluster without asking the AI.
+  const bySignature = new Map<string, string>()
+  for (const u of units) {
+    const key = `${u.intent}|${stemSignature(u.primaryKeyword)}`
+    const first = bySignature.get(key)
+    if (first) groups.union(first, u.uid)
+    else bySignature.set(key, u.uid)
+  }
+
+  const pagesBlock = formatPagesForPrompt(job.pages)
+  const representative = (root: string, members: string[]): MergeUnit => {
+    const memberUnits = members.map((id) => byUid.get(id)!)
+    const fixed = memberUnits.find((u) => u.fixed)
+    const best = fixed ?? memberUnits.reduce((a, b) => (b.totalFrequency > a.totalFrequency ? b : a))
+    const override = fixed ? undefined : overrides.get(root)
+    const stats = unitStats(memberUnits.flatMap((u) => u.keywordIds.map((id) => job.keywords.get(id)!)))
+    return {
+      uid: root,
+      fixed: Boolean(fixed),
+      name: override?.name || best.name,
+      intent: override?.intent ?? best.intent,
+      primaryKeyword: override?.primaryKeyword || best.primaryKeyword,
+      recommendedPageUrl: override ? override.recommendedPageUrl : best.recommendedPageUrl,
+      ...stats,
+    }
+  }
+
+  // A single batch was already grouped by intent in one call; merging only matters across batches
+  // or when there are reviewed clusters to attach to.
+  const needsAi = job.batches.filter((b) => b.units.length).length > 1 || job.fixedUnits.length > 0
+  for (let pass = 0; needsAi && pass < MERGE_MAX_PASSES; pass++) {
+    const members = groups.members()
+    const reps = [...members.entries()].map(([root, ids]) => representative(root, ids))
+    if (reps.length < 2) break
+    const ordering = MERGE_ORDERINGS[pass % MERGE_ORDERINGS.length]
+    reps.sort((a, b) => (ordering(a) < ordering(b) ? -1 : ordering(a) > ordering(b) ? 1 : 0))
+    const chunks = chunk(reps, chunkSize).filter((c) => c.length > 1)
+    job.mergePass = pass + 1
+    touch(job)
+    let merged = 0
+    const askChunk = async (part: MergeUnit[]) => {
+      const known = new Set(part.map((r) => r.uid))
+      const result = await withRetry(job, async () => {
+        const parsed = parseMergeResponse(
+          await llm([
+            { role: 'system', content: MERGE_SYSTEM_PROMPT },
+            { role: 'user', content: buildMergeUserPrompt(part, pagesBlock) },
+          ]),
+          known,
+        )
+        if (!parsed) throw new ClusteringError('AI Router returned a merge response that is not valid JSON.')
+        return parsed
+      })
+      job.mergeCallsDone += 1
+      touch(job)
+      // Chunks of one pass hold disjoint clusters, so their answers can be applied in any order.
+      for (const g of result) {
+        let joined = false
+        for (const id of g.ids.slice(1)) if (groups.union(g.ids[0], id)) joined = true
+        if (!joined) continue
+        merged += 1
+        overrides.set(groups.find(g.ids[0]), g)
+      }
+    }
+    const queue = [...chunks]
+    await Promise.all(
+      Array.from({ length: Math.max(1, concurrency) }, async () => {
+        for (let part = queue.shift(); part; part = queue.shift()) await askChunk(part)
+      }),
+    )
+    // One chunk saw every cluster at once: nothing left to compare.
+    if (chunks.length <= 1 || (merged === 0 && pass > 0)) break
+  }
+
+  const out = new Map<string, Unit[]>()
+  for (const [root, ids] of groups.members()) {
+    const memberUnits = ids.map((id) => byUid.get(id)!)
+    const override = overrides.get(root)
+    if (override && !memberUnits.some((u) => u.fixed)) {
+      // Carry the merge answer on a synthetic leading unit; keyword ids stay on the members.
+      out.set(root, [{ ...memberUnits[0], ...override, uid: `${root}*`, keywordIds: [], fixed: false } as Unit, ...memberUnits])
+    } else {
+      out.set(root, memberUnits)
+    }
+  }
+  return out
+}
+
+type FinalCluster = NonNullable<ReturnType<typeof finalizeGroup>>
+
+function finalizeGroup(job: ClusteringJob, members: Unit[], pageByUrl: Map<string, ClusterPageInput>) {
+  const kwIds = [...new Set(members.flatMap((u) => u.keywordIds))]
+  if (!kwIds.length) return null
+  const kws = kwIds.map((id) => job.keywords.get(id)!)
+  const lead = members[0].uid.endsWith('*') ? members[0] : members.reduce((a, b) => (b.totalFrequency > a.totalFrequency ? b : a))
+  const totalFrequency = kws.reduce((sum, k) => sum + (k.frequency ?? 0), 0)
+  const primaryCandidates = kws.filter((k) => normalizeQuery(k.query) === normalizeQuery(lead.primaryKeyword))
+  const pool = primaryCandidates.length ? primaryCandidates : kws
+  const primary = pool.reduce((best, k) => ((k.frequency ?? 0) > (best.frequency ?? 0) ? k : best), pool[0])
+
+  let recommendedPage = lead.recommendedPageUrl ? pageByUrl.get(normalizePageUrl(lead.recommendedPageUrl)) ?? null : null
   if (recommendedPage && isNonSeoUtilityPage(recommendedPage.url)) recommendedPage = null
-
-  // Competitor/brand navigational queries are not an OLNOO SEO opportunity — never a page
-  // recommendation, never a "build a new page" task, regardless of what the AI set.
-  const needsNewPage = raw.excludeFromSeo ? false : recommendedPage ? false : true
-
-  const status = raw.excludeFromSeo
+  const needsNewPage = lead.excludeFromSeo ? false : !recommendedPage
+  const status = lead.excludeFromSeo
     ? 'Ignored'
-    : raw.confidence < REVIEW_CONFIDENCE_THRESHOLD
+    : lead.confidence < REVIEW_CONFIDENCE_THRESHOLD
       ? 'Needs review'
       : recommendedPage
         ? 'Existing page'
         : 'No page'
-
   return {
-    name: raw.name,
+    name: lead.name,
     primaryKeywordId: primary?.id ?? null,
-    intent: raw.intent,
+    intent: lead.intent,
     totalFrequency,
-    recommendedPageId: raw.excludeFromSeo ? null : (recommendedPage?.id ?? null),
-    confidence: raw.confidence,
+    recommendedPageId: lead.excludeFromSeo ? null : (recommendedPage?.id ?? null),
+    confidence: lead.confidence,
     needsNewPage,
-    reason: raw.reason,
+    reason: lead.reason,
     status,
-    keywordIds: matched.map((k) => k.id),
+    keywordIds: kwIds,
   }
 }
 
-async function persistClusters(
+/**
+ * Runs (or resumes) a job: pending/failed batches → keywords the AI left out get one more batch,
+ * then become single-keyword "Needs review" clusters → merge by intent → one save transaction.
+ * Existing clusters are replaced only at the very end; a failure before that changes nothing in the DB.
+ */
+export async function runClusteringJob(pool: Pool, job: ClusteringJob, opts: ClusteringOptions = {}): Promise<ClusteringJob> {
+  const llm = opts.llm ?? ((messages) => callAiRouter(messages))
+  const concurrency = opts.concurrency ?? 2
+  job.status = 'running'
+  job.error = null
+  try {
+    job.phase = 'batches'
+    touch(job)
+    await runPendingBatches(job, llm, concurrency)
+    if (job.batches.some((b) => b.status === 'failed')) {
+      throw new ClusteringError(
+        `Не удалось обработать ${job.batches.filter((b) => b.status === 'failed').length} из ${job.batches.length} batch. Готовые batch сохранены — нажмите «Продолжить».`,
+      )
+    }
+
+    let missing = missingKeywordIds(job)
+    if (missing.length && !job.batches.some((b) => b.orphan)) {
+      const extra = planBatches(missing.map((id) => job.keywords.get(id)!), { batchSize: opts.batchSize ?? CLUSTER_BATCH_SIZE })
+      for (const b of extra) {
+        job.batches.push({ index: job.batches.length, keywordIds: b.map((k) => k.id), status: 'pending', units: [], orphan: true })
+      }
+      await runPendingBatches(job, llm, concurrency)
+      if (job.batches.some((b) => b.status === 'failed')) {
+        throw new ClusteringError('Не удалось обработать дополнительный batch. Готовые batch сохранены — нажмите «Продолжить».')
+      }
+      missing = missingKeywordIds(job)
+    }
+
+    const units: Unit[] = [...job.fixedUnits, ...job.batches.flatMap((b) => b.units)]
+    // Never lose a keyword: whatever the AI did not place becomes its own cluster for manual review.
+    missing.forEach((id, i) => {
+      const k = job.keywords.get(id)!
+      units.push({
+        ...unitStats([k]),
+        uid: `m${i}`,
+        fixed: false,
+        name: k.query,
+        intent: 'mixed',
+        primaryKeyword: k.query,
+        recommendedPageUrl: null,
+        keywordIds: [id],
+        confidence: 0,
+        needsNewPage: true,
+        excludeFromSeo: false,
+        reason: 'AI не распределил этот запрос — проверьте вручную.',
+      })
+    })
+
+    job.phase = 'merge'
+    job.mergePass = 0
+    job.mergeCallsDone = 0
+    touch(job)
+    const grouped = await mergeUnits(job, units, llm, opts.mergeChunkSize ?? MERGE_CHUNK_SIZE, concurrency)
+
+    job.phase = 'saving'
+    touch(job)
+    const pageByUrl = new Map(job.pages.map((p) => [normalizePageUrl(p.url), p]))
+    const created: FinalCluster[] = []
+    const attachments: { clusterId: number; keywordIds: number[] }[] = []
+    for (const members of grouped.values()) {
+      const fixed = members.find((u) => u.fixed)
+      if (fixed) {
+        const added = members.filter((u) => !u.fixed).flatMap((u) => u.keywordIds)
+        if (added.length) attachments.push({ clusterId: fixed.clusterId!, keywordIds: added })
+        continue
+      }
+      const final = finalizeGroup(job, members, pageByUrl)
+      if (final) created.push(final)
+    }
+
+    // Invariant: every keyword that was not already in a reviewed cluster is saved exactly once.
+    const placed = [...created.flatMap((c) => c.keywordIds), ...attachments.flatMap((a) => a.keywordIds)]
+    if (placed.length !== job.toCluster || new Set(placed).size !== job.toCluster) {
+      throw new ClusteringError('Clustering validation failed: keyword counts do not reconcile with the project.')
+    }
+
+    await persistClusterRun(pool, job.projectId, created, attachments)
+    job.phase = 'done'
+    job.status = 'done'
+    job.result = {
+      keywords: job.totalKeywords,
+      processed: job.toCluster,
+      clustersCreated: created.length,
+      addedToReviewed: attachments.reduce((n, a) => n + a.keywordIds.length, 0),
+      needsReviewKeywords: created.filter((c) => c.status === 'Needs review').reduce((n, c) => n + c.keywordIds.length, 0),
+      llmCalls: job.llmCalls,
+    }
+  } catch (err) {
+    job.status = 'failed'
+    job.error = err instanceof Error ? err.message : String(err)
+  }
+  touch(job)
+  return job
+}
+
+/**
+ * Replaces the AI-generated (still pending review) clusters of the project with the new run in one
+ * transaction. Human-reviewed clusters stay as they are and only receive newly matched keywords.
+ */
+async function persistClusterRun(
   pool: Pool,
   projectId: number,
-  clusters: ReturnType<typeof reconcileCluster>[],
+  created: FinalCluster[],
+  attachments: { clusterId: number; keywordIds: number[] }[],
 ): Promise<void> {
-  const client = await pool.connect()
+  const client: PoolClient = await pool.connect()
   try {
     await client.query('BEGIN')
-    // Regenerating replaces the previous AI-generated set outright — the simplest way to
-    // guarantee repeated runs never accumulate duplicates. Manual keyword_pages mapping
-    // (SEO Map) is untouched.
-    await client.query('DELETE FROM seo_clusters WHERE project_id = $1', [projectId])
-
-    for (const c of clusters) {
-      if (!c) continue
+    await client.query(`DELETE FROM seo_clusters WHERE project_id = $1 AND review_status = 'pending'`, [projectId])
+    for (const c of created) {
       const { rows } = await client.query(
         `INSERT INTO seo_clusters
           (project_id, name, primary_keyword_id, intent, total_frequency, recommended_page_id, confidence, needs_new_page, reason, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id`,
-        [
-          projectId,
-          c.name,
-          c.primaryKeywordId,
-          c.intent,
-          c.totalFrequency,
-          c.recommendedPageId,
-          c.confidence,
-          c.needsNewPage,
-          c.reason,
-          c.status,
-        ],
+        [projectId, c.name, c.primaryKeywordId, c.intent, c.totalFrequency, c.recommendedPageId, c.confidence, c.needsNewPage, c.reason, c.status],
       )
-      const clusterId = rows[0].id
-      for (const keywordId of c.keywordIds) {
-        await client.query(
-          `INSERT INTO seo_cluster_keywords (cluster_id, keyword_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-          [clusterId, keywordId],
-        )
-      }
+      await client.query(
+        `INSERT INTO seo_cluster_keywords (cluster_id, keyword_id) SELECT $1, unnest($2::int[]) ON CONFLICT DO NOTHING`,
+        [rows[0].id, c.keywordIds],
+      )
+    }
+    for (const a of attachments) {
+      await client.query(
+        `INSERT INTO seo_cluster_keywords (cluster_id, keyword_id) SELECT $1, unnest($2::int[]) ON CONFLICT DO NOTHING`,
+        [a.clusterId, a.keywordIds],
+      )
+      await client.query(
+        `UPDATE seo_clusters SET total_frequency = (
+           SELECT COALESCE(sum(k.frequency), 0) FROM seo_cluster_keywords sck JOIN keywords k ON k.id = sck.keyword_id WHERE sck.cluster_id = $1
+         ), updated_at = now() WHERE id = $1`,
+        [a.clusterId],
+      )
     }
     await client.query('COMMIT')
   } catch (err) {
@@ -348,69 +783,42 @@ async function persistClusters(
   }
 }
 
-/** Fetches a project's keywords + pages, clusters them via the AI Router, validates the result, and saves it. */
-export async function generateClustersForProject(pool: Pool, projectId: number): Promise<void> {
-  const { rows: keywordRows } = await pool.query(
-    `SELECT id, query, frequency FROM keywords WHERE project_id = $1 ORDER BY frequency DESC NULLS LAST, id ASC`,
-    [projectId],
-  )
-  if (keywordRows.length === 0) {
-    throw new ClusteringError('This project has no keywords to cluster yet — import Wordstat data first.')
-  }
-
-  const { rows: pageRows } = await pool.query(
-    `SELECT id, url, title, h1, description, locale FROM pages WHERE project_id = $1 ORDER BY url ASC`,
-    [projectId],
-  )
-
-  const keywords: ClusterKeywordInput[] = keywordRows.map((r) => ({
-    id: r.id,
-    query: r.query,
-    frequency: r.frequency,
-  }))
-  const pages: ClusterPageInput[] = pageRows
-
-  const userPrompt = buildClusteringUserPrompt(keywords, pages)
-  if (userPrompt.length > MAX_PROMPT_CHARS) {
-    throw new ClusteringError('Too many keywords for clustering in one run')
-  }
-
-  const content = await callAiRouter([
-    { role: 'system', content: CLUSTERING_SYSTEM_PROMPT },
-    { role: 'user', content: userPrompt },
-  ])
-  const finalRaw = parseClusterResponse(content)
-
-  const keywordByQuery = new Map<string, ClusterKeywordInput[]>()
-  for (const k of keywords) {
-    const key = normalizeQuery(k.query)
-    const list = keywordByQuery.get(key) ?? []
-    list.push(k)
-    keywordByQuery.set(key, list)
-  }
-  const pageByUrl = new Map(pages.map((p) => [normalizePageUrl(p.url), p]))
-
-  // Shared across every reconcileCluster() call below so a keyword the AI placed in more than
-  // one cluster is kept only in the first (its best/most-confident placement per the prompt's
-  // response order) and dropped from every later duplicate — no keyword id is ever saved twice.
-  const usedKeywordIds = new Set<number>()
-  const reconciled = finalRaw
-    .map((c) => reconcileCluster(c, keywordByQuery, pageByUrl, usedKeywordIds))
-    .filter((c): c is NonNullable<typeof c> => c !== null)
-
-  if (reconciled.length === 0) {
-    throw new ClusteringError('AI Router did not return any usable clusters for this project.')
-  }
-
-  // Defensive invariant: by construction usedKeywordIds can never exceed the project's own
-  // keyword count, but this guards against a future edit silently breaking that guarantee.
-  const totalClusteredKeywords = reconciled.reduce((sum, c) => sum + c.keywordIds.length, 0)
-  if (totalClusteredKeywords !== usedKeywordIds.size || usedKeywordIds.size > keywords.length) {
-    throw new ClusteringError('Clustering validation failed: keyword counts do not reconcile with the project.')
-  }
-
-  await persistClusters(pool, projectId, reconciled)
+/** Synchronous variant (plan + run); throws on failure. */
+export async function generateClustersForProject(pool: Pool, projectId: number, opts: ClusteringOptions = {}): Promise<ClusteringJob> {
+  const job = await runClusteringJob(pool, await createClusteringJob(pool, projectId, opts), opts)
+  if (job.status !== 'done') throw new ClusteringError(job.error ?? 'Clustering failed.')
+  return job
 }
+
+// One job per project, kept in memory of the single OLNOO Admin process (globalThis survives dev HMR).
+const jobs: Map<number, ClusteringJob> = ((globalThis as { __olnooClusteringJobs?: Map<number, ClusteringJob> }).__olnooClusteringJobs ??=
+  new Map())
+
+export function getClusteringJob(projectId: number): ClusteringJob | null {
+  return jobs.get(projectId) ?? null
+}
+
+/**
+ * Starts a background run, or returns the one already running. `resume` continues a failed run
+ * (finished batches are reused, only failed batches and the merge are redone).
+ */
+export async function startClusteringJob(pool: Pool, projectId: number, { resume = false } = {}): Promise<ClusteringJob> {
+  const existing = jobs.get(projectId)
+  if (existing?.status === 'running') return existing
+  const job = resume && existing?.status === 'failed' ? existing : await createClusteringJob(pool, projectId)
+  if (job !== existing) {
+    jobs.set(projectId, job)
+  } else {
+    job.status = 'running'
+    job.error = null
+  }
+  void runClusteringJob(pool, job).catch((err) => {
+    job.status = 'failed'
+    job.error = err instanceof Error ? err.message : String(err)
+  })
+  return job
+}
+
 
 /** Loads the saved clusters for a project, with keyword and page details joined in for the UI. */
 export async function listClustersForProject(pool: Pool, projectId: number): Promise<SavedCluster[]> {

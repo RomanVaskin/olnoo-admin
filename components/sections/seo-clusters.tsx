@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
@@ -419,10 +419,39 @@ export function SeoClusters() {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [taskPanel, setTaskPanel] = useState<TaskPanelState | null>(null)
   const [searchOpenId, setSearchOpenId] = useState<number | null>(null)
+  const [job, setJob] = useState<ClusteringJobView | null>(null)
+  const pollTimer = useRef<number | null>(null)
 
   useEffect(() => {
     if (projects.length && projectId === null) setProjectId(projects[0].id)
   }, [projects, projectId])
+
+  function stopPolling() {
+    if (pollTimer.current !== null) window.clearTimeout(pollTimer.current)
+    pollTimer.current = null
+  }
+
+  /** Polls the background run until it finishes; reloads clusters on success. */
+  function pollJob(id: number) {
+    stopPolling()
+    fetch(`/api/seo-clusters/generate?projectId=${id}`)
+      .then((r) => r.json())
+      .then((data: { job: ClusteringJobView | null }) => {
+        setJob(data.job)
+        if (data.job?.status === 'running') {
+          setGenerating(true)
+          pollTimer.current = window.setTimeout(() => pollJob(id), 2000)
+          return
+        }
+        setGenerating(false)
+        if (data.job?.status === 'done') loadClusters(id)
+      })
+      .catch(() => {
+        pollTimer.current = window.setTimeout(() => pollJob(id), 4000)
+      })
+  }
+
+  useEffect(() => stopPolling, [])
 
   function loadClusters(id: number) {
     setLoading(true)
@@ -455,8 +484,12 @@ export function SeoClusters() {
     if (projectId === null) return
     setExpanded(null)
     setSearchOpenId(null)
+    setJob(null)
+    setGenerating(false)
     loadClusters(projectId)
     loadPages(projectId)
+    // Picks up a run that is still in progress (e.g. after a page reload).
+    pollJob(projectId)
   }, [projectId])
 
   async function handleReview(
@@ -527,7 +560,7 @@ export function SeoClusters() {
     }
   }
 
-  async function handleGenerate() {
+  async function handleGenerate(resume = false) {
     if (projectId === null) return
     setGenerating(true)
     setError(null)
@@ -535,17 +568,19 @@ export function SeoClusters() {
       const res = await fetch('/api/seo-clusters/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId }),
+        body: JSON.stringify({ projectId, resume }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || t.seoClusters.generateError)
-      setClusters(data.clusters)
+      setJob(data.job)
+      pollJob(projectId)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : t.seoClusters.generateError)
-    } finally {
       setGenerating(false)
     }
   }
+
+  const progress = job ? <ClusteringProgress job={job} onResume={() => void handleGenerate(true)} /> : null
 
   return (
     <div className="flex flex-col gap-10">
@@ -557,7 +592,7 @@ export function SeoClusters() {
           <div className="flex items-center gap-3">
             <ProjectPicker projects={projects} value={projectId} onChange={setProjectId} />
             <button
-              onClick={handleGenerate}
+              onClick={() => void handleGenerate()}
               disabled={generating || projectId === null}
               className="label-mono whitespace-nowrap border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -567,6 +602,7 @@ export function SeoClusters() {
         }
       />
 
+      {progress}
       {error && <p className="label-mono text-destructive">{error}</p>}
       {!loading && !error && clusters.length === 0 && (
         <p className="label-mono text-muted-foreground">{t.seoClusters.empty}</p>
@@ -747,6 +783,69 @@ export function SeoClusters() {
       )}
 
       {taskPanel && <TaskPanel panel={taskPanel} onClose={() => setTaskPanel(null)} />}
+    </div>
+  )
+}
+
+type ClusteringJobView = {
+  status: 'running' | 'failed' | 'done'
+  phase: 'batches' | 'merge' | 'saving' | 'done'
+  totalKeywords: number
+  processedKeywords: number
+  batchesDone: number
+  batchesTotal: number
+  failedBatches: number
+  mergePass: number
+  mergeCallsDone: number
+  error: string | null
+  result: { keywords: number; processed: number; clustersCreated: number; addedToReviewed: number; needsReviewKeywords: number } | null
+}
+
+/** Progress / result of the background clustering run. */
+function ClusteringProgress({ job, onResume }: { job: ClusteringJobView; onResume: () => void }) {
+  const { t, locale } = useI18n()
+  const p = t.seoClusters.progress
+  const n = (v: number) => v.toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')
+  const share = job.totalKeywords ? Math.round((job.processedKeywords / job.totalKeywords) * 100) : 0
+  return (
+    <div className="flex flex-col gap-2 border border-hairline bg-card px-5 py-4 text-sm">
+      <span className="label-mono text-muted-foreground">{t.seoClusters.generateButton}</span>
+      {job.status === 'running' && (
+        <>
+          <span>{p.processed(n(job.processedKeywords), n(job.totalKeywords))}</span>
+          <span className="font-mono text-xs text-muted-foreground">
+            {job.phase === 'batches'
+              ? p.batch(job.batchesDone, job.batchesTotal)
+              : job.phase === 'merge'
+                ? p.merge(job.mergePass, job.mergeCallsDone)
+                : p.saving}
+          </span>
+          <div className="h-1 w-full max-w-md bg-hairline">
+            <div className="h-1 bg-blue transition-all" style={{ width: `${job.phase === 'batches' ? share : 100}%` }} />
+          </div>
+        </>
+      )}
+      {job.status === 'done' && job.result && (
+        <>
+          <span>{p.doneKeywords(n(job.result.keywords))}</span>
+          <span>{p.doneClusters(n(job.result.clustersCreated))}</span>
+          {job.result.addedToReviewed > 0 && <span>{p.doneAttached(n(job.result.addedToReviewed))}</span>}
+          <span>{p.doneReview(n(job.result.needsReviewKeywords))}</span>
+        </>
+      )}
+      {job.status === 'failed' && (
+        <>
+          <span className="text-destructive">{job.error}</span>
+          <span className="font-mono text-xs text-muted-foreground">{p.batch(job.batchesDone, job.batchesTotal)}</span>
+          <button
+            type="button"
+            onClick={onResume}
+            className="label-mono self-start border border-foreground px-4 py-2 hover:bg-foreground hover:text-background"
+          >
+            {p.resume}
+          </button>
+        </>
+      )}
     </div>
   )
 }
