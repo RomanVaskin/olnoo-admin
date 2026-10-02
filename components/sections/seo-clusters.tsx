@@ -419,7 +419,7 @@ export function SeoClusters() {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [taskPanel, setTaskPanel] = useState<TaskPanelState | null>(null)
   const [searchOpenId, setSearchOpenId] = useState<number | null>(null)
-  const [job, setJob] = useState<ClusteringJobView | null>(null)
+  const [job, setJob] = useState<PipelineView | null>(null)
   const pollTimer = useRef<number | null>(null)
 
   useEffect(() => {
@@ -436,15 +436,15 @@ export function SeoClusters() {
     stopPolling()
     fetch(`/api/seo-clusters/generate?projectId=${id}`)
       .then((r) => r.json())
-      .then((data: { job: ClusteringJobView | null }) => {
-        setJob(data.job)
-        if (data.job?.status === 'running') {
+      .then((data: { pipeline: PipelineView | null }) => {
+        setJob(data.pipeline)
+        if (data.pipeline?.status === 'running') {
           setGenerating(true)
           pollTimer.current = window.setTimeout(() => pollJob(id), 2000)
           return
         }
         setGenerating(false)
-        if (data.job?.status === 'done') loadClusters(id)
+        if (data.pipeline?.status === 'done') loadClusters(id)
       })
       .catch(() => {
         pollTimer.current = window.setTimeout(() => pollJob(id), 4000)
@@ -572,7 +572,7 @@ export function SeoClusters() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || t.seoClusters.generateError)
-      setJob(data.job)
+      setJob(data.pipeline)
       pollJob(projectId)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : t.seoClusters.generateError)
@@ -580,7 +580,7 @@ export function SeoClusters() {
     }
   }
 
-  const progress = job ? <ClusteringProgress job={job} onResume={() => void handleGenerate(true)} /> : null
+  const progress = job ? <ClusteringProgress pipeline={job} onResume={() => void handleGenerate(true)} /> : null
 
   return (
     <div className="flex flex-col gap-10">
@@ -801,52 +801,110 @@ type ClusteringJobView = {
   result: { excludedByCleanup: number; keywords: number; processed: number; clustersCreated: number; addedToReviewed: number; needsReviewKeywords: number } | null
 }
 
-/** Progress / result of the background clustering run. */
-function ClusteringProgress({ job, onResume }: { job: ClusteringJobView; onResume: () => void }) {
+type CleanupJobView = {
+  totalKeywords: number
+  processedKeywords: number
+  batchesDone: number
+  batchesTotal: number
+  result: { checked: number; downgraded: number; unresolved: number } | null
+}
+
+type PipelineView = {
+  status: 'running' | 'failed' | 'done'
+  stage: 'cleanup' | 'clustering' | 'done'
+  failedIn: 'cleanup' | 'clustering' | null
+  resumable: boolean
+  error: string | null
+  cleanup: CleanupJobView | null
+  clustering: ClusteringJobView | null
+  uncertainLeft: number | null
+  unclassifiedLeft: number | null
+}
+
+/** Progress / result of the «Кластеризовать» chain: query cleanup (only if needed) → clustering. */
+function ClusteringProgress({ pipeline, onResume }: { pipeline: PipelineView; onResume: () => void }) {
   const { t, locale } = useI18n()
   const p = t.seoClusters.progress
   const n = (v: number) => v.toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')
-  const share = job.totalKeywords ? Math.round((job.processedKeywords / job.totalKeywords) * 100) : 0
+  const { cleanup, clustering } = pipeline
+  const steps = cleanup ? 2 : 1
+  const bar = (percent: number) => (
+    <div className="h-1 w-full max-w-md bg-hairline">
+      <div className="h-1 bg-blue transition-all" style={{ width: `${percent}%` }} />
+    </div>
+  )
+  const share = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0)
+  const failedBatches =
+    pipeline.failedIn === 'cleanup' && cleanup
+      ? p.batch(cleanup.batchesDone, cleanup.batchesTotal)
+      : clustering
+        ? p.batch(clustering.batchesDone, clustering.batchesTotal)
+        : null
+
   return (
     <div className="flex flex-col gap-2 border border-hairline bg-card px-5 py-4 text-sm">
       <span className="label-mono text-muted-foreground">{t.seoClusters.generateButton}</span>
-      {job.status === 'running' && (
+
+      {pipeline.status === 'running' && pipeline.stage === 'cleanup' && cleanup && (
         <>
-          <span>{p.processed(n(job.processedKeywords), n(job.totalKeywords))}</span>
-          <span className="font-mono text-xs text-muted-foreground">
-            {job.phase === 'batches'
-              ? p.batch(job.batchesDone, job.batchesTotal)
-              : job.phase === 'merge'
-                ? p.merge(job.mergePass, job.mergeCallsDone)
-                : p.saving}
-          </span>
-          <div className="h-1 w-full max-w-md bg-hairline">
-            <div className="h-1 bg-blue transition-all" style={{ width: `${job.phase === 'batches' ? share : 100}%` }} />
-          </div>
+          <span className="label-mono text-muted-foreground">{p.step(1, steps, p.stepCleanup)}</span>
+          <span>{t.relevance.progress.checked(n(cleanup.processedKeywords), n(cleanup.totalKeywords))}</span>
+          <span className="font-mono text-xs text-muted-foreground">{t.relevance.progress.batch(cleanup.batchesDone, cleanup.batchesTotal)}</span>
+          {bar(share(cleanup.processedKeywords, cleanup.totalKeywords))}
         </>
       )}
-      {job.status === 'done' && job.result && (
+
+      {pipeline.status === 'running' && pipeline.stage !== 'cleanup' && (
         <>
-          <span>{p.doneKeywords(n(job.result.keywords))}</span>
-          <span>{p.doneClusters(n(job.result.clustersCreated))}</span>
-          {job.result.addedToReviewed > 0 && <span>{p.doneAttached(n(job.result.addedToReviewed))}</span>}
-          <span>{p.doneReview(n(job.result.needsReviewKeywords))}</span>
-          {job.result.excludedByCleanup > 0 && (
-            <span className="text-muted-foreground">{t.relevance.excludedFromClustering(n(job.result.excludedByCleanup))}</span>
+          {cleanup && <span className="label-mono text-muted-foreground">{p.step(2, steps, p.stepClustering)}</span>}
+          {clustering ? (
+            <>
+              <span>{p.processed(n(clustering.processedKeywords), n(clustering.totalKeywords))}</span>
+              <span className="font-mono text-xs text-muted-foreground">
+                {clustering.phase === 'batches'
+                  ? p.batch(clustering.batchesDone, clustering.batchesTotal)
+                  : clustering.phase === 'merge'
+                    ? p.merge(clustering.mergePass, clustering.mergeCallsDone)
+                    : p.saving}
+              </span>
+              {bar(clustering.phase === 'batches' ? share(clustering.processedKeywords, clustering.totalKeywords) : 100)}
+            </>
+          ) : (
+            <span>{p.preparing}</span>
           )}
         </>
       )}
-      {job.status === 'failed' && (
+
+      {pipeline.status === 'done' && clustering?.result && (
         <>
-          <span className="text-destructive">{job.error}</span>
-          <span className="font-mono text-xs text-muted-foreground">{p.batch(job.batchesDone, job.batchesTotal)}</span>
-          <button
-            type="button"
-            onClick={onResume}
-            className="label-mono self-start border border-foreground px-4 py-2 hover:bg-foreground hover:text-background"
-          >
-            {p.resume}
-          </button>
+          {cleanup?.result && <span className="text-muted-foreground">{t.relevance.progress.doneChecked(n(cleanup.result.checked))}</span>}
+          <span>{p.doneKeywords(n(clustering.result.keywords))}</span>
+          <span>{p.doneClusters(n(clustering.result.clustersCreated))}</span>
+          {clustering.result.addedToReviewed > 0 && <span>{p.doneAttached(n(clustering.result.addedToReviewed))}</span>}
+          <span>{p.doneReview(n(clustering.result.needsReviewKeywords))}</span>
+          {clustering.result.excludedByCleanup > 0 && (
+            <span className="text-muted-foreground">{t.relevance.excludedFromClustering(n(clustering.result.excludedByCleanup))}</span>
+          )}
+          {(pipeline.uncertainLeft ?? 0) > 0 && <span>{p.uncertainLeft(n(pipeline.uncertainLeft ?? 0))}</span>}
+          {(pipeline.unclassifiedLeft ?? 0) > 0 && (
+            <span className="text-muted-foreground">{t.relevance.progress.doneUnresolved(n(pipeline.unclassifiedLeft ?? 0))}</span>
+          )}
+        </>
+      )}
+
+      {pipeline.status === 'failed' && (
+        <>
+          <span className="text-destructive">{pipeline.error}</span>
+          {failedBatches && <span className="font-mono text-xs text-muted-foreground">{failedBatches}</span>}
+          {pipeline.resumable && (
+            <button
+              type="button"
+              onClick={onResume}
+              className="label-mono self-start border border-foreground px-4 py-2 hover:bg-foreground hover:text-background"
+            >
+              {p.resume}
+            </button>
+          )}
         </>
       )}
     </div>

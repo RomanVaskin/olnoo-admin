@@ -807,36 +807,6 @@ export async function generateClustersForProject(pool: Pool, projectId: number, 
   return job
 }
 
-// One job per project, kept in memory of the single OLNOO Admin process (globalThis survives dev HMR).
-const jobs: Map<number, ClusteringJob> = ((globalThis as { __olnooClusteringJobs?: Map<number, ClusteringJob> }).__olnooClusteringJobs ??=
-  new Map())
-
-export function getClusteringJob(projectId: number): ClusteringJob | null {
-  return jobs.get(projectId) ?? null
-}
-
-/**
- * Starts a background run, or returns the one already running. `resume` continues a failed run
- * (finished batches are reused, only failed batches and the merge are redone).
- */
-export async function startClusteringJob(pool: Pool, projectId: number, { resume = false } = {}): Promise<ClusteringJob> {
-  const existing = jobs.get(projectId)
-  if (existing?.status === 'running') return existing
-  const job = resume && existing?.status === 'failed' ? existing : await createClusteringJob(pool, projectId)
-  if (job !== existing) {
-    jobs.set(projectId, job)
-  } else {
-    job.status = 'running'
-    job.error = null
-  }
-  void runClusteringJob(pool, job).catch((err) => {
-    job.status = 'failed'
-    job.error = err instanceof Error ? err.message : String(err)
-  })
-  return job
-}
-
-
 /** Loads the saved clusters for a project, with keyword and page details joined in for the UI. */
 export async function listClustersForProject(pool: Pool, projectId: number): Promise<SavedCluster[]> {
   const { rows: clusterRows } = await pool.query(

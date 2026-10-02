@@ -358,6 +358,11 @@ export async function cleanupKeywordsForProject(pool: Pool, projectId: number, o
 // One job per project, kept in memory of the single OLNOO Admin process (globalThis survives dev HMR).
 const jobs: Map<number, RelevanceJob> = ((globalThis as { __olnooRelevanceJobs?: Map<number, RelevanceJob> }).__olnooRelevanceJobs ??= new Map())
 
+/** Lets another orchestrator (the cluster pipeline) show its cleanup run on the cleanup screen too. */
+export function trackRelevanceJob(job: RelevanceJob): void {
+  jobs.set(job.projectId, job)
+}
+
 export function getRelevanceJob(projectId: number): RelevanceJob | null {
   return jobs.get(projectId) ?? null
 }
