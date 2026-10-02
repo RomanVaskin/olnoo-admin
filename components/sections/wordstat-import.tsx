@@ -21,7 +21,6 @@ type HistoryGroup = {
   kind: string
   projectId: number
   projectName: string
-  sourceProjectName: string | null
   status: string
   createdAt: string
   filesCount: number
@@ -29,13 +28,6 @@ type HistoryGroup = {
   keywordsCount: number
   files: HistoryFile[]
 }
-type TransferPreview = {
-  keywords: number
-  target: { new: number; existing: number }
-  source: { found: number; toDelete: number; missing: number }
-  conflicts: { query: string; region: string; reason: 'existed_before' | 'linked' }[]
-}
-
 const PREVIEW_ROWS = 20
 const PARSE_CONCURRENCY = 4
 const HISTORY_PAGE = 10
@@ -67,7 +59,7 @@ export function WordstatImport() {
   const [history, setHistory] = useState<HistoryGroup[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-  const [transferFor, setTransferFor] = useState<HistoryGroup | null>(null)
+  const [deleteFor, setDeleteFor] = useState<HistoryGroup | null>(null)
   // Parse requests outlive selection changes; a generation counter drops answers for a cleared selection.
   const generation = useRef(0)
 
@@ -352,9 +344,6 @@ export function WordstatImport() {
                   <Td>
                     {g.projectName}
                     {g.legacy && <span className="label-mono ml-2 text-muted-foreground">{w.historyLegacy}</span>}
-                    {g.kind === 'transfer' && g.sourceProjectName && (
-                      <span className="label-mono ml-2 text-muted-foreground">{w.historyTransfer(g.sourceProjectName)}</span>
-                    )}
                   </Td>
                   <Td className="text-right font-mono text-xs">{w.historyFiles(g.filesCount)}</Td>
                   <Td className="text-right font-mono text-xs">{w.historyKeywords(g.keywordsCount)}</Td>
@@ -374,10 +363,10 @@ export function WordstatImport() {
                     {g.kind === 'import' && g.status === 'Imported' && (
                       <button
                         type="button"
-                        onClick={() => setTransferFor(transferFor?.key === g.key ? null : g)}
-                        className="label-mono ml-4 text-blue hover:text-foreground"
+                        onClick={() => setDeleteFor(deleteFor?.key === g.key ? null : g)}
+                        className="label-mono ml-4 text-destructive hover:text-foreground"
                       >
-                        {w.transferAction}
+                        {w.deleteAction}
                       </button>
                     )}
                   </Td>
@@ -396,22 +385,14 @@ export function WordstatImport() {
                       <Td>{null}</Td>
                     </tr>
                   ))}
-                {transferFor?.key === g.key && (
+                {deleteFor?.key === g.key && (
                   <tr>
                     <td colSpan={6} className="border-b border-hairline bg-card px-4 py-3.5">
-                      <TransferPanel
+                      <DeletePanel
                         group={g}
-                        siblings={history.filter(
-                          (h) =>
-                            h.projectId === g.projectId &&
-                            h.kind === 'import' &&
-                            h.status === 'Imported' &&
-                            formatDate(h.createdAt) === formatDate(g.createdAt),
-                        )}
-                        projects={projects}
-                        onClose={() => setTransferFor(null)}
+                        onClose={() => setDeleteFor(null)}
                         onDone={() => {
-                          setTransferFor(null)
+                          setDeleteFor(null)
                           loadHistory()
                         }}
                       />
@@ -436,62 +417,43 @@ export function WordstatImport() {
   )
 }
 
-function TransferPanel({
-  group,
-  siblings,
-  projects,
-  onClose,
-  onDone,
-}: {
-  group: HistoryGroup
-  siblings: HistoryGroup[]
-  projects: SeoProject[]
-  onClose: () => void
-  onDone: () => void
-}) {
+
+type DeletePreview = {
+  projectName: string
+  createdAt: string
+  files: number
+  keywords: number
+  toDelete: number
+  existedBefore: number
+  linked: { query: string; region: string }[]
+  notFound: number | null
+}
+
+/** «Удалить импорт»: preview is mandatory; the delete button appears only after it loaded. */
+function DeletePanel({ group, onClose, onDone }: { group: HistoryGroup; onClose: () => void; onDone: () => void }) {
   const { t, locale } = useI18n()
   const w = t.wordstatImport
-  const timeLocale = locale === 'ru' ? 'ru-RU' : 'en-US'
-  const targets = projects.filter((p) => p.id !== group.projectId)
-  const [targetId, setTargetId] = useState<number | null>(targets[0]?.id ?? null)
-  const [scope, setScope] = useState<Record<string, boolean>>({ [group.key]: true })
-  const [files, setFiles] = useState<File[]>([])
-  const [preview, setPreview] = useState<TransferPreview | null>(null)
-  const [busy, setBusy] = useState(false)
+  const dateLocale = locale === 'ru' ? 'ru-RU' : 'en-US'
+  const [preview, setPreview] = useState<DeletePreview | null>(null)
+  const [busy, setBusy] = useState(true)
   const [message, setMessage] = useState<string | null>(null)
 
-  const selected = siblings.filter((s) => scope[s.key])
-  const needsFiles = selected.some((s) => s.legacy)
-  const targetName = targets.find((p) => p.id === targetId)?.name ?? ''
-  const fileError = importSelectionError(files.map((f) => ({ name: f.name, size: f.size })))
-
-  function changed() {
-    setPreview(null)
-    setMessage(null)
-  }
-
-  async function send(confirm: boolean) {
-    if (targetId === null || !selected.length || (needsFiles && !files.length) || fileError) return
+  async function call(confirm: boolean) {
     setBusy(true)
     setMessage(null)
     try {
-      const form = new FormData()
-      form.set('sourceProjectId', String(group.projectId))
-      form.set('targetProjectId', String(targetId))
-      form.set('confirm', String(confirm))
-      for (const s of selected) {
-        if (s.batchId !== null) form.append('batchId', String(s.batchId))
-        else form.append('legacyKey', s.key)
-      }
-      for (const f of files) form.append('file', f)
-      const res = await fetch('/api/keywords/transfer', { method: 'POST', body: form })
-      const data = await readJson(res, (status) => w.serverRejected(status, formatMegabytes(totalBytes(files))))
+      const res = await fetch('/api/keywords/import/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: group.key, confirm }),
+      })
+      const data = await readJson(res, (status) => w.serverRejected(status, ''))
       if (!res.ok) throw new Error(String(data.error ?? w.importError))
       if (confirm) {
-        setMessage(w.transferDone(Number(data.deleted), targetName))
+        setMessage(w.deleteDone(Number(data.deleted)))
         onDone()
       } else {
-        setPreview(data as unknown as TransferPreview)
+        setPreview(data as unknown as DeletePreview)
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : w.importError)
@@ -500,102 +462,64 @@ function TransferPanel({
     }
   }
 
+  useEffect(() => {
+    void call(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group.key])
+
+  const created = new Date(group.createdAt)
+  const rows: [string, string | number][] = preview
+    ? [
+        [w.deleteProject, preview.projectName],
+        [w.deleteDate, `${created.toLocaleDateString(dateLocale)} ${created.toLocaleTimeString(dateLocale)}`],
+        [w.deleteFiles, preview.files],
+        [w.deleteKeywords, preview.keywords],
+        [w.deleteWill, preview.toDelete],
+        [w.deleteExisted, preview.existedBefore],
+        [w.deleteLinked, preview.linked.length],
+        [w.deleteNotFound, preview.notFound ?? '—'],
+      ]
+    : []
+
   return (
     <div className="flex flex-col gap-4 py-2">
-      <span className="text-sm font-medium">{w.transferTitle(group.projectName)}</span>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <span className="label-mono text-muted-foreground">{w.transferTarget}</span>
-          <ProjectPicker
-            projects={targets}
-            value={targetId}
-            onChange={(id) => {
-              setTargetId(id)
-              changed()
-            }}
-          />
-        </div>
-        <div className="flex flex-col gap-2">
-          <span className="label-mono text-muted-foreground">{w.transferScope}</span>
-          {siblings.map((s) => (
-            <label key={s.key} className="flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={Boolean(scope[s.key])}
-                onChange={(e) => {
-                  setScope((prev) => ({ ...prev, [s.key]: e.target.checked }))
-                  changed()
-                }}
-              />
-              <span className="font-mono">
-                {new Date(s.createdAt).toLocaleTimeString(timeLocale)} · {w.historyFiles(s.filesCount)} · {w.historyKeywords(s.keywordsCount)}
-                {s.legacy ? ` · ${w.historyLegacy}` : ''}
-              </span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <span className="text-xs text-muted-foreground">{needsFiles ? w.transferFilesLegacy : w.transferFilesBatch}</span>
-        <input
-          type="file"
-          accept=".csv,.xlsx"
-          multiple
-          className="text-xs"
-          onChange={(e) => {
-            setFiles(Array.from(e.target.files ?? []))
-            changed()
-          }}
-        />
-        {files.length > 0 && (
-          <span className="label-mono text-muted-foreground">
-            {w.historyFiles(files.length)} · {formatMegabytes(totalBytes(files))}
-          </span>
-        )}
-        {fileError && <span className="text-xs text-destructive">{fileError}</span>}
-      </div>
-
+      <span className="text-sm font-medium">{w.deleteTitle}</span>
       {preview && (
-        <div className="flex flex-col gap-2 text-sm">
-          <p>{w.transferPreview(preview, group.projectName, targetName)}</p>
-          {preview.conflicts.length > 0 && (
-            <ul className="max-h-48 overflow-y-auto border border-border text-xs">
-              {preview.conflicts.map((c) => (
-                <li key={`${c.query}\u0000${c.region}`} className="border-b border-border px-3 py-1.5 last:border-b-0">
-                  <span className="font-mono">{c.query}</span>
-                  {c.region && <span className="text-muted-foreground"> · {c.region}</span>}
-                  <span className="text-muted-foreground"> — {c.reason === 'linked' ? w.conflictLinked : w.conflictExisted}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <dl className="grid max-w-md grid-cols-[1fr_auto] gap-x-8 gap-y-1 text-sm">
+          {rows.map(([label, value], i) => (
+            <Fragment key={label}>
+              <dt className={`text-muted-foreground ${i === 4 ? 'mt-3' : ''}`}>{label}</dt>
+              <dd className={`text-right font-mono ${i === 4 ? 'mt-3 text-foreground' : ''}`}>{value}</dd>
+            </Fragment>
+          ))}
+        </dl>
       )}
-
+      {preview && <p className="max-w-2xl text-xs text-muted-foreground">{w.deleteExplain}</p>}
+      {preview && preview.linked.length > 0 && (
+        <ul className="max-h-48 max-w-2xl overflow-y-auto border border-border text-xs">
+          {preview.linked.map((c) => (
+            <li key={`${c.query}\u0000${c.region}`} className="border-b border-border px-3 py-1.5 last:border-b-0">
+              <span className="font-mono">{c.query}</span>
+              {c.region && <span className="text-muted-foreground"> · {c.region}</span>}
+              <span className="text-muted-foreground"> — {w.conflictLinked}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={() => void send(false)}
-          disabled={busy || targetId === null || !selected.length || (needsFiles && !files.length) || Boolean(fileError)}
-          className="label-mono border border-foreground px-4 py-2 hover:bg-foreground hover:text-background disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {w.transferCheck}
+        <button type="button" onClick={onClose} className="label-mono border border-foreground px-4 py-2 hover:bg-foreground hover:text-background">
+          {w.deleteCancel}
         </button>
         {preview && (
           <button
             type="button"
-            onClick={() => void send(true)}
+            onClick={() => void call(true)}
             disabled={busy}
-            className="label-mono border border-foreground bg-foreground px-4 py-2 text-background hover:bg-transparent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            className="label-mono border border-destructive bg-destructive px-4 py-2 text-background hover:bg-transparent hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {w.transferConfirm(preview.keywords)}
+            {w.deleteConfirm}
           </button>
         )}
-        <button type="button" onClick={onClose} className="label-mono text-muted-foreground hover:text-foreground">
-          {w.transferCancel}
-        </button>
       </div>
       {message && <p className="label-mono text-muted-foreground">{message}</p>}
     </div>

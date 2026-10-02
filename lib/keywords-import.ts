@@ -129,7 +129,6 @@ export type ImportHistoryGroup = {
   kind: string
   projectId: number
   projectName: string
-  sourceProjectName: string | null
   status: string
   createdAt: string
   filesCount: number
@@ -153,12 +152,11 @@ export async function listImportHistory(
   const [batches, legacy] = await Promise.all([
     pool.query(
       `
-      SELECT b.id, b.kind, b.status, b.project_id, p.name AS project_name, sp.name AS source_project_name,
+      SELECT b.id, b.kind, b.status, b.project_id, p.name AS project_name,
              b.created_at, b.files_count, b.keywords_count,
              COALESCE((SELECT sum(rows_count) FROM imports i WHERE i.batch_id = b.id), 0)::int AS rows_count
       FROM import_batches b
       JOIN projects p ON p.id = b.project_id
-      LEFT JOIN projects sp ON sp.id = b.source_project_id
       WHERE ($1::int IS NULL OR b.project_id = $1::int)
       ORDER BY b.created_at DESC, b.id DESC
       LIMIT $2
@@ -169,7 +167,7 @@ export async function listImportHistory(
       `
       SELECT i.project_id, p.name AS project_name, i.created_at::text AS ts, max(i.created_at) AS created_at,
              count(*)::int AS files_count, sum(i.rows_count)::int AS rows_count,
-             CASE WHEN bool_and(i.status = 'Moved') THEN 'Moved' ELSE 'Imported' END AS status,
+             CASE WHEN count(DISTINCT i.status) = 1 THEN min(i.status) ELSE 'Imported' END AS status,
              (SELECT count(*)::int FROM keywords k WHERE k.project_id = i.project_id AND k.created_at = i.created_at) AS keywords_count
       FROM imports i
       JOIN projects p ON p.id = i.project_id
@@ -190,7 +188,6 @@ export async function listImportHistory(
       kind: b.kind as string,
       projectId: b.project_id as number,
       projectName: b.project_name as string,
-      sourceProjectName: (b.source_project_name as string | null) ?? null,
       status: b.status as string,
       createdAt: new Date(b.created_at).toISOString(),
       sortAt: new Date(b.created_at).getTime(),
@@ -206,7 +203,6 @@ export async function listImportHistory(
       kind: 'import',
       projectId: l.project_id as number,
       projectName: l.project_name as string,
-      sourceProjectName: null,
       status: l.status as string,
       createdAt: new Date(l.created_at).toISOString(),
       sortAt: new Date(l.created_at).getTime(),
