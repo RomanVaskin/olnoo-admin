@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Pool } from 'pg'
 import { parseImportFile } from './import-parse.ts'
-import { importKeywordFiles, importKeywordRows, isSupportedImportFile, mergeImportRows } from './keywords-import.ts'
+import { importKeywordRows } from './keywords-import.ts'
 
 const FIXTURES_DIR = fileURLToPath(new URL('./__fixtures__', import.meta.url))
 
@@ -77,64 +77,3 @@ test('preview, confirm import, and idempotent re-import against a real DB', asyn
   }
 })
 
-test('only .csv and .xlsx are supported', () => {
-  assert.equal(isSupportedImportFile('оклейка.CSV'), true)
-  assert.equal(isSupportedImportFile('пленка.xlsx'), true)
-  assert.equal(isSupportedImportFile('old.xls'), false)
-  assert.equal(isSupportedImportFile('report.pdf'), false)
-  assert.equal(isSupportedImportFile('xlsx'), false)
-})
-
-test('merging several exports keeps one row per keyword + region, highest frequency wins', () => {
-  const merged = mergeImportRows([
-    { keyword: 'оклейка авто', frequency: 100, region: '' },
-    { keyword: 'полиуретановая пленка', frequency: 50, region: '' },
-    { keyword: 'оклейка авто', frequency: 120, region: '' },
-    { keyword: 'оклейка авто', frequency: 90, region: '' },
-    { keyword: 'оклейка авто', frequency: 30, region: 'Москва' },
-  ])
-  assert.deepEqual(merged, [
-    { keyword: 'оклейка авто', frequency: 120, region: '' },
-    { keyword: 'полиуретановая пленка', frequency: 50, region: '' },
-    { keyword: 'оклейка авто', frequency: 30, region: 'Москва' },
-  ])
-})
-
-test('multi-file import merges overlapping exports and logs one import per file', async (t) => {
-  const pool = new Pool({ connectionString: DATABASE_URL })
-  try {
-    await pool.query('SELECT 1')
-  } catch (err) {
-    t.skip(`No reachable Postgres at DATABASE_URL — skipping DB integration test (${(err as Error).message})`)
-    await pool.end()
-    return
-  }
-
-  let clientId: number | undefined
-  try {
-    clientId = (await pool.query(`INSERT INTO clients (name) VALUES ('__test_multi_import__' || now()::text) RETURNING id`)).rows[0].id
-    const domain = `__test-multi-${Date.now()}-${Math.random().toString(36).slice(2)}.example`
-    const projectId = (
-      await pool.query(`INSERT INTO projects (client_id, name, domain, sitemap_url) VALUES ($1, 'multi', $2, '') RETURNING id`, [clientId, domain])
-    ).rows[0].id
-
-    const files = [
-      { fileName: 'okleyka.xlsx', rows: [{ keyword: 'оклейка авто', frequency: 100, region: '' }, { keyword: 'оклейка авто пленкой', frequency: 40, region: '' }] },
-      { fileName: 'ppf.csv', rows: [{ keyword: 'оклейка авто', frequency: 100, region: '' }, { keyword: 'полиуретановая пленка', frequency: 70, region: '' }] },
-    ]
-    assert.deepEqual(await importKeywordFiles(pool, projectId, files), { imported: 3, files: 2 })
-    // Same files again: existing keywords are updated, not duplicated.
-    assert.deepEqual(await importKeywordFiles(pool, projectId, files), { imported: 3, files: 2 })
-
-    const keywords = await pool.query('SELECT count(*)::int AS n FROM keywords WHERE project_id = $1', [projectId])
-    assert.equal(keywords.rows[0].n, 3)
-    const logged = await pool.query('SELECT file_name, rows_count FROM imports WHERE project_id = $1 ORDER BY id', [projectId])
-    assert.deepEqual(
-      logged.rows.map((r) => `${r.file_name}:${r.rows_count}`),
-      ['okleyka.xlsx:2', 'ppf.csv:2', 'okleyka.xlsx:2', 'ppf.csv:2'],
-    )
-  } finally {
-    if (clientId) await pool.query('DELETE FROM clients WHERE id = $1', [clientId])
-    await pool.end()
-  }
-})

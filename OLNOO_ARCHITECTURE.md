@@ -33,6 +33,7 @@ Project is the main connecting object between modules. One Client can have sever
 - One search intent = one page. Do not create thin pages for synonyms.
 - Public sites must have a sitemap.
 - Create/Improve use the full keyword cluster, and must include CTA + internal links + pass the Quality Gate.
+- A bulk keyword import is one batch: one operation, one transaction, recorded with the exact keywords it brought. Corrections (moving a mistaken import) delete only what is proven to come from that import; anything ambiguous is shown as a conflict and kept.
 
 ## Change rule
 
