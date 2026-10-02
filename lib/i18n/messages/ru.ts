@@ -1,5 +1,13 @@
 import type { Messages } from './index'
 
+function ruPlural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return one
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few
+  return many
+}
+
 export const ru: Messages = {
   common: {
     admin: 'Админ',
@@ -237,9 +245,15 @@ export const ru: Messages = {
     projectLabel: 'Проект',
     dropzoneTitle: 'Перетащите CSV / XLSX или нажмите, чтобы выбрать файл',
     dropzoneHint: 'Ключевое слово · Частота · Регион',
+    dropzoneActive: 'Отпустите, чтобы добавить файлы',
+    fileRows: (n: number) => `${n} ${ruPlural(n, 'строка', 'строки', 'строк')}`,
+    filesSummary: (files: number, keywords: number) =>
+      `${files} ${ruPlural(files, 'файл', 'файла', 'файлов')} · ${keywords} ${ruPlural(keywords, 'ключевое слово', 'ключевых слова', 'ключевых слов')}`,
+    removeFile: (name: string) => `Убрать ${name}`,
+    clearFiles: 'Очистить',
     importButton: 'Импортировать ключевые слова',
     importing: 'Импортируем…',
-    importSuccess: (n: number) => `Импортировано ${n} ключевых слов.`,
+    importSuccess: (n: number) => `Импортировано ${n} ${ruPlural(n, 'ключевое слово', 'ключевых слова', 'ключевых слов')}.`,
     importError: 'Импорт не удался. Попробуйте ещё раз.',
     parseError: 'Не удалось прочитать файл. Проверьте формат и попробуйте снова.',
     noPreview: 'Выберите проект и загрузите файл для предпросмотра.',
