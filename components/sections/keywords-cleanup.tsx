@@ -16,9 +16,13 @@ type Summary = {
   irrelevant: number
   manual: number
   disputed: number
+  aiDecided: number
   pages: number
+  seoContext: boolean
   usesCleanup: boolean
 }
+type SeoContext = { businessType: string; region: string; services: string; plannedServices: string; excluded: string }
+const EMPTY_CONTEXT: SeoContext = { businessType: '', region: '', services: '', plannedServices: '', excluded: '' }
 type JobView = {
   status: 'running' | 'failed' | 'done'
   totalKeywords: number
@@ -144,7 +148,7 @@ export function KeywordsCleanup() {
     if (projectId !== null) loadRows(projectId, filter)
   }, [filter])
 
-  async function start(resume = false, requeue?: 'disputed') {
+  async function start(resume = false, requeue?: 'disputed' | 'all') {
     if (projectId === null) return
     setError(null)
     try {
@@ -220,6 +224,8 @@ export function KeywordsCleanup() {
         }
       />
 
+      {projectId !== null && <SeoContextPanel projectId={projectId} onSaved={() => refresh(projectId)} />}
+
       {summary && (
         <div className="flex flex-col gap-4 border border-hairline bg-card px-5 py-4">
           <dl className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-4 lg:grid-cols-7">
@@ -235,7 +241,7 @@ export function KeywordsCleanup() {
             ))}
           </dl>
 
-          {summary.pages === 0 && summary.total > 0 && <p className="text-sm text-destructive">{r.noPagesHint}</p>}
+          {summary.pages === 0 && !summary.seoContext && summary.total > 0 && <p className="text-sm text-destructive">{r.noPagesHint}</p>}
           {!running && summary.usesCleanup && unclassified > 0 && <p className="text-sm">{r.newKeywords(n(unclassified))}</p>}
           {!running && unclassified === 0 && summary.total > 0 && <p className="text-sm text-muted-foreground">{r.allChecked}</p>}
           <p className="text-xs text-muted-foreground">{summary.usesCleanup ? r.usesCleanupHint : r.legacyHint}</p>
@@ -277,6 +283,17 @@ export function KeywordsCleanup() {
 
           {!running && (excluded > 0 || summary.uncertain > 0) && (
             <div className="flex flex-wrap gap-4">
+              {summary.aiDecided > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(r.recheckAllConfirm(n(summary.aiDecided)))) void start(false, 'all')
+                  }}
+                  className="label-mono text-destructive hover:text-foreground"
+                >
+                  {r.recheckAll(n(summary.aiDecided))}
+                </button>
+              )}
               {summary.disputed > 0 && (
                 <button
                   type="button"
@@ -357,6 +374,129 @@ export function KeywordsCleanup() {
           {r.loadMore} ({n(rows.length)} / {n(total)})
         </button>
       )}
+    </div>
+  )
+}
+
+
+/** Project SEO context: what the AI cleanup is told about the business. Saving it never starts any AI work. */
+function SeoContextPanel({ projectId, onSaved }: { projectId: number; onSaved: () => void }) {
+  const { t } = useI18n()
+  const c = t.relevance.context
+  const [saved, setSaved] = useState<SeoContext>(EMPTY_CONTEXT)
+  const [draft, setDraft] = useState<SeoContext>(EMPTY_CONTEXT)
+  const [editing, setEditing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    setEditing(false)
+    setMessage(null)
+    fetch(`/api/projects/seo-context?projectId=${projectId}`)
+      .then((res) => res.json())
+      .then((data: { context: SeoContext }) => {
+        setSaved(data.context)
+        setDraft(data.context)
+      })
+  }, [projectId])
+
+  async function save() {
+    setBusy(true)
+    setMessage(null)
+    try {
+      const res = await fetch('/api/projects/seo-context', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, ...draft }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || c.saveError)
+      setSaved(data.context)
+      setDraft(data.context)
+      setEditing(false)
+      setMessage(c.savedHint)
+      onSaved()
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : c.saveError)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const fields: { key: keyof SeoContext; label: string; hint: string; lines: boolean }[] = [
+    { key: 'businessType', label: c.businessType, hint: c.businessTypeHint, lines: false },
+    { key: 'region', label: c.region, hint: c.regionHint, lines: false },
+    { key: 'services', label: c.services, hint: c.servicesHint, lines: true },
+    { key: 'plannedServices', label: c.plannedServices, hint: c.plannedServicesHint, lines: true },
+    { key: 'excluded', label: c.excluded, hint: c.excludedHint, lines: true },
+  ]
+  const empty = fields.every((f) => !saved[f.key])
+
+  return (
+    <div className="flex flex-col gap-3 border border-hairline bg-card px-5 py-4">
+      <div className="flex items-center justify-between gap-4">
+        <span className="label-mono text-muted-foreground">{c.title}</span>
+        {!editing && (
+          <button type="button" onClick={() => setEditing(true)} className="label-mono text-blue hover:text-foreground">
+            {c.edit}
+          </button>
+        )}
+      </div>
+      {empty && !editing && <p className="text-sm text-destructive">{c.empty}</p>}
+      <dl className="grid gap-x-8 gap-y-3 text-sm md:grid-cols-2">
+        {fields.map((f) => (
+          <div key={f.key} className={f.lines ? 'md:col-span-1' : ''}>
+            <dt className="label-mono text-muted-foreground">{f.label}</dt>
+            {editing ? (
+              <dd className="mt-1">
+                {f.lines ? (
+                  <textarea
+                    value={draft[f.key]}
+                    onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+                    placeholder={f.hint}
+                    rows={4}
+                    maxLength={2000}
+                    className="w-full border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-blue"
+                  />
+                ) : (
+                  <input
+                    value={draft[f.key]}
+                    onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+                    placeholder={f.hint}
+                    maxLength={200}
+                    className="w-full border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-blue"
+                  />
+                )}
+              </dd>
+            ) : (
+              <dd className="mt-1 whitespace-pre-line">{saved[f.key] || <span className="text-muted-foreground">—</span>}</dd>
+            )}
+          </div>
+        ))}
+      </dl>
+      {editing && (
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={busy}
+            className="label-mono border border-foreground bg-foreground px-4 py-2 text-background hover:bg-transparent hover:text-foreground disabled:opacity-50"
+          >
+            {c.save}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(saved)
+              setEditing(false)
+            }}
+            className="label-mono text-muted-foreground hover:text-foreground"
+          >
+            {c.cancel}
+          </button>
+        </div>
+      )}
+      {message && <p className="label-mono text-muted-foreground">{message}</p>}
     </div>
   )
 }

@@ -63,17 +63,25 @@ export function cleanReason(raw: unknown, status: RelevanceStatus): string {
   return text.length > RELEVANCE_REASON_MAX_CHARS ? `${text.slice(0, RELEVANCE_REASON_MAX_CHARS - 1)}…` : text
 }
 
-const NO_CONTEXT_REASON = 'Нет данных о проекте (страницы не загружены) — решите вручную или загрузите страницы'
+/** What the AI can actually know about the project: whether it knows the business, and whether it knows the region. */
+export type ContextCaps = { business: boolean; region: boolean }
+
+const NO_BUSINESS_REASON = 'Нет данных о проекте (заполните SEO-контекст или загрузите страницы) — решите вручную'
+const NO_REGION_REASON = 'Регион проекта не задан (заполните SEO-контекст или загрузите страницы) — решите вручную'
 
 /**
  * Turns one validated AI answer into what is saved (threshold applied, reason cleaned).
- * Without any page data (`hasContext` false) the AI only knows the project name and domain, so it
- * cannot know the business region or services: an exclusion (geo_mismatch / irrelevant) is then
- * never saved — it becomes 'uncertain' — whatever confidence the AI claims.
+ * An exclusion is only saved when the AI could know what it is excluding against: `irrelevant`
+ * needs a known business (SEO context or page data), `geo_mismatch` needs a known region. Otherwise
+ * it becomes 'uncertain' whatever confidence the AI claims. A boolean `caps` means both at once.
  */
-export function decide(status: RelevanceStatus, confidence: number, rawReason: unknown, hasContext = true): RelevanceDecision {
-  if (!hasContext && (status === 'geo_mismatch' || status === 'irrelevant')) {
-    return { status: 'uncertain', confidence, reason: NO_CONTEXT_REASON, downgraded: false, held: true }
+export function decide(status: RelevanceStatus, confidence: number, rawReason: unknown, caps: ContextCaps | boolean = true): RelevanceDecision {
+  const known = typeof caps === 'boolean' ? { business: caps, region: caps } : caps
+  if (status === 'irrelevant' && !known.business) {
+    return { status: 'uncertain', confidence, reason: NO_BUSINESS_REASON, downgraded: false, held: true }
+  }
+  if (status === 'geo_mismatch' && !known.region) {
+    return { status: 'uncertain', confidence, reason: NO_REGION_REASON, downgraded: false, held: true }
   }
   const applied = applyConfidenceThreshold(status, confidence)
   if (!applied.downgraded) return { status, confidence, reason: cleanReason(rawReason, status), downgraded: false, held: false }
@@ -133,7 +141,7 @@ export function parseRelevanceResponse(raw: string, sentIds: Set<number>): AiRel
 
 export const RELEVANCE_SYSTEM_PROMPT = `You classify Wordstat search queries by how relevant they are to ONE specific business website.
 
-You get the business context (project name, domain, and compact data of its existing pages: url, title, h1, description) and a list of queries. Judge each query by its MEANING relative to what this business actually offers and where it works — never in a vacuum, never by shared words alone. Infer the business, its services/products and its region only from the given context; do not assume facts that are not there.
+You get the business context and a list of queries. The context has an explicit SEO CONTEXT written by the owner (business type, target region, main services, planned directions, what is NOT offered) — it is authoritative — plus the project name/domain and compact data of its existing pages (url, title, h1, description) as additional facts. Judge each query by its MEANING relative to what this business actually offers and where it works — never in a vacuum, never by shared words alone. Take the business, its services/products and its region from the given context; do not assume facts that are not there.
 
 relevance_status — exactly one of:
 - "target": the query is about a service/product the business offers (including a specific model, brand, car/object type, price, cost, "near me"-style commercial wording). Someone searching it could become a client.
@@ -143,6 +151,7 @@ relevance_status — exactly one of:
 - "irrelevant": has nothing to do with this business (other topics, other industries, unrelated products).
 
 Rules:
+0. Use the SEO context literally: MAIN SERVICES and PLANNED / ADDITIONAL DIRECTIONS are part of the business (planned ones count even when no page exists) → "target" (or "informational" for how-to/choice queries); a query that is mainly about something in NOT OFFERED (buying that item, equipment, tools, materials for doing it yourself) → "irrelevant", with high confidence. The TARGET REGION and its cities are never a mismatch; a query without any city has no geographic problem.
 1. Do not be aggressive. Being a "similar" query from Wordstat does NOT make a query irrelevant, and a popular one is not automatically a target. When in doubt prefer "uncertain" over "irrelevant"/"geo_mismatch". Missing information about the business is never evidence against a query.
 2. Never change, correct or translate a query; you only return its keyword_id.
 3. "confidence" is an integer 0-100: how sure you are of THIS status.
@@ -167,8 +176,82 @@ function pagePath(url: string): string {
   }
 }
 
-/** Compact project context from data that already exists: project name/domain and a capped page list. */
-export function buildProjectContext(project: { name: string; domain: string }, pages: ContextPage[]): string {
+/** Explicit, human-written SEO context of a project (stored in project_seo_context). List fields: one item per line. */
+export type SeoContext = {
+  businessType: string
+  region: string
+  services: string
+  plannedServices: string
+  excluded: string
+}
+
+export const EMPTY_SEO_CONTEXT: SeoContext = { businessType: '', region: '', services: '', plannedServices: '', excluded: '' }
+
+export const SEO_CONTEXT_SINGLE_MAX = 200
+export const SEO_CONTEXT_LIST_MAX = 2000
+const SEO_CONTEXT_LIST_ITEMS = 40
+
+/** Trims every field and caps its length; unknown input becomes an empty string. */
+export function normalizeSeoContext(input: unknown): SeoContext {
+  const o = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
+  const text = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/\r/g, '').trim().slice(0, max) : '')
+  return {
+    businessType: text(o.businessType, SEO_CONTEXT_SINGLE_MAX).replace(/\s*\n\s*/g, ' '),
+    region: text(o.region, SEO_CONTEXT_SINGLE_MAX).replace(/\s*\n\s*/g, ' '),
+    services: text(o.services, SEO_CONTEXT_LIST_MAX),
+    plannedServices: text(o.plannedServices, SEO_CONTEXT_LIST_MAX),
+    excluded: text(o.excluded, SEO_CONTEXT_LIST_MAX),
+  }
+}
+
+function listItems(text: string): string[] {
+  return text
+    .split(/\n|;/)
+    .map((l) => l.replace(/^[-•*\s]+/, '').trim())
+    .filter(Boolean)
+    .slice(0, SEO_CONTEXT_LIST_ITEMS)
+}
+
+/** The AI knows the business when the context names a business type or services. */
+export function seoContextKnowsBusiness(ctx: SeoContext | null): boolean {
+  return Boolean(ctx && (ctx.businessType || listItems(ctx.services).length))
+}
+
+export function seoContextKnowsRegion(ctx: SeoContext | null): boolean {
+  return Boolean(ctx && ctx.region)
+}
+
+export function seoContextIsEmpty(ctx: SeoContext | null): boolean {
+  return !ctx || !(ctx.businessType || ctx.region || ctx.services || ctx.plannedServices || ctx.excluded)
+}
+
+/** Capabilities for `decide`: the explicit context OR page data is enough to know the business / the region. */
+export function contextCaps(ctx: SeoContext | null, pages: ContextPage[]): ContextCaps {
+  const pagesKnown = contextPageCount(pages) > 0
+  return { business: seoContextKnowsBusiness(ctx) || pagesKnown, region: seoContextKnowsRegion(ctx) || pagesKnown }
+}
+
+function seoContextBlock(ctx: SeoContext | null): string {
+  const none = '(not specified)'
+  const list = (text: string) => {
+    const items = listItems(text)
+    return items.length ? items.map((i) => `- ${i}`).join('\n') : none
+  }
+  return `BUSINESS TYPE: ${ctx?.businessType || none}
+TARGET REGION: ${ctx?.region || none}
+MAIN SERVICES / PRODUCTS (queries about these are "target"):
+${list(ctx?.services ?? '')}
+PLANNED / ADDITIONAL DIRECTIONS (part of the business even without a page on the site — queries about these are "target"):
+${list(ctx?.plannedServices ?? '')}
+NOT OFFERED — the business explicitly does NOT sell or do this (a query that is mainly about it is "irrelevant"):
+${list(ctx?.excluded ?? '')}`
+}
+
+/**
+ * Compact project context for the AI: the explicit SEO context first (the authoritative source),
+ * then project name/domain and a capped list of existing pages as additional facts.
+ */
+export function buildProjectContext(project: { name: string; domain: string }, pages: ContextPage[], seo: SeoContext | null = null): string {
   const lines = pages
     .filter((p) => p.title || p.h1 || p.description)
     .slice(0, RELEVANCE_CONTEXT_PAGES)
@@ -180,8 +263,10 @@ export function buildProjectContext(project: { name: string; domain: string }, p
       return `- ${bits.join(' | ')}`
     })
   return `PROJECT: ${project.name} (${project.domain})
+${seoContextBlock(seo)}
 PAGES (${lines.length}${pages.length > lines.length ? ` of ${pages.length}` : ''}):
-${lines.length ? lines.join('\n') : '(no page data available — judge from the project name and domain only; prefer "uncertain" when the business or its region is unclear)'}`
+${lines.length ? lines.join('\n') : '(no page data available)'}
+(If neither the SEO context nor the pages tell what the business does or where, judge from the project name and domain only and prefer "uncertain".)`
 }
 
 /** Pages that actually say something about the business — the AI's only source for services and region. */

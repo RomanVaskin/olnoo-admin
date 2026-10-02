@@ -3,7 +3,10 @@ import { callAiRouter, type AiRouterMessage } from './ai-router.ts'
 import {
   buildProjectContext,
   buildRelevanceUserPrompt,
+  contextCaps,
   contextPageCount,
+  seoContextKnowsBusiness,
+  type ContextCaps,
   decide,
   isRelevanceStatus,
   parseRelevanceResponse,
@@ -15,6 +18,7 @@ import {
   type RelevanceGroup,
   type RelevanceStatus,
 } from './keywords-relevance-rules.ts'
+import { getProjectSeoContext } from './project-seo-context.ts'
 
 // AI relevance cleanup of a project's search queries — the stage BEFORE clustering. Keywords are
 // never deleted: each one gets relevance_status / confidence / reason; clustering later reads the
@@ -46,8 +50,12 @@ export type RelevanceSummary = {
   manual: number
   /** Keywords the AI (not a person) put in uncertain / geo_mismatch — what «Перепроверить спорные» re-sends. */
   disputed: number
-  /** Pages of the project: with none, the AI has no business context. */
+  /** Decisions made by the AI (classified and not manual) — what a full recheck re-sends. */
+  aiDecided: number
+  /** Pages of the project: with none (and no SEO context), the AI has no business context. */
   pages: number
+  /** The project's explicit SEO context names the business (type or services). */
+  seoContext: boolean
   /** projects.relevance_cleanup_at is set: clustering only takes target/informational. */
   usesCleanup: boolean
 }
@@ -63,13 +71,14 @@ export async function getRelevanceSummary(pool: Pool, projectId: number): Promis
             count(*) FILTER (WHERE k.relevance_status = 'irrelevant')::int AS irrelevant,
             count(*) FILTER (WHERE k.relevance_manual)::int AS manual,
             count(*) FILTER (WHERE k.relevance_status IN ('uncertain', 'geo_mismatch') AND NOT k.relevance_manual)::int AS disputed,
+            count(*) FILTER (WHERE k.relevance_status IS NOT NULL AND NOT k.relevance_manual)::int AS ai_decided,
             (SELECT count(*)::int FROM pages WHERE project_id = $1) AS pages,
             (SELECT relevance_cleanup_at IS NOT NULL FROM projects WHERE id = $1) AS uses_cleanup
      FROM keywords k WHERE k.project_id = $1`,
     [projectId],
   )
-  const r = rows[0]
-  return { ...r, usesCleanup: r.uses_cleanup === true }
+  const { ai_decided, uses_cleanup, ...r } = rows[0]
+  return { ...r, aiDecided: ai_decided, seoContext: seoContextKnowsBusiness(await getProjectSeoContext(pool, projectId)), usesCleanup: uses_cleanup === true }
 }
 
 type Batch = {
@@ -106,7 +115,9 @@ export type RelevanceJob = {
   llmCalls: number
   downgraded: number
   heldNoContext: number
-  /** The project has pages with data to judge against; without them exclusions are held back. */
+  /** What the AI can know about the project (explicit SEO context or page data); exclusions it cannot back are held. */
+  contextCaps: ContextCaps
+  /** The AI knows at least the business or the region. */
   hasContext: boolean
   byStatus: Record<RelevanceStatus, number>
   error: string | null
@@ -185,6 +196,8 @@ export async function createRelevanceJob(pool: Pool, projectId: number, opts: Re
     [projectId],
   )
 
+  const seoContext = await getProjectSeoContext(pool, projectId)
+  const caps = contextCaps(seoContext, pageRows)
   const batches = planRelevanceBatches(rows, { batchSize: opts.batchSize ?? RELEVANCE_BATCH_SIZE })
   const now = new Date().toISOString()
   return {
@@ -197,14 +210,15 @@ export async function createRelevanceJob(pool: Pool, projectId: number, opts: Re
     llmCalls: 0,
     downgraded: 0,
     heldNoContext: 0,
-    hasContext: contextPageCount(pageRows) > 0,
+    contextCaps: caps,
+    hasContext: caps.business || caps.region,
     byStatus: emptyCounts(),
     error: null,
     result: null,
     startedAt: now,
     updatedAt: now,
     reviewManual,
-    context: buildProjectContext(projectRows[0], pageRows),
+    context: buildProjectContext(projectRows[0], pageRows, seoContext),
     scope: new Map(rows.map((r) => [r.id, r.query])),
   }
 }
@@ -250,7 +264,7 @@ async function runBatch(pool: Pool, job: RelevanceJob, batch: Batch, llm: LlmCal
   let held = 0
   for (const item of items) {
     const group = sent.get(item.keywordId)!
-    const d = decide(item.status, item.confidence, item.reason, job.hasContext)
+    const d = decide(item.status, item.confidence, item.reason, job.contextCaps)
     if (d.downgraded) downgraded += group.ids.length
     if (d.held) held += group.ids.length
     counts[d.status] += group.ids.length
@@ -403,17 +417,41 @@ export async function requeueDisputedKeywords(pool: Pool, projectId: number): Pr
 }
 
 /**
+ * Full recheck: puts EVERY AI decision back to «not checked» (for when the project's SEO context
+ * changed substantially). Manual decisions are never touched; keywords, frequencies, imports and
+ * clusters are not touched either. Until the cleanup that follows has re-checked them the reset
+ * keywords are out of clustering input, like any unchecked keyword. Returns how many were reset.
+ */
+export async function requeueAllAiDecisions(pool: Pool, projectId: number): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE keywords SET relevance_status = NULL, relevance_confidence = NULL, relevance_reason = NULL, relevance_checked_at = NULL
+     WHERE project_id = $1 AND relevance_status IS NOT NULL AND NOT relevance_manual`,
+    [projectId],
+  )
+  return rowCount ?? 0
+}
+
+/**
  * Starts a background run (or returns the running one). `resume` redoes only the failed batches of
- * a failed run; `requeueDisputed` first resets the AI's uncertain / geo_mismatch keywords (not manual ones).
+ * a failed run; `requeueDisputed` first resets the AI's uncertain / geo_mismatch keywords (not manual
+ * ones); `requeueAll` first resets every AI decision (see `requeueAllAiDecisions`).
  */
 export async function startRelevanceJob(
   pool: Pool,
   projectId: number,
-  { resume = false, reviewManual = false, requeueDisputed = false }: { resume?: boolean; reviewManual?: boolean; requeueDisputed?: boolean } = {},
+  {
+    resume = false,
+    reviewManual = false,
+    requeueDisputed = false,
+    requeueAll = false,
+  }: { resume?: boolean; reviewManual?: boolean; requeueDisputed?: boolean; requeueAll?: boolean } = {},
 ): Promise<RelevanceJob> {
   const existing = jobs.get(projectId)
   if (existing?.status === 'running') return existing
-  if (requeueDisputed && !(resume && existing?.status === 'failed')) await requeueDisputedKeywords(pool, projectId)
+  if (!(resume && existing?.status === 'failed')) {
+    if (requeueAll) await requeueAllAiDecisions(pool, projectId)
+    else if (requeueDisputed) await requeueDisputedKeywords(pool, projectId)
+  }
   const job = resume && existing?.status === 'failed' ? existing : await createRelevanceJob(pool, projectId, { reviewManual })
   if (job !== existing) jobs.set(projectId, job)
   void runRelevanceJob(pool, job).catch((err) => {

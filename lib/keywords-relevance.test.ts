@@ -8,11 +8,13 @@ import {
   createRelevanceJob,
   getRelevanceSummary,
   listKeywordRelevance,
+  requeueAllAiDecisions,
   RelevanceError,
   runRelevanceJob,
   setKeywordRelevance,
 } from './keywords-relevance.ts'
 import { RELEVANCE_SYSTEM_PROMPT, type RelevanceStatus } from './keywords-relevance-rules.ts'
+import { saveProjectSeoContext, getProjectSeoContext, SeoContextError } from './project-seo-context.ts'
 import { createClusteringJob } from './seo-clustering.ts'
 
 // DB integration tests for AI relevance cleanup with a fake AI Router; skipped without Postgres
@@ -375,5 +377,178 @@ test('recheck disputed: only the AI uncertain / geo_mismatch keywords go back to
     assert.equal((await statusOf(pool, projectId, 'химчистка салона москва')).s, 'target')
     assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).s, 'uncertain', 'genuinely unclear stays unclear')
     assert.equal((await statusOf(pool, projectId, 'полировка фар москва')).s, 'irrelevant', 'manual decision untouched')
+  })
+})
+
+// ---- Project SEO context (explicit, per project) ----
+
+const DETAILING = {
+  businessType: 'автомобильный детейлинг',
+  region: 'Москва и Московская область',
+  services: 'оклейка автомобилей пленкой\nполировка кузова\nполировка фар\nхимчистка салона',
+  plannedServices: 'оклейка коммерческого транспорта\nоклейка фургонов и микроавтобусов',
+  excluded: 'полировальные машинки\nпылесосы\nполироли и пасты',
+}
+
+/** A model that follows the prompt: it uses the SEO context it is given; blind, it guesses badly (Moscow → other region). */
+const followsContext = (q: string, prompt: string): Answer | undefined => {
+  const region = prompt.includes('TARGET REGION: Москва')
+  if (q.includes('в москве')) return region ? { status: 'target', confidence: 92, reason: 'Основная услуга проекта' } : { status: 'geo_mismatch', confidence: 90, reason: 'Указан город вне региона проекта' }
+  // Match the planned-direction bullet of the context, not the query text (the prompt contains both).
+  if (q.includes('фургон')) return prompt.includes('- оклейка фургонов и микроавтобусов') ? { status: 'target', confidence: 90, reason: 'Планируемое направление проекта' } : { status: 'uncertain', confidence: 60, reason: 'Нужно решение: сегмент не подтверждён' }
+  if (q.includes('пылесос')) return prompt.includes('- пылесосы') ? { status: 'irrelevant', confidence: 96, reason: 'Проект не продаёт это оборудование' } : { status: 'uncertain', confidence: 60, reason: 'Неясно, продаёт ли проект оборудование' }
+  if (q.includes('владивосток')) return { status: 'geo_mismatch', confidence: 90, reason: 'Указан регион вне региона проекта' }
+  return undefined
+}
+
+const CONTEXT_QUERIES = ['полировка фар в москве', 'оклейка фургонов цена', 'пылесос для химчистки салона', 'полировка кузова владивосток', 'оклейка авто цена']
+
+test('cleanup uses the project SEO context even with 0 pages; the AI is given it and exclusions are allowed', async (t) => {
+  await withProject(
+    t,
+    CONTEXT_QUERIES,
+    async (pool, projectId) => {
+      await saveProjectSeoContext(pool, projectId, DETAILING)
+      const ai = fakeAi({ judge: followsContext })
+      const job = await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
+      assert.deepEqual(job.contextCaps, { business: true, region: true })
+      assert.equal(job.result?.heldNoContext, 0)
+      assert.match(ai.calls[0].prompt, /BUSINESS TYPE: автомобильный детейлинг/)
+      assert.match(ai.calls[0].prompt, /TARGET REGION: Москва и Московская область/)
+      assert.match(ai.calls[0].prompt, /PLANNED[^\n]*\n- оклейка коммерческого транспорта/)
+      assert.match(ai.calls[0].prompt, /NOT OFFERED[^\n]*\n- полировальные машинки/)
+      assert.equal((await getRelevanceSummary(pool, projectId)).seoContext, true)
+      assert.equal((await getRelevanceSummary(pool, projectId)).pages, 0)
+      assert.equal((await statusOf(pool, projectId, 'полировка кузова владивосток')).s, 'geo_mismatch', 'a region the context does not name can be excluded')
+    },
+    { pages: false },
+  )
+})
+
+test('Moscow in the context: «полировка фар в москве» is not geo_mismatch; without any context the blind answer is held', async (t) => {
+  await withProject(
+    t,
+    ['полировка фар в москве'],
+    async (pool, projectId) => {
+      await saveProjectSeoContext(pool, projectId, DETAILING)
+      await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi({ judge: followsContext }).llm })
+      assert.equal((await statusOf(pool, projectId, 'полировка фар в москве')).s, 'target')
+    },
+    { pages: false },
+  )
+  await withProject(
+    t,
+    ['полировка фар в москве'],
+    async (pool, projectId) => {
+      // No context, no pages: the model guesses geo_mismatch, the guard keeps it as uncertain.
+      const job = await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi({ judge: followsContext }).llm })
+      assert.equal(job.result?.heldNoContext, 1)
+      const row = await statusOf(pool, projectId, 'полировка фар в москве')
+      assert.equal(row.s, 'uncertain')
+      assert.match(row.r, /Регион проекта не задан/)
+    },
+    { pages: false },
+  )
+})
+
+test('a planned direction counts as part of the business without any page for it; the negative control stays uncertain', async (t) => {
+  await withProject(
+    t,
+    ['оклейка фургонов цена'],
+    async (pool, projectId) => {
+      await saveProjectSeoContext(pool, projectId, DETAILING)
+      await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi({ judge: followsContext }).llm })
+      assert.equal((await statusOf(pool, projectId, 'оклейка фургонов цена')).s, 'target')
+    },
+    { pages: false },
+  )
+  await withProject(
+    t,
+    ['оклейка фургонов цена'],
+    async (pool, projectId) => {
+      await saveProjectSeoContext(pool, projectId, { ...DETAILING, plannedServices: '' })
+      await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi({ judge: followsContext }).llm })
+      assert.equal((await statusOf(pool, projectId, 'оклейка фургонов цена')).s, 'uncertain')
+    },
+    { pages: false },
+  )
+})
+
+test('explicitly excluded goods and equipment can be irrelevant; without a region the geo exclusion alone is held', async (t) => {
+  await withProject(
+    t,
+    ['пылесос для химчистки салона', 'полировка кузова владивосток'],
+    async (pool, projectId) => {
+      await saveProjectSeoContext(pool, projectId, { ...DETAILING, region: '' })
+      const job = await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi({ judge: followsContext }).llm })
+      assert.deepEqual(job.contextCaps, { business: true, region: false })
+      assert.equal((await statusOf(pool, projectId, 'пылесос для химчистки салона')).s, 'irrelevant')
+      assert.equal((await statusOf(pool, projectId, 'полировка кузова владивосток')).s, 'uncertain', 'no region known → cannot call it another region')
+    },
+    { pages: false },
+  )
+})
+
+test('SEO context is saved per project, trimmed and capped; empty until saved; unknown project rejected', async (t) => {
+  await withProject(t, [], async (pool, projectId) => {
+    assert.equal(await getProjectSeoContext(pool, projectId), null)
+    const saved = await saveProjectSeoContext(pool, projectId, { ...DETAILING, businessType: '  автомобильный детейлинг  ', excluded: 'x'.repeat(5000) })
+    assert.equal(saved.businessType, 'автомобильный детейлинг')
+    assert.equal(saved.excluded.length, 2000)
+    assert.deepEqual(await getProjectSeoContext(pool, projectId), saved)
+    // Replaced, not merged.
+    await saveProjectSeoContext(pool, projectId, { region: 'Казань' })
+    assert.deepEqual(await getProjectSeoContext(pool, projectId), { businessType: '', region: 'Казань', services: '', plannedServices: '', excluded: '' })
+    await assert.rejects(saveProjectSeoContext(pool, 999999999, DETAILING), SeoContextError)
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM project_seo_context WHERE project_id = $1', [projectId])).rows[0].n, 1)
+  })
+})
+
+test('full recheck resets every AI decision and nothing else; manual decisions stay; ordinary cleanup then re-processes exactly the reset ones', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi().llm })
+    const idOf = async (q: string) => (await pool.query('SELECT id FROM keywords WHERE project_id = $1 AND query = $2', [projectId, q])).rows[0].id
+    await setKeywordRelevance(pool, { projectId, keywordId: await idOf('оклейка авто такси'), status: 'target' })
+    await setKeywordRelevance(pool, { projectId, keywordId: await idOf('защита ip68'), status: 'informational' })
+    const kwId = await idOf('оклейка авто цена')
+    const cluster = (await pool.query(`INSERT INTO seo_clusters (project_id, name, primary_keyword_id) VALUES ($1, 'кластер', $2) RETURNING id`, [projectId, kwId])).rows[0].id
+    await pool.query('INSERT INTO seo_cluster_keywords (cluster_id, keyword_id) VALUES ($1, $2)', [cluster, kwId])
+    const snapshot = async () =>
+      (await pool.query(`SELECT count(*)::int AS n, coalesce(sum(frequency), 0)::int AS freq, count(DISTINCT id)::int AS ids FROM keywords WHERE project_id = $1`, [projectId])).rows[0]
+    const before = await snapshot()
+    const summary = await getRelevanceSummary(pool, projectId)
+    assert.equal(summary.aiDecided, 4)
+    assert.equal(summary.manual, 2)
+
+    assert.equal(await requeueAllAiDecisions(pool, projectId), 4)
+    assert.deepEqual(await snapshot(), before, 'keywords and frequencies untouched')
+    for (const q of ['оклейка авто цена', 'какой пленкой лучше оклеить автомобиль', 'оклейка авто владивосток', 'оклейка авто сомнение']) {
+      assert.deepEqual(await statusOf(pool, projectId, q), { s: null, c: null, r: null, m: false }, q)
+    }
+    assert.deepEqual(await statusOf(pool, projectId, 'оклейка авто такси'), { s: 'target', c: null, r: 'Решение пользователя', m: true })
+    assert.deepEqual(await statusOf(pool, projectId, 'защита ip68'), { s: 'informational', c: null, r: 'Решение пользователя', m: true })
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM seo_clusters WHERE id = $1', [cluster])).rows[0].n, 1, 'clusters untouched')
+    assert.equal((await getRelevanceSummary(pool, projectId)).aiDecided, 0)
+
+    const ai = fakeAi()
+    await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
+    assert.deepEqual(
+      ai.calls.flatMap((c) => c.queries).sort(),
+      ['оклейка авто цена', 'какой пленкой лучше оклеить автомобиль', 'оклейка авто владивосток', 'оклейка авто сомнение'].sort(),
+    )
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).m, true)
+    assert.equal((await getRelevanceSummary(pool, projectId)).unclassified, 0)
+  })
+})
+
+test('the existing partial recheck still resets only the AI disputed ones', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi().llm })
+    const { requeueDisputedKeywords } = await import('./keywords-relevance.ts')
+    // uncertain: такси, сомнение (downgrade); geo_mismatch: владивосток.
+    assert.equal(await requeueDisputedKeywords(pool, projectId), 3)
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто цена')).s, 'target')
+    assert.equal((await statusOf(pool, projectId, 'защита ip68')).s, 'irrelevant')
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).s, null)
   })
 })

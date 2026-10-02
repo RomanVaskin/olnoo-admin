@@ -7,7 +7,11 @@ import {
   decide,
   parseRelevanceResponse,
   planRelevanceBatches,
+  contextCaps,
   contextPageCount,
+  normalizeSeoContext,
+  seoContextKnowsBusiness,
+  seoContextKnowsRegion,
   RELEVANCE_CONFIDENCE_THRESHOLDS,
   RELEVANCE_CONTEXT_PAGES,
   RELEVANCE_SYSTEM_PROMPT,
@@ -86,7 +90,7 @@ test('without page data an exclusion is never saved (held as uncertain); target/
   for (const status of ['geo_mismatch', 'irrelevant'] as const) {
     const d = decide(status, 99, 'Запрос не относится к бизнесу проекта', false)
     assert.deepEqual({ status: d.status, held: d.held, downgraded: d.downgraded }, { status: 'uncertain', held: true, downgraded: false })
-    assert.match(d.reason, /Нет данных о проекте/)
+    assert.match(d.reason, status === 'irrelevant' ? /Нет данных о проекте/ : /Регион проекта не задан/)
     assert.equal(decide(status, 99, 'Причина', true).status, status, 'with context the exclusion stands')
   }
   assert.equal(decide('target', 90, 'Основная услуга проекта', false).status, 'target')
@@ -97,4 +101,44 @@ test('the prompt makes a city a geo_mismatch only against a region the context n
   assert.match(RELEVANCE_SYSTEM_PROMPT, /POSITIVELY shows/)
   assert.match(RELEVANCE_SYSTEM_PROMPT, /NEVER a reason for "geo_mismatch"/)
   assert.equal(contextPageCount([{ url: 'https://x/', title: null, h1: null, description: null }, { url: 'https://x/a', title: 'T', h1: null, description: null }]), 1)
+})
+
+test('exclusions need what they exclude against: irrelevant needs a known business, geo_mismatch a known region', () => {
+  const noRegion = { business: true, region: false }
+  const noBusiness = { business: false, region: true }
+  assert.equal(decide('geo_mismatch', 99, 'Другой регион', noRegion).status, 'uncertain')
+  assert.equal(decide('geo_mismatch', 99, 'Другой регион', noRegion).held, true)
+  assert.equal(decide('irrelevant', 99, 'Не относится к бизнесу проекта', noRegion).status, 'irrelevant')
+  assert.equal(decide('irrelevant', 99, 'Не относится к бизнесу проекта', noBusiness).status, 'uncertain')
+  assert.equal(decide('geo_mismatch', 99, 'Другой регион', noBusiness).status, 'geo_mismatch')
+})
+
+test('SEO context: normalised and capped; knows business / region; pages are an alternative source', () => {
+  const ctx = normalizeSeoContext({ businessType: '  автомобильный\n детейлинг ', region: 'Москва', services: ' оклейка \r\n полировка ', plannedServices: 5, excluded: 'x'.repeat(5000) })
+  assert.equal(ctx.businessType, 'автомобильный детейлинг')
+  assert.equal(ctx.services, 'оклейка \n полировка')
+  assert.equal(ctx.plannedServices, '')
+  assert.equal(ctx.excluded.length, 2000)
+  assert.equal(seoContextKnowsBusiness(ctx), true)
+  assert.equal(seoContextKnowsRegion(ctx), true)
+  assert.equal(seoContextKnowsBusiness({ ...ctx, businessType: '', services: '' }), false)
+  assert.equal(seoContextKnowsBusiness(null), false)
+  const page = [{ url: 'https://x/', title: 'T', h1: null, description: null }]
+  assert.deepEqual(contextCaps(null, []), { business: false, region: false })
+  assert.deepEqual(contextCaps(null, page), { business: true, region: true })
+  assert.deepEqual(contextCaps({ ...ctx, region: '' }, []), { business: true, region: false })
+})
+
+test('project context for the AI carries the explicit SEO context, planned directions and exclusions', () => {
+  const text = buildProjectContext(
+    { name: 'Проект', domain: 'https://x.ru' },
+    [],
+    normalizeSeoContext({ businessType: 'автодетейлинг', region: 'Москва', services: 'оклейка\nполировка', plannedServices: 'оклейка фургонов', excluded: 'пылесосы; полировальные машинки' }),
+  )
+  assert.match(text, /BUSINESS TYPE: автодетейлинг/)
+  assert.match(text, /TARGET REGION: Москва/)
+  assert.match(text, /MAIN SERVICES[^\n]*\n- оклейка\n- полировка/)
+  assert.match(text, /PLANNED[^\n]*\n- оклейка фургонов/)
+  assert.match(text, /NOT OFFERED[^\n]*\n- пылесосы\n- полировальные машинки/)
+  assert.match(buildProjectContext({ name: 'P', domain: 'd' }, []), /BUSINESS TYPE: \(not specified\)/)
 })
