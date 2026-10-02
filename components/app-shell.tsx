@@ -12,6 +12,7 @@ import { Overview } from '@/components/sections/overview'
 import { PagesView } from '@/components/sections/pages-view'
 import { KeywordsView } from '@/components/sections/keywords-view'
 import { SeoMap } from '@/components/sections/seo-map'
+import { KeywordsCleanup } from '@/components/sections/keywords-cleanup'
 import { SeoClusters } from '@/components/sections/seo-clusters'
 import { SeoHealth } from '@/components/sections/seo-health'
 import { WordstatImport } from '@/components/sections/wordstat-import'
@@ -64,6 +65,7 @@ const adminGroups: NavGroup[] = [
           { id: 'seo-keywords' },
           { id: 'seo-map' },
           { id: 'seo-wordstat' },
+          { id: 'seo-cleanup' },
           { id: 'seo-clusters' },
           { id: 'seo-health' },
         ],
@@ -312,6 +314,7 @@ export function AppShell() {
           {active === 'seo-keywords' && <KeywordsView />}
           {active === 'seo-map' && <SeoMap />}
           {active === 'seo-wordstat' && <WordstatImport />}
+          {active === 'seo-cleanup' && <KeywordsCleanup />}
           {active === 'seo-clusters' && <SeoClusters />}
           {active === 'seo-health' && <SeoHealth />}
           {active === 'crm-overview' && (

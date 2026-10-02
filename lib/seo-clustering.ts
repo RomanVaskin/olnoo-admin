@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg'
 import { callAiRouter, type AiRouterMessage } from './ai-router.ts'
+import { CLUSTERING_KEYWORD_FILTER_SQL } from './keywords-relevance-rules.ts'
 import {
   chunk,
   CLUSTER_BATCH_MAX_CHARS,
@@ -258,6 +259,7 @@ export type ClusteringJobStatus = 'running' | 'failed' | 'done'
 export type ClusteringPhase = 'batches' | 'merge' | 'saving' | 'done'
 
 export type ClusteringResult = {
+  excludedByCleanup: number
   keywords: number
   processed: number
   clustersCreated: number
@@ -273,6 +275,8 @@ export type ClusteringJob = {
   status: ClusteringJobStatus
   phase: ClusteringPhase
   totalKeywords: number
+  /** Keywords left out of this run by relevance cleanup (irrelevant, other region, unresolved, not yet checked). */
+  excludedByCleanup: number
   toCluster: number
   batches: BatchState[]
   mergePass: number
@@ -332,12 +336,23 @@ function touch(job: ClusteringJob) {
  * their cluster and are not re-clustered; every other keyword is split into batches.
  */
 export async function createClusteringJob(pool: Pool, projectId: number, opts: ClusteringOptions = {}): Promise<ClusteringJob> {
+  // Which keywords take part is decided from their LIVE relevance state right now (see
+  // CLUSTERING_KEYWORD_FILTER_SQL): a project without cleanup keeps taking every keyword.
   const { rows: keywordRows } = await pool.query(
-    `SELECT id, query, frequency FROM keywords WHERE project_id = $1 ORDER BY frequency DESC NULLS LAST, id ASC`,
+    `SELECT k.id, k.query, k.frequency
+     FROM keywords k JOIN projects p ON p.id = k.project_id
+     WHERE k.project_id = $1 AND ${CLUSTERING_KEYWORD_FILTER_SQL}
+     ORDER BY k.frequency DESC NULLS LAST, k.id ASC`,
     [projectId],
   )
+  const { rows: countRows } = await pool.query('SELECT count(*)::int AS n FROM keywords WHERE project_id = $1', [projectId])
+  const excludedByCleanup = countRows[0].n - keywordRows.length
   if (keywordRows.length === 0) {
-    throw new ClusteringError('This project has no keywords to cluster yet — import Wordstat data first.')
+    throw new ClusteringError(
+      countRows[0].n === 0
+        ? 'This project has no keywords to cluster yet — import Wordstat data first.'
+        : 'Нет запросов для кластеризации: после очистки запросов ни один не отмечен как целевой или информационный. Проверьте запросы на экране «Очистка запросов».',
+    )
   }
   const { rows: pageRows } = await pool.query(
     `SELECT id, url, title, h1, description, locale FROM pages WHERE project_id = $1 ORDER BY url ASC`,
@@ -388,6 +403,7 @@ export async function createClusteringJob(pool: Pool, projectId: number, opts: C
     status: 'running',
     phase: 'batches',
     totalKeywords: keywords.size,
+    excludedByCleanup,
     toCluster: toCluster.length,
     batches: batches.map((b, index) => ({ index, keywordIds: b.map((k) => k.id), status: 'pending', units: [], orphan: false })),
     mergePass: 0,
@@ -720,6 +736,7 @@ export async function runClusteringJob(pool: Pool, job: ClusteringJob, opts: Clu
     job.phase = 'done'
     job.status = 'done'
     job.result = {
+      excludedByCleanup: job.excludedByCleanup,
       keywords: job.totalKeywords,
       processed: job.toCluster,
       clustersCreated: created.length,

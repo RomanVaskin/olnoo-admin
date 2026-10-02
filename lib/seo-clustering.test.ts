@@ -130,7 +130,7 @@ test('5 250 keywords in 21 batches: one cluster per intent across batches, nothi
     const clusters = await savedClusters(pool, projectId)
     assert.equal(clusters.length, SERVICES.length)
     assert.ok(clusters.every((c) => c.n === 3 * 350))
-    assert.deepEqual(job.result, { keywords: 5250, processed: 5250, clustersCreated: 5, addedToReviewed: 0, needsReviewKeywords: 0, llmCalls: job.llmCalls })
+    assert.deepEqual(job.result, { excludedByCleanup: 0, keywords: 5250, processed: 5250, clustersCreated: 5, addedToReviewed: 0, needsReviewKeywords: 0, llmCalls: job.llmCalls })
     const freq = (await pool.query('SELECT sum(frequency)::int AS f FROM keywords WHERE project_id = $1 AND query LIKE $2', [projectId, 'оклейка %'])).rows[0].f
     assert.equal(clusters.find((c) => c.name.startsWith('оклейк'))?.total_frequency, freq)
     await assertEveryKeywordOnce(pool, projectId)

@@ -798,7 +798,7 @@ type ClusteringJobView = {
   mergePass: number
   mergeCallsDone: number
   error: string | null
-  result: { keywords: number; processed: number; clustersCreated: number; addedToReviewed: number; needsReviewKeywords: number } | null
+  result: { excludedByCleanup: number; keywords: number; processed: number; clustersCreated: number; addedToReviewed: number; needsReviewKeywords: number } | null
 }
 
 /** Progress / result of the background clustering run. */
@@ -831,6 +831,9 @@ function ClusteringProgress({ job, onResume }: { job: ClusteringJobView; onResum
           <span>{p.doneClusters(n(job.result.clustersCreated))}</span>
           {job.result.addedToReviewed > 0 && <span>{p.doneAttached(n(job.result.addedToReviewed))}</span>}
           <span>{p.doneReview(n(job.result.needsReviewKeywords))}</span>
+          {job.result.excludedByCleanup > 0 && (
+            <span className="text-muted-foreground">{t.relevance.excludedFromClustering(n(job.result.excludedByCleanup))}</span>
+          )}
         </>
       )}
       {job.status === 'failed' && (

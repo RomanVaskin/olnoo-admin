@@ -15,6 +15,10 @@ export async function GET(req: Request) {
       k.region,
       k.cluster,
       k.status,
+      k.relevance_status,
+      k.relevance_confidence,
+      k.relevance_reason,
+      k.relevance_manual,
       pg.id AS target_page_id,
       pg.url AS target_page_url
     FROM keywords k
