@@ -201,7 +201,7 @@ Migration: `db/migrations/0009_ads_campaigns.sql`. **Applied manually, same as e
 ## AI Router
 
 - repo: `RomanVaskin/olnoo-ai-router`
-- default port (from its own `.env.example`, not independently confirmed against a running production process): `3010`
+- port `3010`, bound to `127.0.0.1` — **confirmed on production** by its own request log (2026-10-02: `service: olnoo-ai-router`, `POST /v1/generate` from `olnoo-admin`). For `taskType: reasoning` with `provider: openai` and no model set it picked `gpt-5.4-mini-2026-03-17`, no fallback; a 100-query cleanup call took ~12–15 s, a 250-keyword clustering call ~50 s, no call anywhere near a timeout.
 
 Production path/systemd service on KZ are not confirmed — do not guess them; confirm via the same runtime-tracing method used for the two apps above (nginx config → port → systemd unit → `git remote -v`) if a task needs them.
 
