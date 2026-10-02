@@ -16,7 +16,7 @@ import {
 } from './keywords-relevance.ts'
 import { RELEVANCE_SYSTEM_PROMPT, type RelevanceStatus } from './keywords-relevance-rules.ts'
 import { saveProjectSeoContext, getProjectSeoContext, SeoContextError } from './project-seo-context.ts'
-import { createClusteringJob } from './seo-clustering.ts'
+import { createClusteringJob, generateClustersForProject } from './seo-clustering.ts'
 
 // DB integration tests for AI relevance cleanup with a fake AI Router; skipped without Postgres
 // (migrations through 0012 applied) at DATABASE_URL.
@@ -730,5 +730,76 @@ test('the previous verbose answer still classifies correctly', async (t) => {
     await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi({ legacy: true }).llm })
     assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).s, 'uncertain')
     assert.equal((await statusOf(pool, projectId, 'оклейка авто цена')).s, 'target')
+  })
+})
+
+// ---- Materials/tools questions are informational; excluded statuses never reach clustering ----
+
+const HOWTO = [
+  'какая химия нужна для химчистки салона автомобиля',
+  'какую пасту взять для полировки фар',
+  'какие полировальные круги нужны для полировки фар',
+  'какая машинка должна быть для полировки авто',
+]
+const BUY = 'купить полировальную пасту оптом'
+
+/** A model that obeys the prompt: how-to-choose questions about items in NOT OFFERED are informational only when the prompt says so; buying them is irrelevant. */
+const obeysMaterialsRule = (q: string, prompt: string): Answer | undefined => {
+  // The rule lives in the system prompt; the NOT OFFERED label of the context (user prompt) repeats it.
+  const carveOut = RELEVANCE_SYSTEM_PROMPT.includes('never "irrelevant" just because the item is listed in NOT OFFERED') && /NOT OFFERED[^\n]*how-to-choose/.test(prompt)
+  if (q === BUY) return { status: 'irrelevant', confidence: 95, reason: 'Проект не продаёт расходные материалы' }
+  if (HOWTO.includes(q)) {
+    return carveOut ? { status: 'informational', confidence: 90, reason: 'Информационный запрос по теме проекта' } : { status: 'irrelevant', confidence: 95, reason: 'Проект не продаёт это оборудование' }
+  }
+  return undefined
+}
+
+test('how-to-choose questions about materials/tools are classified informational (the prompt carries the rule) and reach clustering; buying them stays irrelevant', async (t) => {
+  await withProject(
+    t,
+    [...HOWTO, BUY, 'полировка фар цена'],
+    async (pool, projectId) => {
+      await saveProjectSeoContext(pool, projectId, { ...DETAILING, excluded: 'полировальные машинки\nполировальные круги\nполироли и пасты\nавтохимия' })
+      const ai = fakeAi({ judge: obeysMaterialsRule })
+      await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
+      assert.match(ai.calls[0].prompt, /NOT OFFERED[^\n]*how-to-choose/)
+      for (const q of HOWTO) assert.equal((await statusOf(pool, projectId, q)).s, 'informational', q)
+      assert.equal((await statusOf(pool, projectId, BUY)).s, 'irrelevant')
+      const clustered = await clusteredQueries(projectId, pool)
+      for (const q of HOWTO) assert.equal(clustered.includes(q), true, `${q} is clustered`)
+      assert.equal(clustered.includes(BUY), false)
+    },
+    { pages: false },
+  )
+})
+
+/** Fake clustering model: puts every keyword of the prompt into one cluster and records the prompts it was given. */
+function fakeClusterLlm() {
+  const prompts: string[] = []
+  const llm = async (messages: AiRouterMessage[]) => {
+    const user = messages[1].content
+    prompts.push(user)
+    const keywords = [...user.matchAll(/^- (.*) \(frequency: \d+\)$/gm)].map((m) => m[1])
+    return JSON.stringify({
+      clusters: [{ name: 'тест', intent: 'commercial', primaryKeyword: keywords[0], keywords, totalFrequency: keywords.length, recommendedPageUrl: null, needsNewPage: true, excludeFromSeo: false, confidence: 80, reason: 'тест' }],
+    })
+  }
+  return { llm, prompts }
+}
+
+test('geo_mismatch, irrelevant, uncertain and unchecked keywords are not in the clustering input (the prompt the model receives)', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi().llm })
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто владивосток')).s, 'geo_mismatch')
+    await pool.query(`INSERT INTO keywords (project_id, query, frequency, region) VALUES ($1, 'оклейка авто свежий запрос', 1, '')`, [projectId])
+    const cluster = fakeClusterLlm()
+    await generateClustersForProject(pool, projectId, { llm: cluster.llm })
+    const sent = cluster.prompts.join('\n')
+    assert.match(sent, /оклейка авто цена/)
+    assert.match(sent, /какой пленкой лучше оклеить автомобиль/)
+    assert.doesNotMatch(sent, /владивосток/, 'geo_mismatch never reaches clustering')
+    assert.doesNotMatch(sent, /ip68/, 'irrelevant never reaches clustering')
+    assert.doesNotMatch(sent, /оклейка авто такси/, 'uncertain never reaches clustering')
+    assert.doesNotMatch(sent, /свежий запрос/, 'not-yet-checked keywords wait for cleanup')
   })
 })
