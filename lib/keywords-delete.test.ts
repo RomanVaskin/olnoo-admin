@@ -86,7 +86,10 @@ test('legacy import delete: only keywords it created and nothing references go; 
     assert.equal(done.deleted, 2)
     // Pre-existing keyword (frequency was overwritten — not restorable) and the linked one stay.
     assert.deepEqual(await queries(pool, p), ['автоматизация бизнеса', 'бронепленка', 'оклейка авто'])
-    const history = await listImportHistory(pool, { limit: 10, offset: 0, projectId: p })
+    // Hidden from the default history, kept in the DB and shown on request.
+    const visible = await listImportHistory(pool, { limit: 10, offset: 0, projectId: p })
+    assert.deepEqual(visible.groups.map((g) => g.status), ['Imported'])
+    const history = await listImportHistory(pool, { limit: 10, offset: 0, projectId: p, includeDeleted: true })
     assert.deepEqual(history.groups.map((g) => g.status), ['Deleted', 'Imported'])
     assert.equal(history.groups[0].filesCount, 2)
   })
@@ -114,6 +117,10 @@ test('batch delete uses the recorded provenance; pre-existing and linked keyword
     assert.equal(done.deleted, 1)
     assert.deepEqual(await queries(pool, p), ['виниловая оклейка', 'защитная пленка', 'оклейка авто'])
     assert.equal((await pool.query('SELECT status FROM import_batches WHERE id = $1', [wrong.batchId])).rows[0].status, 'Deleted')
+    const keys = async (includeDeleted: boolean) =>
+      (await listImportHistory(pool, { limit: 10, offset: 0, projectId: p, includeDeleted })).groups.map((g) => g.key)
+    assert.equal((await keys(false)).includes(`b:${wrong.batchId}`), false)
+    assert.equal((await keys(true)).includes(`b:${wrong.batchId}`), true)
     assert.equal((await pool.query(`SELECT count(*)::int AS n FROM imports WHERE batch_id = $1 AND status = 'Deleted'`, [wrong.batchId])).rows[0].n, 2)
   })
 })

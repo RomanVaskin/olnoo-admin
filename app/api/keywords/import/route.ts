@@ -7,13 +7,15 @@ import { readUploadedFiles } from '@/lib/wordstat-upload'
 const PREVIEW_LIMIT = 20
 const HISTORY_PAGE = 10
 
-/** Import history grouped by batch (legacy imports by transaction), paginated. */
+/** Import history grouped by batch (legacy imports by transaction), paginated; `includeDeleted=1` adds deleted imports. */
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const projectId = Number(searchParams.get('projectId')) || null
   const offset = Math.max(0, Number(searchParams.get('offset')) || 0)
   const limit = Math.min(50, Math.max(1, Number(searchParams.get('limit')) || HISTORY_PAGE))
-  return NextResponse.json(await listImportHistory(pool, { limit, offset, projectId }))
+  // Deleted imports stay in the DB (history is kept) but are hidden unless asked for.
+  const includeDeleted = searchParams.get('includeDeleted') === '1'
+  return NextResponse.json(await listImportHistory(pool, { limit, offset, projectId, includeDeleted }))
 }
 
 /**

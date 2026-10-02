@@ -263,6 +263,7 @@ export const en = {
     historyLegacy: 'before batches',
     showFiles: 'Files',
     hideFiles: 'Hide',
+    showDeleted: 'Show deleted',
     showMore: 'Show more',
     deleteAction: 'Delete import',
     deleteTitle: 'Delete import',

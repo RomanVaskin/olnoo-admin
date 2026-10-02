@@ -145,7 +145,12 @@ export type ImportHistoryGroup = {
  */
 export async function listImportHistory(
   pool: Pool,
-  { limit, offset, projectId }: { limit: number; offset: number; projectId?: number | null },
+  {
+    limit,
+    offset,
+    projectId,
+    includeDeleted = false,
+  }: { limit: number; offset: number; projectId?: number | null; includeDeleted?: boolean },
 ): Promise<{ groups: ImportHistoryGroup[]; hasMore: boolean }> {
   const take = offset + limit + 1
   const project = projectId ?? null
@@ -157,11 +162,11 @@ export async function listImportHistory(
              COALESCE((SELECT sum(rows_count) FROM imports i WHERE i.batch_id = b.id), 0)::int AS rows_count
       FROM import_batches b
       JOIN projects p ON p.id = b.project_id
-      WHERE ($1::int IS NULL OR b.project_id = $1::int)
+      WHERE ($1::int IS NULL OR b.project_id = $1::int) AND ($3::boolean OR b.status <> 'Deleted')
       ORDER BY b.created_at DESC, b.id DESC
       LIMIT $2
       `,
-      [project, take],
+      [project, take, includeDeleted],
     ),
     pool.query(
       `
@@ -173,10 +178,11 @@ export async function listImportHistory(
       JOIN projects p ON p.id = i.project_id
       WHERE i.batch_id IS NULL AND ($1::int IS NULL OR i.project_id = $1::int)
       GROUP BY i.project_id, p.name, i.created_at
+      HAVING $3::boolean OR NOT (count(DISTINCT i.status) = 1 AND min(i.status) = 'Deleted')
       ORDER BY i.created_at DESC
       LIMIT $2
       `,
-      [project, take],
+      [project, take, includeDeleted],
     ),
   ])
 

@@ -273,6 +273,7 @@ export const ru: Messages = {
     historyLegacy: 'до batch-учёта',
     showFiles: 'Файлы',
     hideFiles: 'Скрыть',
+    showDeleted: 'Показать удалённые',
     showMore: 'Показать ещё',
     deleteAction: 'Удалить импорт',
     deleteTitle: 'Удаление импорта',

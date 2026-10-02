@@ -67,8 +67,10 @@ export function WordstatImport() {
     if (projects.length && projectId === null) setProjectId(projects[0].id)
   }, [projects, projectId])
 
-  function loadHistory(offset = 0) {
-    fetch(`/api/keywords/import?limit=${HISTORY_PAGE}&offset=${offset}`)
+  const [showDeleted, setShowDeleted] = useState(false)
+
+  function loadHistory(offset = 0, includeDeleted = showDeleted) {
+    fetch(`/api/keywords/import?limit=${HISTORY_PAGE}&offset=${offset}${includeDeleted ? '&includeDeleted=1' : ''}`)
       .then((r) => r.json())
       .then((data: { groups: HistoryGroup[]; hasMore: boolean }) => {
         setHistory((prev) => (offset ? [...prev, ...data.groups] : data.groups))
@@ -324,7 +326,21 @@ export function WordstatImport() {
       </div>
 
       <div className="flex flex-col gap-4">
-        <span className="label-mono text-muted-foreground">{w.recentImports}</span>
+        <div className="flex items-center justify-between gap-4">
+          <span className="label-mono text-muted-foreground">{w.recentImports}</span>
+          <label className="label-mono flex cursor-pointer items-center gap-2 text-muted-foreground hover:text-foreground">
+            <input
+              type="checkbox"
+              checked={showDeleted}
+              onChange={(e) => {
+                setShowDeleted(e.target.checked)
+                setDeleteFor(null)
+                loadHistory(0, e.target.checked)
+              }}
+            />
+            {w.showDeleted}
+          </label>
+        </div>
         <TableShell>
           <thead>
             <tr>
