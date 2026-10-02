@@ -259,3 +259,27 @@ test('output token limit is derived from the batch, doubled on retry and capped 
   assert.equal(relevanceMaxOutputTokens(100, 1), 11000)
   assert.equal(relevanceMaxOutputTokens(250, 1), 12000)
 })
+
+// ---- informational questions about materials / tools are not irrelevant ----
+
+const HOWTO_QUERIES = [
+  'какая химия нужна для химчистки салона автомобиля',
+  'какую пасту взять для полировки фар',
+  'какие полировальные круги нужны для полировки фар',
+  'какая машинка должна быть для полировки авто',
+]
+
+test('prompt: how-to-choose questions about materials/tools/equipment are informational, not irrelevant, even when listed in NOT OFFERED', () => {
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /which materials, chemicals, pastes, pads\/wheels, tools or equipment are needed or how to choose them/)
+  for (const example of ['какая химия нужна для химчистки салона', 'какую пасту взять для полировки фар', 'какие круги нужны для полировки', 'какая машинка нужна для полировки авто']) {
+    assert.ok(RELEVANCE_SYSTEM_PROMPT.includes(example), example)
+  }
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /never "irrelevant" just because the item is listed in NOT OFFERED/)
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /NOT irrelevant — it is "informational"/)
+  // Buying the goods themselves is still excluded.
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /intent is to BUY \/ order \/ rent \/ sell something in NOT OFFERED/)
+  // The NOT OFFERED label in the context block carries the same distinction.
+  const text = buildProjectContext({ name: 'P', domain: 'd' }, [], { businessType: 'детейлинг', region: 'Москва', services: 'полировка фар', plannedServices: '', excluded: 'полировальные пасты' })
+  assert.match(text, /NOT OFFERED[^\n]*how-to-choose[^\n]*"informational"/)
+  assert.equal(HOWTO_QUERIES.length, 4)
+})
