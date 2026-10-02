@@ -243,3 +243,16 @@ test('when even small batches fail the run stops with the reason visible, saved 
     assert.deepEqual(await savedClusters(pool, projectId), before)
   })
 })
+
+test('regression: halved batches together with a second-chance batch never reuse a batch index (unit ids stay unique)', async (t) => {
+  await withProject(t, dataset(60), async (pool, projectId) => {
+    // Every first-pass batch is too big (halved), and the AI also leaves one keyword out → a second-chance batch.
+    const { llm } = fakeLlm({ failOn: (content) => promptKeywords(content).length > 130, omit: (q) => q === 'полировка авто вариант 7' })
+    const job = await generateClustersForProject(pool, projectId, { llm, batchSize: 250 })
+    assert.equal(job.status, 'done')
+    const indexes = job.batches.map((b) => b.index)
+    assert.equal(new Set(indexes).size, indexes.length, `duplicate batch index in ${indexes.join(',')}`)
+    assert.ok(job.batches.some((b) => b.orphan), 'the second-chance batch ran')
+    await assertEveryKeywordOnce(pool, projectId)
+  })
+})

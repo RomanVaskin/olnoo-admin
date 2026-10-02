@@ -496,6 +496,11 @@ async function runBatch(job: ClusteringJob, batch: BatchState, llm: LlmCall): Pr
   })
 }
 
+/** Batch indexes name the units (`b<index>c<n>`), so they must stay unique even after batches were halved. */
+function nextBatchIndex(job: ClusteringJob): number {
+  return job.batches.reduce((max, b) => Math.max(max, b.index), -1) + 1
+}
+
 async function runPendingBatches(job: ClusteringJob, llm: LlmCall, concurrency: number): Promise<void> {
   const queue = job.batches.filter((b) => b.status === 'pending' || b.status === 'failed')
   const worker = async () => {
@@ -512,7 +517,7 @@ async function runPendingBatches(job: ClusteringJob, llm: LlmCall, concurrency: 
           // A call that failed twice is most likely too big to answer (long output cut off or timed out):
           // replace it by two halves, run those, and keep the finished batches untouched.
           const half = Math.ceil(batch.keywordIds.length / 2)
-          let next = Math.max(...job.batches.map((b) => b.index)) + 1
+          let next = nextBatchIndex(job)
           const children: BatchState[] = [batch.keywordIds.slice(0, half), batch.keywordIds.slice(half)].map((keywordIds) => ({
             index: next++,
             keywordIds,
@@ -704,7 +709,7 @@ export async function runClusteringJob(pool: Pool, job: ClusteringJob, opts: Clu
     if (missing.length && !job.batches.some((b) => b.orphan)) {
       const extra = planBatches(missing.map((id) => job.keywords.get(id)!), { batchSize: opts.batchSize ?? CLUSTER_BATCH_SIZE })
       for (const b of extra) {
-        job.batches.push({ index: job.batches.length, keywordIds: b.map((k) => k.id), status: 'pending', units: [], orphan: true, splits: 0 })
+        job.batches.push({ index: nextBatchIndex(job), keywordIds: b.map((k) => k.id), status: 'pending', units: [], orphan: true, splits: 0 })
       }
       await runPendingBatches(job, llm, concurrency)
       if (job.batches.some((b) => b.status === 'failed')) {
