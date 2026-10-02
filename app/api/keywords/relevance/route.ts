@@ -34,7 +34,7 @@ export async function GET(req: Request) {
 /**
  * Starts a background cleanup of the not-yet-checked keywords (or returns the run in progress);
  * `resume: true` redoes only the failed batches of a failed run; `requeue: 'disputed'` first puts the
- * AI's uncertain / geo_mismatch keywords, `requeue: 'all'` every AI decision (never manual ones) back to «not checked». Answers at once, the UI polls GET.
+ * AI's uncertain / geo_mismatch keywords, `requeue: 'geo'` only its geo_mismatch ones, `requeue: 'all'` every AI decision (never manual ones) back to «not checked». Answers at once, the UI polls GET.
  */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null)
@@ -46,6 +46,7 @@ export async function POST(req: Request) {
       reviewManual: body?.reviewManual === true,
       requeueDisputed: body?.requeue === 'disputed',
       requeueAll: body?.requeue === 'all',
+      requeueGeo: body?.requeue === 'geo',
     })
     return NextResponse.json({ job: viewRelevanceJob(job) }, { status: 202 })
   } catch (err) {

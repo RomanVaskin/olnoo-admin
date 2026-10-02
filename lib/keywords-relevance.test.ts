@@ -21,11 +21,11 @@ import { createClusteringJob } from './seo-clustering.ts'
 // (migrations through 0012 applied) at DATABASE_URL.
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://olnoo_admin:CHANGE_ME@localhost:5432/olnoo_admin'
 
-type Answer = { status: RelevanceStatus; confidence: number; reason: string }
+type Answer = { status: RelevanceStatus; confidence: number; reason: string; queryRegion?: string }
 
 /** Fake AI keyed on the query text, like the examples of the task. */
 function judge(query: string): Answer {
-  if (query.includes('владивосток')) return { status: 'geo_mismatch', confidence: 90, reason: 'Указан регион вне региона проекта' }
+  if (query.includes('владивосток')) return { status: 'geo_mismatch', confidence: 90, reason: 'Указан регион вне региона проекта', queryRegion: 'Приморский край' }
   if (query.includes('ip68') || query.includes('протечек')) return { status: 'irrelevant', confidence: 95, reason: 'Запрос не относится к бизнесу проекта' }
   if (query.startsWith('какой ') || query.startsWith('как ')) return { status: 'informational', confidence: 85, reason: 'Информационный запрос по теме проекта' }
   if (query.includes('фургон') || query.includes('такси')) return { status: 'uncertain', confidence: 60, reason: 'Нужно решение: сегмент не подтверждён сайтом' }
@@ -55,7 +55,7 @@ function fakeAi(
         .filter((i) => !opts.omit?.(i.query))
         .map((i) => {
           const a = opts.judge?.(i.query, messages[1].content) ?? judge(i.query)
-          return { keyword_id: i.id, relevance_status: a.status, confidence: a.confidence, reason: a.reason }
+          return { keyword_id: i.id, relevance_status: a.status, confidence: a.confidence, reason: a.reason, query_region: a.queryRegion ?? '' }
         }),
     })
   }
@@ -335,7 +335,7 @@ test('a project with no pages: exclusions are held as uncertain, nothing is excl
     ['оклейка авто москва', 'защита ip68', 'оклейка авто цена'],
     async (pool, projectId) => {
       // The AI blindly says "other region" for Moscow and "irrelevant" for junk, with high confidence.
-      const ai = fakeAi({ judge: (q) => (q.includes('москва') ? { status: 'geo_mismatch', confidence: 90, reason: 'Указан город вне региона проекта' } : undefined) })
+      const ai = fakeAi({ judge: (q) => (q.includes('москва') ? { status: 'geo_mismatch', confidence: 90, reason: 'Указан город вне региона проекта', queryRegion: 'Москва' } : undefined) })
       const job = await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
       assert.equal(job.hasContext, false)
       assert.equal(job.result?.heldNoContext, 2)
@@ -353,7 +353,7 @@ test('recheck disputed: only the AI uncertain / geo_mismatch keywords go back to
   await withProject(t, ['оклейка авто москва', 'химчистка салона москва', 'оклейка авто такси', 'защита ip68', 'оклейка авто цена', 'полировка фар москва'], async (pool, projectId) => {
     // First (blind) run: Moscow queries wrongly marked as another region.
     await cleanupKeywordsForProject(pool, projectId, {
-      llm: fakeAi({ judge: (q) => (q.includes('москва') ? { status: 'geo_mismatch', confidence: 90, reason: 'Указан город вне региона проекта' } : undefined) }).llm,
+      llm: fakeAi({ judge: (q) => (q.includes('москва') ? { status: 'geo_mismatch', confidence: 90, reason: 'Указан город вне региона проекта', queryRegion: 'Москва' } : undefined) }).llm,
     })
     const idOf = async (q: string) => (await pool.query('SELECT id FROM keywords WHERE project_id = $1 AND query = $2', [projectId, q])).rows[0].id
     // A person decided one of the disputed ones by hand: it must be left alone.
@@ -393,11 +393,11 @@ const DETAILING = {
 /** A model that follows the prompt: it uses the SEO context it is given; blind, it guesses badly (Moscow → other region). */
 const followsContext = (q: string, prompt: string): Answer | undefined => {
   const region = prompt.includes('TARGET REGION: Москва')
-  if (q.includes('в москве')) return region ? { status: 'target', confidence: 92, reason: 'Основная услуга проекта' } : { status: 'geo_mismatch', confidence: 90, reason: 'Указан город вне региона проекта' }
+  if (q.includes('в москве')) return region ? { status: 'target', confidence: 92, reason: 'Основная услуга проекта' } : { status: 'geo_mismatch', confidence: 90, reason: 'Указан город вне региона проекта', queryRegion: 'Москва' }
   // Match the planned-direction bullet of the context, not the query text (the prompt contains both).
   if (q.includes('фургон')) return prompt.includes('- оклейка фургонов и микроавтобусов') ? { status: 'target', confidence: 90, reason: 'Планируемое направление проекта' } : { status: 'uncertain', confidence: 60, reason: 'Нужно решение: сегмент не подтверждён' }
   if (q.includes('пылесос')) return prompt.includes('- пылесосы') ? { status: 'irrelevant', confidence: 96, reason: 'Проект не продаёт это оборудование' } : { status: 'uncertain', confidence: 60, reason: 'Неясно, продаёт ли проект оборудование' }
-  if (q.includes('владивосток')) return { status: 'geo_mismatch', confidence: 90, reason: 'Указан регион вне региона проекта' }
+  if (q.includes('владивосток')) return { status: 'geo_mismatch', confidence: 90, reason: 'Указан регион вне региона проекта', queryRegion: 'Приморский край' }
   return undefined
 }
 
@@ -551,4 +551,106 @@ test('the existing partial recheck still resets only the AI disputed ones', asyn
     assert.equal((await statusOf(pool, projectId, 'защита ip68')).s, 'irrelevant')
     assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).s, null)
   })
+})
+
+// ---- Target region = a whole oblast: its own settlements are never geo_mismatch ----
+
+/** Where each place of the fixtures really is; the "naive" model compares the place to the named city only. */
+const PLACE_REGION: Record<string, string> = {
+  москв: 'Москва',
+  химки: 'Московская область',
+  подольск: 'Московская область',
+  серпухов: 'Московская область',
+  владивосток: 'Приморский край',
+  азов: 'Ростовская область',
+}
+const placeOf = (q: string) => Object.keys(PLACE_REGION).find((p) => q.includes(p))
+
+/** Worst case: any place other than Moscow is called "another region" (with the region it knows the place to be in). */
+const naiveAboutMoscowOnly = (q: string): Answer | undefined => {
+  const place = placeOf(q)
+  if (!place) return undefined
+  if (place === 'москв') return { status: 'target', confidence: 92, reason: 'Основная услуга проекта' }
+  return { status: 'geo_mismatch', confidence: 92, reason: 'Указан город вне региона проекта', queryRegion: PLACE_REGION[place] }
+}
+
+const GEO_QUERIES = ['полировка фар москва', 'химчистка авто подольск', 'оклейка авто химки', 'оклейка авто серпухов', 'оклейка авто владивосток', 'полировка фар азов']
+
+test('Москва + Московская область: towns of the oblast are never geo_mismatch, places outside it stay geo_mismatch', async (t) => {
+  await withProject(
+    t,
+    GEO_QUERIES,
+    async (pool, projectId) => {
+      await saveProjectSeoContext(pool, projectId, { ...DETAILING, region: 'Москва + Московская область' })
+      const job = await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi({ judge: naiveAboutMoscowOnly }).llm })
+      for (const q of ['полировка фар москва', 'химчистка авто подольск', 'оклейка авто химки', 'оклейка авто серпухов']) {
+        assert.notEqual((await statusOf(pool, projectId, q)).s, 'geo_mismatch', q)
+      }
+      assert.equal((await statusOf(pool, projectId, 'полировка фар москва')).s, 'target')
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто владивосток')).s, 'geo_mismatch')
+      assert.equal((await statusOf(pool, projectId, 'полировка фар азов')).s, 'geo_mismatch')
+      assert.equal(job.result?.geoRejected, 3, 'the three oblast towns were rejected by the code backstop')
+      assert.match((await statusOf(pool, projectId, 'оклейка авто химки')).r, /целевому региону/)
+    },
+    { pages: false },
+  )
+})
+
+test('geo_mismatch with an explicit target region needs the AI to name a region outside it', async (t) => {
+  await withProject(
+    t,
+    ['оклейка авто химки', 'оклейка авто владивосток'],
+    async (pool, projectId) => {
+      await saveProjectSeoContext(pool, projectId, { ...DETAILING, region: 'Москва + Московская область' })
+      // No query_region at all → cannot be confirmed → uncertain, not geo_mismatch.
+      const silent = (q: string): Answer => ({ status: 'geo_mismatch', confidence: 95, reason: 'Указан регион вне региона проекта', queryRegion: q.includes('владивосток') ? undefined : '' })
+      await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi({ judge: silent }).llm })
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто химки')).s, 'uncertain')
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто владивосток')).s, 'uncertain')
+    },
+    { pages: false },
+  )
+})
+
+test('the prompt tells the model that every settlement of the target oblast is inside the target geography', () => {
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /EVERY settlement inside it/)
+  assert.match(RELEVANCE_SYSTEM_PROMPT, /query_region/)
+})
+
+test('recheck geo: only AI geo_mismatch goes back to the AI; manual, uncertain, irrelevant and target stay; keywords untouched', async (t) => {
+  await withProject(
+    t,
+    ['оклейка авто химки', 'оклейка авто владивосток', 'оклейка авто такси', 'защита ip68', 'оклейка авто цена', 'оклейка авто подольск'],
+    async (pool, projectId) => {
+      // Earlier (buggy) state: towns marked as another region with no region named.
+      await pool.query(
+        `UPDATE keywords SET relevance_status = 'geo_mismatch', relevance_confidence = 90, relevance_reason = 'Указан регион вне региона проекта', relevance_checked_at = now()
+         WHERE project_id = $1 AND query = ANY($2::text[])`,
+        [projectId, ['оклейка авто химки', 'оклейка авто владивосток', 'оклейка авто подольск']],
+      )
+      await pool.query(`UPDATE keywords SET relevance_status = 'uncertain', relevance_confidence = 60, relevance_reason = 'x', relevance_checked_at = now() WHERE project_id = $1 AND query = 'оклейка авто такси'`, [projectId])
+      await pool.query(`UPDATE keywords SET relevance_status = 'irrelevant', relevance_confidence = 95, relevance_reason = 'x', relevance_checked_at = now() WHERE project_id = $1 AND query = 'защита ip68'`, [projectId])
+      await pool.query(`UPDATE keywords SET relevance_status = 'target', relevance_confidence = 90, relevance_reason = 'x', relevance_checked_at = now() WHERE project_id = $1 AND query = 'оклейка авто цена'`, [projectId])
+      const idOf = async (q: string) => (await pool.query('SELECT id FROM keywords WHERE project_id = $1 AND query = $2', [projectId, q])).rows[0].id
+      await setKeywordRelevance(pool, { projectId, keywordId: await idOf('оклейка авто подольск'), status: 'geo_mismatch' })
+      await saveProjectSeoContext(pool, projectId, { ...DETAILING, region: 'Москва + Московская область' })
+
+      const { requeueGeoMismatchKeywords } = await import('./keywords-relevance.ts')
+      const before = await countKeywords(pool, projectId)
+      assert.equal(await requeueGeoMismatchKeywords(pool, projectId), 2, 'only the two AI geo_mismatch rows; the manual one is skipped')
+      assert.equal(await countKeywords(pool, projectId), before)
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто такси')).s, 'uncertain')
+      assert.equal((await statusOf(pool, projectId, 'защита ip68')).s, 'irrelevant')
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто цена')).s, 'target')
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто подольск')).m, true)
+
+      const ai = fakeAi({ judge: naiveAboutMoscowOnly })
+      await cleanupKeywordsForProject(pool, projectId, { llm: ai.llm })
+      assert.deepEqual(ai.calls.flatMap((c) => c.queries).sort(), ['оклейка авто владивосток', 'оклейка авто химки'])
+      assert.notEqual((await statusOf(pool, projectId, 'оклейка авто химки')).s, 'geo_mismatch')
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто владивосток')).s, 'geo_mismatch')
+      assert.equal((await statusOf(pool, projectId, 'оклейка авто подольск')).s, 'geo_mismatch', 'manual decision untouched')
+    },
+    { pages: false },
+  )
 })
