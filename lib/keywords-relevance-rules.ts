@@ -23,8 +23,25 @@ export const RELEVANCE_CONFIDENCE_THRESHOLDS: Record<Exclude<RelevanceStatus, 'u
   irrelevant: 70,
 }
 
-/** Unique queries per AI call: ~55 output tokens each ⇒ ~5.5k of the Router's 12 000 max output tokens. */
+/** Unique queries per AI call. */
 export const RELEVANCE_BATCH_SIZE = 100
+/**
+ * Output budget of one cleanup call, derived from the batch instead of the Router's generic 12 000:
+ * worst case every row carries a reason — id (≤3 tokens) + code + confidence + punctuation (~10) plus
+ * a ≤12-word Russian reason (~30) ≈ 45 tokens/row — plus headroom for the JSON envelope and the
+ * residual reasoning of low-effort/minimal-thinking models (their thinking counts against the limit).
+ * Typical rows (target/informational) are ~8–12 tokens, so the limit is rarely approached.
+ */
+export const RELEVANCE_OUTPUT_TOKENS_PER_ROW = 45
+export const RELEVANCE_OUTPUT_TOKENS_OVERHEAD = 1000
+/** The Router's own default; a retry after an unusable answer may widen the limit up to it. */
+export const RELEVANCE_OUTPUT_TOKENS_CAP = 12000
+
+/** Output token limit for a batch of `rows` unique queries; `attempt` 0 = first call, 1 = retry (doubled, capped). */
+export function relevanceMaxOutputTokens(rows: number, attempt = 0): number {
+  const base = rows * RELEVANCE_OUTPUT_TOKENS_PER_ROW + RELEVANCE_OUTPUT_TOKENS_OVERHEAD
+  return Math.min(RELEVANCE_OUTPUT_TOKENS_CAP, attempt > 0 ? base * 2 : base)
+}
 /** Cap on the keyword list of one prompt. */
 export const RELEVANCE_BATCH_MAX_CHARS = 12000
 /** Pages listed in the project context, and chars kept per page field. */
@@ -149,6 +166,9 @@ export function decide(
   }
 }
 
+/** One-letter codes of the compact answer. */
+const COMPACT_STATUS: Record<string, RelevanceStatus> = { t: 'target', i: 'informational', u: 'uncertain', g: 'geo_mismatch', x: 'irrelevant' }
+
 export type AiRelevanceItem = { keywordId: number; status: RelevanceStatus; confidence: number; reason: string; queryRegion: string }
 
 function stripToJson(text: string): string {
@@ -158,10 +178,15 @@ function stripToJson(text: string): string {
 }
 
 /**
- * Validates one AI answer. Returns null when the answer as a whole is unusable (not JSON, no
- * `results` array, or not a single valid item) — the caller then fails that batch and saves nothing.
- * Single bad items (unknown id, unknown status, no numeric confidence, repeated id) are dropped;
- * the AI can never change a query: only ids that were sent are accepted and only the id is read back.
+ * Validates one AI answer. Returns null when the answer as a whole is unusable (not JSON, neither a
+ * compact `r` nor a legacy `results` array, or not a single valid item) — the caller then fails that
+ * batch and saves nothing. Single bad items (malformed row, unknown id/status, no numeric confidence,
+ * repeated id) are dropped; their keywords simply stay unclassified (reported as `unresolved`), never
+ * guessed. The AI can never change a query: only ids that were sent are accepted.
+ *
+ * Compact form (what the prompt asks for): {"r":[[id,"t",92], [id,"u",55,"reason"], [id,"g",90,"region","reason"]]}
+ * — t/i carry no reason (the server uses its default), u/x a reason, g the place's region and optionally a reason.
+ * The older object form {"results":[{keyword_id,relevance_status,confidence,reason,query_region}]} is still accepted.
  */
 export function parseRelevanceResponse(raw: string, sentIds: Set<number>): AiRelevanceItem[] | null {
   const text = stripToJson(raw)
@@ -174,21 +199,45 @@ export function parseRelevanceResponse(raw: string, sentIds: Set<number>): AiRel
       // try the next candidate
     }
   }
-  const results = data && typeof data === 'object' ? (data as Record<string, unknown>).results : undefined
-  if (!Array.isArray(results)) return null
-
+  const root = data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
   const seen = new Set<number>()
   const items: AiRelevanceItem[] = []
-  for (const entry of results) {
+  const add = (id: number, status: string, confidence: number, reason: unknown, region: unknown) => {
+    if (!Number.isInteger(id) || !sentIds.has(id) || seen.has(id)) return
+    if (!isRelevanceStatus(status) || !Number.isFinite(confidence)) return
+    seen.add(id)
+    items.push({
+      keywordId: id,
+      status,
+      confidence: Math.max(0, Math.min(100, Math.round(confidence))),
+      reason: typeof reason === 'string' ? reason : '',
+      queryRegion: typeof region === 'string' ? region.replace(/\s+/g, ' ').trim().slice(0, 80) : '',
+    })
+  }
+
+  if (Array.isArray(root.r)) {
+    for (const row of root.r) {
+      if (!Array.isArray(row) || row.length < 3) continue
+      const code = typeof row[1] === 'string' ? row[1].trim().toLowerCase() : ''
+      const status = COMPACT_STATUS[code] ?? code
+      const isGeo = status === 'geo_mismatch'
+      const region = isGeo ? row[3] : ''
+      const reason = isGeo ? row[4] : row[3]
+      add(Number(row[0]), status, typeof row[2] === 'number' ? row[2] : Number(row[2]), isGeo && typeof reason !== 'string' && typeof region === 'string' && region.trim() ? `Указан другой регион: ${region.trim()}` : reason, region)
+    }
+    return items.length ? items : null
+  }
+  if (!Array.isArray(root.results)) return null
+  for (const entry of root.results) {
     if (!entry || typeof entry !== 'object') continue
     const e = entry as Record<string, unknown>
-    const id = Number(e.keyword_id)
-    const status = typeof e.relevance_status === 'string' ? e.relevance_status.trim().toLowerCase() : ''
-    const confidence = typeof e.confidence === 'number' ? e.confidence : Number(e.confidence)
-    if (!Number.isInteger(id) || !sentIds.has(id) || seen.has(id)) continue
-    if (!isRelevanceStatus(status) || !Number.isFinite(confidence)) continue
-    seen.add(id)
-    items.push({ keywordId: id, status, confidence: Math.max(0, Math.min(100, Math.round(confidence))), reason: typeof e.reason === 'string' ? e.reason : '', queryRegion: typeof e.query_region === 'string' ? e.query_region.replace(/\s+/g, ' ').trim().slice(0, 80) : '' })
+    add(
+      Number(e.keyword_id),
+      typeof e.relevance_status === 'string' ? e.relevance_status.trim().toLowerCase() : '',
+      typeof e.confidence === 'number' ? e.confidence : Number(e.confidence),
+      e.reason,
+      e.query_region,
+    )
   }
   return items.length ? items : null
 }
@@ -209,11 +258,14 @@ Rules:
 1. Do not be aggressive. Being a "similar" query from Wordstat does NOT make a query irrelevant, and a popular one is not automatically a target. When in doubt prefer "uncertain" over "irrelevant"/"geo_mismatch". Missing information about the business is never evidence against a query.
 2. Never change, correct or translate a query; you only return its keyword_id.
 3. "confidence" is an integer 0-100: how sure you are of THIS status.
-4. "reason" is ONE short sentence in RUSSIAN (at most 12 words) that a business owner can read, e.g. «Основная услуга проекта», «Указан регион вне региона проекта», «Запрос не относится к бизнесу проекта». No reasoning chains, no quotes of the query.
-5. Return a result for EVERY keyword_id you were given, each exactly once.
-6. Return ONLY strict JSON, no markdown, no commentary:
-{"results":[{"keyword_id":number,"relevance_status":"target"|"informational"|"uncertain"|"geo_mismatch"|"irrelevant","confidence":number,"reason":string,"query_region":string}]}
-   "query_region": only for "geo_mismatch" — the short official name of the region/country the place named in the query belongs to; an empty string for every other status.`
+4. A "reason" is ONE short sentence in RUSSIAN (at most 12 words) that a business owner can read, e.g. «Запрос не относится к бизнесу проекта», «Нужно решение: сегмент не подтверждён». No reasoning chains, no quotes of the query. Give a reason ONLY where the output format below asks for one.
+5. Return a row for EVERY keyword_id you were given, each exactly once. Do not repeat the query text.
+6. Return ONLY strict JSON, no markdown, no commentary, in this compact form — one array row per query:
+{"r":[[keyword_id,"t",confidence],[keyword_id,"u",confidence,"reason"],[keyword_id,"g",confidence,"query_region","reason"]]}
+   The second element is a one-letter status code: "t" = target, "i" = informational, "u" = uncertain, "g" = geo_mismatch, "x" = irrelevant.
+   - "t" and "i": exactly [keyword_id,code,confidence] — NO reason.
+   - "u" and "x": [keyword_id,code,confidence,"reason"].
+   - "g": [keyword_id,"g",confidence,"query_region","reason"] — "query_region" is the short official name of the region/country the place named in the query belongs to (required).`
 
 export type ContextPage = { url: string; title: string | null; h1: string | null; description: string | null }
 
