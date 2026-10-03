@@ -2,13 +2,13 @@
 // failures are retried: network errors, timeouts, HTTP 5xx and 429. Other 4xx are permanent and returned at once.
 
 export const FETCH_ATTEMPTS = 3
-export const FETCH_TIMEOUT_MS = 15_000
-const RETRY_DELAY_MS = 500
+export const FETCH_TIMEOUT_MS = 9_000
+const RETRY_DELAY_MS = 1_000
 
 export type RetryOptions = {
   attempts?: number
   timeoutMs?: number
-  /** Pause before attempt n+1 is n × this value. Tests pass 0. */
+  /** Pause before attempt n+1 is n × this value (1 s, 2 s by default). Tests pass 0. */
   retryDelayMs?: number
 }
 
@@ -49,12 +49,18 @@ export async function fetchTextWithRetry(
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       const res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
-      if (!isTransientStatus(res.status)) return { status: res.status, ok: res.ok, text: await res.text() }
+      if (!isTransientStatus(res.status)) {
+        const text = await res.text()
+        // Journald line per recovered fetch: shows how often the network path really fails before a fix is chosen.
+        if (attempt > 1) console.warn(`[pages-sync] ${url}: ok on attempt ${attempt} after ${attempt - 1} failed (last: ${reason})`)
+        return { status: res.status, ok: res.ok, text }
+      }
       reason = `HTTP ${res.status}`
     } catch (err) {
       reason = describe(err)
     }
     if (attempt < attempts && delay > 0) await new Promise((r) => setTimeout(r, delay * attempt))
   }
+  console.error(`[pages-sync] ${url}: all ${attempts} attempts failed (last: ${reason})`)
   throw new FetchRetryError(`${url}: ${reason} after ${attempts} attempts`, attempts)
 }
