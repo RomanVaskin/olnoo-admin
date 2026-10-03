@@ -355,8 +355,31 @@ function styleGuardBlock(): string {
   ].join('\n')
 }
 
-function clustersListBlock(clusters: TaskCluster[]): string {
-  const parts = [`SEO clusters страницы (${clusters.length}):`]
+/** Page clusters kept for analytics only: listed by name/intent/frequency, never with keywords. */
+export type TaskAnalyticsCluster = {
+  name: string
+  intent: string
+  totalFrequency: number | null
+}
+
+function analyticsClustersBlock(clusters: TaskAnalyticsCluster[]): string {
+  return [
+    `Аналитические кластеры страницы (${clusters.length}) — НЕ входят в content scope:`,
+    '',
+    ...clusters.map((c) => `- ${c.name} (intent: ${c.intent}, total frequency: ${c.totalFrequency ?? 0})`),
+    '',
+    'Эти кластеры привязаны к странице только для аналитики. НЕ оптимизируй страницу под них,',
+    'не покрывай и не упоминай их запросы и бренды. SEO RULE, CTA, COVERAGE CHECK и Quality Gate',
+    'относятся только к кластерам content scope.',
+  ].join('\n')
+}
+
+function clustersListBlock(clusters: TaskCluster[], scoped: boolean): string {
+  const parts = [
+    scoped
+      ? `Content scope — SEO clusters страницы, обязательные для content coverage (${clusters.length}):`
+      : `SEO clusters страницы (${clusters.length}):`,
+  ]
   clusters.forEach((c, i) => {
     parts.push(
       '',
@@ -390,6 +413,7 @@ export function buildImproveTask(
   clusterOrClusters: TaskCluster | TaskCluster[],
   page: TaskPage,
   locale: TaskLocale,
+  analyticsOnly: TaskAnalyticsCluster[] = [],
 ): string {
   const clusters = Array.isArray(clusterOrClusters) ? clusterOrClusters : [clusterOrClusters]
   if (clusters.length === 0) throw new Error('buildImproveTask: at least one cluster is required')
@@ -419,8 +443,13 @@ export function buildImproveTask(
       ? '5. изменить только то, что нужно для покрытия всех SEO-кластеров страницы и conversion intent.'
       : '5. изменить только то, что нужно для покрытия SEO-кластера и conversion intent.',
     '',
-    multi ? clustersListBlock(clusters) : clusterBlock(clusters[0]),
+    ...(multi
+      ? [clustersListBlock(clusters, analyticsOnly.length > 0)]
+      : analyticsOnly.length > 0
+        ? ['Content scope — SEO cluster, обязательный для content coverage:', '', clusterBlock(clusters[0])]
+        : [clusterBlock(clusters[0])]),
     '',
+    ...(analyticsOnly.length > 0 ? [analyticsClustersBlock(analyticsOnly), ''] : []),
     'Current page:',
     '',
     `URL: ${page.url}`,
