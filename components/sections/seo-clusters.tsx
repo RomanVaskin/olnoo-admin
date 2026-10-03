@@ -5,7 +5,7 @@ import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
 import { useProjects, ProjectPicker } from '@/components/sections/seo-project-picker'
-import { displayStatus, showCreateSuggestion } from '@/lib/cluster-decision'
+import { displayStatus, hasHumanDecision, showCreateSuggestion, showNoPagePlaceholder } from '@/lib/cluster-decision'
 import { clusterLocale, getRecommendedPages, pagePath, pagesForLocale, searchPages, type PageOption } from '@/lib/cluster-pages'
 import { buildCreateTask, buildImproveTask, type TaskLocale, type TaskPage } from '@/lib/seo-task-generator'
 
@@ -190,6 +190,9 @@ function RecommendedPagesList({
   const { t } = useI18n()
   return (
     <div className="flex flex-col gap-1.5">
+      {cluster.confirmedPageId != null && cluster.confirmedPageUrl && (
+        <span className="truncate font-mono text-xs text-blue">{pagePath(cluster.confirmedPageUrl)}</span>
+      )}
       {pages.length > 0 ? (
         pages.map((p) => (
           <div key={p.id} className="flex items-center gap-2 overflow-hidden">
@@ -199,9 +202,9 @@ function RecommendedPagesList({
             )}
           </div>
         ))
-      ) : (
+      ) : showNoPagePlaceholder(cluster, pages.length) ? (
         <span className="text-muted-foreground">{t.seoClusters.noPage}</span>
-      )}
+      ) : null}
       <FindPageButton label={t.seoClusters.findExisting} onClick={onFindExisting} />
     </div>
   )
@@ -624,7 +627,7 @@ export function SeoClusters() {
                       <StatusPill status={displayStatus(c)} />
                       {c.aiDecision && (
                         <span className="mt-1 block label-mono text-muted-foreground">
-                          AI: {t.seoClusters.aiDecisionLabel[c.aiDecision]}
+                          {hasHumanDecision(c) ? t.seoClusters.aiPreviously : 'AI'}: {t.seoClusters.aiDecisionLabel[c.aiDecision]}
                           {showCreateSuggestion(c) && c.suggestedSlug ? ` · /${c.suggestedSlug}` : ''}
                         </span>
                       )}
@@ -745,7 +748,10 @@ export function SeoClusters() {
                           </dl>
                         )}
                         {c.reason && (
-                          <p className="mt-3 max-w-2xl text-xs text-muted-foreground">{c.reason}</p>
+                          <p className="mt-3 max-w-2xl text-xs text-muted-foreground">
+                            {hasHumanDecision(c) ? `${t.seoClusters.aiPreviously}: ` : ''}
+                            {c.reason}
+                          </p>
                         )}
                       </td>
                     </tr>

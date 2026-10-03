@@ -387,6 +387,7 @@ export const ru: Messages = {
       `AI решения: CREATE ${create} · IMPROVE ${improve} · IGNORE ${ignore}${skipped ? ` · без решения ${skipped}` : ''}`,
     aiReviewFailed: (failed: number) => `не обработано batch: ${failed}, нажмите кнопку ещё раз — продолжится с оставшихся`,
     aiDecisionLabel: { create: 'CREATE', improve: 'IMPROVE', ignore: 'IGNORE' },
+    aiPreviously: 'AI ранее',
     aiSuggestedPage: 'Предложение новой страницы',
     progress: {
       processed: (done: string, total: string) => `Обработано ${done} / ${total} ключевых слов`,

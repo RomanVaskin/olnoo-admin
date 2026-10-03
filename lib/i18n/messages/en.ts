@@ -377,6 +377,7 @@ export const en = {
       `AI decisions: CREATE ${create} · IMPROVE ${improve} · IGNORE ${ignore}${skipped ? ` · undecided ${skipped}` : ''}`,
     aiReviewFailed: (failed: number) => `${failed} batch(es) failed — click again to continue with the rest`,
     aiDecisionLabel: { create: 'CREATE', improve: 'IMPROVE', ignore: 'IGNORE' },
+    aiPreviously: 'AI earlier',
     aiSuggestedPage: 'Suggested new page',
     progress: {
       processed: (done: string, total: string) => `Processed ${done} / ${total} keywords`,
