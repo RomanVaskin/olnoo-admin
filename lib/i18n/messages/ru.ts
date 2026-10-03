@@ -378,6 +378,16 @@ export const ru: Messages = {
     generateButton: 'AI-кластеризация',
     generating: 'Кластеризация…',
     generateError: 'Не удалось выполнить кластеризацию. Попробуйте ещё раз.',
+    aiReviewButton: 'AI проверить все кластеры',
+    aiReviewing: 'AI проверка…',
+    aiReviewError: 'Не удалось выполнить AI-проверку кластеров. Попробуйте ещё раз.',
+    aiReviewProgress: (batchesDone: number, batchesTotal: number, reviewed: number, total: number) =>
+      `AI проверка: batch ${batchesDone} из ${batchesTotal}, решений ${reviewed} из ${total}`,
+    aiReviewSummary: (create: number, improve: number, ignore: number, skipped: number) =>
+      `AI решения: CREATE ${create} · IMPROVE ${improve} · IGNORE ${ignore}${skipped ? ` · без решения ${skipped}` : ''}`,
+    aiReviewFailed: (failed: number) => `не обработано batch: ${failed}, нажмите кнопку ещё раз — продолжится с оставшихся`,
+    aiDecisionLabel: { create: 'CREATE', improve: 'IMPROVE', ignore: 'IGNORE' },
+    aiSuggestedPage: 'Предложение новой страницы',
     progress: {
       processed: (done: string, total: string) => `Обработано ${done} / ${total} ключевых слов`,
       batch: (done: number, total: number) => `Batch ${done} / ${total}`,

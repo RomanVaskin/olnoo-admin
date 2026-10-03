@@ -26,7 +26,23 @@ type ClusterRow = {
   confirmedPageUrl: string | null
   reviewStatus: ReviewStatus
   reviewedAt: string | null
+  aiDecision?: 'create' | 'improve' | 'ignore' | null
+  suggestedSlug?: string | null
+  suggestedH1?: string | null
+  suggestedTitle?: string | null
   keywords: { id: number; query: string; frequency: number | null }[]
+}
+
+type AiReviewView = {
+  status: 'running' | 'failed' | 'done'
+  total: number
+  reviewed: number
+  skipped: number
+  batchesTotal: number
+  batchesDone: number
+  batchesFailed: number
+  counts: { create: number; improve: number; ignore: number }
+  error: string | null
 }
 
 type PageOption = {
@@ -421,6 +437,9 @@ export function SeoClusters() {
   const [searchOpenId, setSearchOpenId] = useState<number | null>(null)
   const [job, setJob] = useState<PipelineView | null>(null)
   const pollTimer = useRef<number | null>(null)
+  const [aiReview, setAiReview] = useState<AiReviewView | null>(null)
+  const [aiReviewing, setAiReviewing] = useState(false)
+  const reviewTimer = useRef<number | null>(null)
 
   useEffect(() => {
     if (projects.length && projectId === null) setProjectId(projects[0].id)
@@ -453,8 +472,54 @@ export function SeoClusters() {
 
   useEffect(() => stopPolling, [])
 
-  function loadClusters(id: number) {
-    setLoading(true)
+  function stopReviewPolling() {
+    if (reviewTimer.current !== null) window.clearTimeout(reviewTimer.current)
+    reviewTimer.current = null
+  }
+  useEffect(() => stopReviewPolling, [])
+
+  /** Polls the AI review until it finishes; reloads the table (decisions already saved) on every tick and at the end. */
+  function pollReview(id: number) {
+    stopReviewPolling()
+    fetch(`/api/seo-clusters/review?projectId=${id}`)
+      .then((r) => r.json())
+      .then((data: { job: AiReviewView | null }) => {
+        setAiReview(data.job)
+        loadClusters(id, true)
+        if (data.job?.status === 'running') {
+          setAiReviewing(true)
+          reviewTimer.current = window.setTimeout(() => pollReview(id), 2000)
+          return
+        }
+        setAiReviewing(false)
+      })
+      .catch(() => {
+        reviewTimer.current = window.setTimeout(() => pollReview(id), 4000)
+      })
+  }
+
+  async function handleAiReview() {
+    if (projectId === null) return
+    setAiReviewing(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/seo-clusters/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || t.seoClusters.aiReviewError)
+      setAiReview(data.job)
+      pollReview(projectId)
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : t.seoClusters.aiReviewError)
+      setAiReviewing(false)
+    }
+  }
+
+  function loadClusters(id: number, quiet = false) {
+    if (!quiet) setLoading(true)
     fetch(`/api/seo-clusters?projectId=${id}`)
       .then((r) => r.json())
       .then(setClusters)
@@ -486,10 +551,14 @@ export function SeoClusters() {
     setSearchOpenId(null)
     setJob(null)
     setGenerating(false)
+    stopReviewPolling()
+    setAiReview(null)
+    setAiReviewing(false)
     loadClusters(projectId)
     loadPages(projectId)
     // Picks up a run that is still in progress (e.g. after a page reload).
     pollJob(projectId)
+    pollReview(projectId)
   }, [projectId])
 
   async function handleReview(
@@ -609,6 +678,26 @@ export function SeoClusters() {
       )}
 
       {clusters.length > 0 && (
+        <div className="flex flex-wrap items-center gap-4">
+          <button
+            onClick={() => void handleAiReview()}
+            disabled={aiReviewing || generating || projectId === null}
+            className="label-mono whitespace-nowrap border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {aiReviewing ? t.seoClusters.aiReviewing : t.seoClusters.aiReviewButton}
+          </button>
+          {aiReview && (
+            <span className="label-mono text-muted-foreground">
+              {aiReview.status === 'running'
+                ? t.seoClusters.aiReviewProgress(aiReview.batchesDone + aiReview.batchesFailed, aiReview.batchesTotal, aiReview.reviewed, aiReview.total)
+                : t.seoClusters.aiReviewSummary(aiReview.counts.create, aiReview.counts.improve, aiReview.counts.ignore, aiReview.skipped)}
+              {aiReview.status === 'failed' && ` — ${t.seoClusters.aiReviewFailed(aiReview.batchesFailed)}`}
+            </span>
+          )}
+        </div>
+      )}
+
+      {clusters.length > 0 && (
         <TableShell>
           <thead>
             <tr>
@@ -661,6 +750,12 @@ export function SeoClusters() {
                     <Td className="text-right font-mono">{c.confidence ?? '—'}</Td>
                     <Td>
                       <StatusPill status={displayStatus(c)} />
+                      {c.aiDecision && c.reviewStatus === 'pending' && (
+                        <span className="mt-1 block label-mono text-muted-foreground">
+                          AI: {t.seoClusters.aiDecisionLabel[c.aiDecision]}
+                          {c.aiDecision === 'create' && c.suggestedSlug ? ` · /${c.suggestedSlug}` : ''}
+                        </span>
+                      )}
                     </Td>
                     <Td>
                       {searchOpenId === c.id ? (
@@ -769,6 +864,14 @@ export function SeoClusters() {
                             </span>
                           ))}
                         </div>
+                        {c.aiDecision === 'create' && (c.suggestedSlug || c.suggestedH1 || c.suggestedTitle) && (
+                          <dl className="mt-3 grid max-w-2xl gap-1 text-xs">
+                            <dt className="label-mono text-muted-foreground">{t.seoClusters.aiSuggestedPage}</dt>
+                            {c.suggestedSlug && <dd className="font-mono text-blue">/{c.suggestedSlug}</dd>}
+                            {c.suggestedH1 && <dd className="text-foreground/90">H1: {c.suggestedH1}</dd>}
+                            {c.suggestedTitle && <dd className="text-foreground/90">Title: {c.suggestedTitle}</dd>}
+                          </dl>
+                        )}
                         {c.reason && (
                           <p className="mt-3 max-w-2xl text-xs text-muted-foreground">{c.reason}</p>
                         )}
