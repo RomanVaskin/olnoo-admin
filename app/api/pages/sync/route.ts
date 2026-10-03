@@ -24,8 +24,10 @@ export async function POST(req: Request) {
   let urls: string[]
   try {
     urls = await fetchSitemapUrls(project.sitemap_url)
-  } catch {
-    return NextResponse.json({ error: 'Failed to fetch sitemap' }, { status: 502 })
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    console.error('pages/sync: sitemap fetch failed', detail)
+    return NextResponse.json({ error: `Failed to fetch sitemap: ${detail}` }, { status: 502 })
   }
 
   let upserted = 0
