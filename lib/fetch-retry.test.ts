@@ -87,3 +87,25 @@ test('timeout is reported as such when every attempt hangs', async () => {
     await assert.rejects(fetchTextWithRetry('https://x.example/', {}, { retryDelayMs: 0, timeoutMs: 10 }), /timeout after 3 attempts/)
   })
 })
+
+test('a recovered fetch and an exhausted one are logged with the number of failed attempts', async () => {
+  const original = { warn: console.warn, error: console.error }
+  const logs: string[] = []
+  console.warn = (m: string) => void logs.push(`warn ${m}`)
+  console.error = (m: string) => void logs.push(`error ${m}`)
+  try {
+    await withFetch([netErr(), netErr(), xml('https://x.example/a')], async () => {
+      await fetchTextWithRetry('https://x.example/sitemap.xml', {}, NO_DELAY)
+    })
+    await withFetch([netErr()], async () => {
+      await assert.rejects(fetchTextWithRetry('https://x.example/down', {}, NO_DELAY))
+    })
+  } finally {
+    console.warn = original.warn
+    console.error = original.error
+  }
+  assert.deepEqual(logs, [
+    'warn [pages-sync] https://x.example/sitemap.xml: ok on attempt 3 after 2 failed (last: ECONNRESET)',
+    'error [pages-sync] https://x.example/down: all 3 attempts failed (last: ECONNRESET)',
+  ])
+})
