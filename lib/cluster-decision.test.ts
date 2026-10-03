@@ -34,3 +34,20 @@ test('«Полировка фар» (RU, AI=create) can find the neutral /poliro
   const found = searchPages(pagesForLocale(pages, clusterLocale(cluster, pages)), 'polirovka')
   assert.deepEqual(found.map((p) => p.id), [1])
 })
+
+import { hasHumanDecision, showNoPagePlaceholder } from './cluster-decision.ts'
+
+test('«Нет страницы» is never the main text of a row with a confirmed page (row and detail use the same block)', () => {
+  const confirmed: ClusterDecisionInput = { status: 'No page', reviewStatus: 'confirmed', confirmedPageId: 7, aiDecision: 'create' }
+  assert.equal(showNoPagePlaceholder(confirmed, 0), false, 'no placeholder even when there are no recommended candidates')
+  assert.equal(displayStatus(confirmed), 'Existing page')
+  assert.equal(hasHumanDecision(confirmed), true, 'the AI result is shown as history («AI ранее»)')
+})
+
+test('placeholder stays for a genuinely page-less cluster; ignored never shows it; pending AI result is not "history"', () => {
+  assert.equal(showNoPagePlaceholder(aiCreate, 0), true)
+  assert.equal(showNoPagePlaceholder(aiCreate, 2), false, 'candidates are listed instead')
+  assert.equal(showNoPagePlaceholder({ ...aiCreate, reviewStatus: 'ignored' }, 0), false)
+  assert.equal(hasHumanDecision(aiCreate), false)
+  assert.equal(hasHumanDecision({ ...aiCreate, reviewStatus: 'no_page' }), true)
+})

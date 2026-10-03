@@ -20,3 +20,16 @@ export function displayStatus(c: ClusterDecisionInput): string {
 export function showCreateSuggestion(c: ClusterDecisionInput): boolean {
   return c.aiDecision === 'create' && c.confirmedPageId == null && (c.reviewStatus === 'pending' || c.reviewStatus === 'no_page')
 }
+
+/** A person already decided (confirmed page, no_page or ignored); the AI's result is then history only. */
+export function hasHumanDecision(c: ClusterDecisionInput): boolean {
+  return c.reviewStatus !== 'pending' || c.confirmedPageId != null
+}
+
+/**
+ * The «Нет страницы» placeholder of the recommended-pages block is allowed only when there is genuinely no page:
+ * never with a confirmed page (the confirmed page is shown there instead) and never for an ignored cluster.
+ */
+export function showNoPagePlaceholder(c: ClusterDecisionInput, recommendedCount: number): boolean {
+  return recommendedCount === 0 && c.confirmedPageId == null && c.reviewStatus !== 'ignored'
+}
