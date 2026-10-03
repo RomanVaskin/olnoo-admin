@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg'
-import { callAiRouter, type AiRouterMessage } from './ai-router.ts'
+import { callAiRouter, SEO_BULK_ROUTE, type AiRouterMessage } from './ai-router.ts'
 import {
   buildProjectContext,
   buildRelevanceUserPrompt,
@@ -359,7 +359,7 @@ async function stillUnclassified(pool: Pool, job: RelevanceJob): Promise<number[
  * again on the same job redoes only the failed batches.
  */
 export async function runRelevanceJob(pool: Pool, job: RelevanceJob, opts: RelevanceOptions = {}): Promise<RelevanceJob> {
-  const llm = opts.llm ?? ((messages, o) => callAiRouter(messages, o))
+  const llm = opts.llm ?? ((messages, o) => callAiRouter(messages, { ...o, ...SEO_BULK_ROUTE }))
   job.status = 'running'
   job.error = null
   try {

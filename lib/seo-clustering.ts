@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg'
-import { callAiRouter, type AiRouterMessage } from './ai-router.ts'
+import { callAiRouter, SEO_BULK_ROUTE, type AiRouterMessage } from './ai-router.ts'
 import { CLUSTERING_KEYWORD_FILTER_SQL } from './keywords-relevance-rules.ts'
 import {
   chunk,
@@ -691,7 +691,7 @@ function finalizeGroup(job: ClusteringJob, members: Unit[], pageByUrl: Map<strin
  * Existing clusters are replaced only at the very end; a failure before that changes nothing in the DB.
  */
 export async function runClusteringJob(pool: Pool, job: ClusteringJob, opts: ClusteringOptions = {}): Promise<ClusteringJob> {
-  const llm = opts.llm ?? ((messages) => callAiRouter(messages))
+  const llm = opts.llm ?? ((messages) => callAiRouter(messages, { ...SEO_BULK_ROUTE, task: 'seo-clustering' }))
   const concurrency = opts.concurrency ?? 2
   job.status = 'running'
   job.error = null

@@ -803,3 +803,70 @@ test('geo_mismatch, irrelevant, uncertain and unchecked keywords are not in the 
     assert.doesNotMatch(sent, /свежий запрос/, 'not-yet-checked keywords wait for cleanup')
   })
 })
+
+// ---- SEO bulk calls go through DeepSeek (reasoning off, no fallback) ----
+
+/** Routes the production default `llm` (callAiRouter → fetch) to a fake Router and records every request body. */
+async function withFakeRouter<T>(answer: (messages: AiRouterMessage[], opts: LlmCallOptions) => Promise<string>, fn: (bodies: Record<string, unknown>[]) => Promise<T>): Promise<T> {
+  const original = globalThis.fetch
+  const bodies: Record<string, unknown>[] = []
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    bodies.push(body)
+    const content = await answer(body.messages as AiRouterMessage[], { maxTokens: body.maxTokens as number })
+    return new Response(JSON.stringify({ provider: body.provider, model: 'deepseek-v4-flash', content, fallbackUsed: false }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+  try {
+    return await fn(bodies)
+  } finally {
+    globalThis.fetch = original
+  }
+}
+
+test('relevance cleanup (production default llm) calls the Router with provider deepseek, reasoningMode off and no fallback', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    const ai = fakeAi()
+    await withFakeRouter(ai.llm, async (bodies) => {
+      await cleanupKeywordsForProject(pool, projectId)
+      assert.ok(bodies.length >= 1)
+      for (const b of bodies) {
+        assert.equal(b.provider, 'deepseek')
+        assert.equal(b.allowFallback, false)
+        assert.equal(b.reasoningMode, 'off')
+        assert.deepEqual(b.metadata, { application: 'olnoo-admin', task: 'seo-relevance-cleanup' })
+      }
+    })
+    assert.equal((await statusOf(pool, projectId, 'оклейка авто цена')).s, 'target')
+  })
+})
+
+test('clustering (production default llm) calls the Router with provider deepseek, reasoningMode off and no fallback', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    await cleanupKeywordsForProject(pool, projectId, { llm: fakeAi().llm })
+    const cluster = fakeClusterLlm()
+    await withFakeRouter(cluster.llm, async (bodies) => {
+      await generateClustersForProject(pool, projectId)
+      assert.ok(bodies.length >= 1)
+      for (const b of bodies) {
+        assert.equal(b.provider, 'deepseek')
+        assert.equal(b.allowFallback, false)
+        assert.equal(b.reasoningMode, 'off')
+        assert.deepEqual(b.metadata, { application: 'olnoo-admin', task: 'seo-clustering' })
+      }
+    })
+  })
+})
+
+test('SEO bulk calls fail instead of silently using another provider', async (t) => {
+  await withProject(t, SAMPLE, async (pool, projectId) => {
+    const original = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ provider: 'anthropic', model: 'claude-sonnet-5', content: '{"r":[]}', fallbackUsed: true }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+    try {
+      await assert.rejects(cleanupKeywordsForProject(pool, projectId), /expected "deepseek"|не удалось|failed/i)
+    } finally {
+      globalThis.fetch = original
+    }
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM keywords WHERE project_id = $1 AND relevance_status IS NOT NULL', [projectId])).rows[0].n, 0, 'nothing was saved from the substituted answer')
+  })
+})
