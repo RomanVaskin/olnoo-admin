@@ -5,6 +5,7 @@ import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
 import { useProjects, ProjectPicker } from '@/components/sections/seo-project-picker'
+import { displayStatus, showCreateSuggestion } from '@/lib/cluster-decision'
 import { clusterLocale, getRecommendedPages, pagePath, pagesForLocale, searchPages, type PageOption } from '@/lib/cluster-pages'
 import { buildCreateTask, buildImproveTask, type TaskLocale, type TaskPage } from '@/lib/seo-task-generator'
 
@@ -44,15 +45,6 @@ type AiReviewView = {
   batchesFailed: number
   counts: { create: number; improve: number; ignore: number }
   error: string | null
-}
-
-/**
- * The status shown in the table: a confirmed page always wins over the AI's original
- * classification (seo_clusters.status), which is never updated by the review flow — otherwise a
- * cluster confirmed via "Find existing" would keep showing "No page" forever.
- */
-function displayStatus(c: ClusterRow): string {
-  return c.confirmedPageId != null ? 'Existing page' : c.status
 }
 
 function PageSearch({
@@ -630,10 +622,10 @@ export function SeoClusters() {
                     <Td className="text-right font-mono">{c.confidence ?? '—'}</Td>
                     <Td>
                       <StatusPill status={displayStatus(c)} />
-                      {c.aiDecision && c.reviewStatus === 'pending' && (
+                      {c.aiDecision && (
                         <span className="mt-1 block label-mono text-muted-foreground">
                           AI: {t.seoClusters.aiDecisionLabel[c.aiDecision]}
-                          {c.aiDecision === 'create' && c.suggestedSlug ? ` · /${c.suggestedSlug}` : ''}
+                          {showCreateSuggestion(c) && c.suggestedSlug ? ` · /${c.suggestedSlug}` : ''}
                         </span>
                       )}
                     </Td>
@@ -744,7 +736,7 @@ export function SeoClusters() {
                             </span>
                           ))}
                         </div>
-                        {c.aiDecision === 'create' && (c.suggestedSlug || c.suggestedH1 || c.suggestedTitle) && (
+                        {showCreateSuggestion(c) && (c.suggestedSlug || c.suggestedH1 || c.suggestedTitle) && (
                           <dl className="mt-3 grid max-w-2xl gap-1 text-xs">
                             <dt className="label-mono text-muted-foreground">{t.seoClusters.aiSuggestedPage}</dt>
                             {c.suggestedSlug && <dd className="font-mono text-blue">/{c.suggestedSlug}</dd>}

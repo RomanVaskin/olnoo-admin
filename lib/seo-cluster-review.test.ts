@@ -11,7 +11,7 @@ import {
   waitForClusterReview,
   type ClusterReviewJob,
 } from './seo-cluster-review.ts'
-import { listClustersForProject } from './seo-clustering.ts'
+import { listClustersForProject, updateClusterReview } from './seo-clustering.ts'
 import { saveProjectSeoContext } from './project-seo-context.ts'
 
 // DB integration tests for «AI проверить все кластеры» with a fake model; skipped without Postgres
@@ -282,5 +282,33 @@ test('force re-decides pending clusters that already have an AI decision (with t
     assert.equal(redone.needs_new_page, false)
     assert.equal(redone.suggested_slug, null, 'the old CREATE suggestion is cleared')
     assert.deepEqual(await rowOf(pool, clusterIds['Уже решено']), confirmedBefore)
+  })
+})
+
+test('AI=create → the user picks an existing page → confirmed; the AI decision stays as history, the human one leads', async (t) => {
+  await withClusters(t, SEEDS, async ({ pool, projectId, clusterIds, pageIds }) => {
+    await run(pool, projectId, { llm: fakeModel(decide(clusterIds, pageIds)).llm })
+    const id = clusterIds['Детейлинг салона']
+    assert.equal((await rowOf(pool, id)).ai_decision, 'create')
+
+    await updateClusterReview(pool, { clusterId: id, projectId, reviewStatus: 'confirmed', pageId: pageIds.wrap })
+
+    const row = (await listClustersForProject(pool, projectId)).find((c) => c.id === id)!
+    assert.equal(row.reviewStatus, 'confirmed')
+    assert.equal(row.confirmedPageId, pageIds.wrap)
+    assert.equal(row.confirmedPageUrl, 'https://x.example/okleyka')
+    assert.equal(row.aiDecision, 'create', 'AI decision is kept')
+    assert.equal(row.suggestedSlug, 'detejling-salona')
+    assert.equal(row.needsNewPage, true, 'AI fields are not rewritten by the human decision')
+
+    // A later forced AI run must not touch it (human layer wins).
+    const again = await run(pool, projectId, { llm: fakeModel(() => [id, 'X', 'ignore']).llm, force: true })
+    assert.equal(again.total, 2)
+    const after = await rowOf(pool, id)
+    assert.equal(after.review_status, 'confirmed')
+    assert.equal(after.ai_decision, 'create')
+
+    // Pages of another project cannot be chosen.
+    await assert.rejects(updateClusterReview(pool, { clusterId: id, projectId, reviewStatus: 'confirmed', pageId: 999999999 }))
   })
 })
