@@ -10,7 +10,12 @@ const MAX_SITEMAPS = 20
  * Each fetch has a timeout and up to 3 attempts on network errors / timeouts / 5xx; a permanent 4xx sitemap is
  * skipped as before, and when all attempts fail the error (naming the url and reason) is thrown, not hidden.
  */
-export async function fetchSitemapUrls(sitemapUrl: string, retry: RetryOptions = {}): Promise<string[]> {
+export type FetchRouting = {
+  /** Address actually requested for a public URL (internal base for a same-server site). Saved URLs stay public. */
+  fetchUrl?: (url: string) => string
+}
+
+export async function fetchSitemapUrls(sitemapUrl: string, retry: RetryOptions = {}, routing: FetchRouting = {}): Promise<string[]> {
   const seen = new Set<string>()
   const queue = [sitemapUrl]
   const urls = new Set<string>()
@@ -20,7 +25,11 @@ export async function fetchSitemapUrls(sitemapUrl: string, retry: RetryOptions =
     if (seen.has(current)) continue
     seen.add(current)
 
-    const res = await fetchTextWithRetry(current, { headers: { 'user-agent': USER_AGENT } }, retry)
+    const res = await fetchTextWithRetry(
+      routing.fetchUrl?.(current) ?? current,
+      { headers: { 'user-agent': USER_AGENT } },
+      retry,
+    )
     if (!res.ok) continue
     const xml = res.text
 

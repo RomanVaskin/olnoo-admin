@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio'
 import { fetchTextWithRetry, type RetryOptions } from './fetch-retry.ts'
+import type { FetchRouting } from './sitemap.ts'
 
 const USER_AGENT = 'OLNOO-Admin-Sync/1.0'
 const LOCALE_PREFIXES = new Set(['ru', 'en', 'kk', 'kz'])
@@ -12,9 +13,13 @@ export type PageMeta = {
 }
 
 /** Fetches a page and extracts the fields the Pages screen displays. Returns null on any failure (after up to 3 attempts on network errors / timeouts / 5xx; a permanent 4xx is not retried). */
-export async function fetchPageMeta(url: string, retry: RetryOptions = {}): Promise<PageMeta | null> {
+export async function fetchPageMeta(url: string, retry: RetryOptions = {}, routing: FetchRouting = {}): Promise<PageMeta | null> {
   try {
-    const res = await fetchTextWithRetry(url, { headers: { 'user-agent': USER_AGENT } }, retry)
+    const res = await fetchTextWithRetry(
+      routing.fetchUrl?.(url) ?? url,
+      { headers: { 'user-agent': USER_AGENT } },
+      retry,
+    )
     if (!res.ok) return null
 
     const html = res.text
