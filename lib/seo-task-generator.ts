@@ -60,7 +60,7 @@ function clusterBlock(cluster: TaskCluster): string {
   ].join('\n')
 }
 
-function seoRuleBlock(multi = false): string {
+function seoRuleBlock(multi = false, safe = false): string {
   return [
     'SEO RULE:',
     '',
@@ -80,9 +80,11 @@ function seoRuleBlock(multi = false): string {
           'Primary keyword — основной поисковый запрос страницы.',
         ]),
     '',
-    multi
-      ? 'Все значимые secondary keywords, темы и поисковые формулировки всех кластеров должны быть\nсодержательно покрыты на странице естественным образом.'
-      : 'Все значимые secondary keywords, темы и поисковые формулировки кластера должны быть\nсодержательно покрыты на странице естественным образом.',
+    safe
+      ? 'Максимально полно покрой релевантную подтверждённую фактами проекта семантику\n(см. BUSINESS FACTS / SEMANTIC SAFETY RULE) естественным образом.'
+      : multi
+        ? 'Все значимые secondary keywords, темы и поисковые формулировки всех кластеров должны быть\nсодержательно покрыты на странице естественным образом.'
+        : 'Все значимые secondary keywords, темы и поисковые формулировки кластера должны быть\nсодержательно покрыты на странице естественным образом.',
     '',
     'Не делать keyword stuffing.',
     'Не вставлять список ключей механически.',
@@ -102,9 +104,11 @@ function seoRuleBlock(multi = false): string {
     'под ключ) — раскрывать в коммерчески релевантных блоках.',
     '',
     'Не обязательно использовать каждую длинную фразу дословно, если это близкий дубль или',
-    multi
-      ? 'словоформа, но каждая значимая тема/search intent внутри каждого кластера должна быть покрыта.'
-      : 'словоформа, но каждая значимая тема/search intent внутри кластера должна быть покрыта.',
+    safe
+      ? 'словоформа, но каждая значимая тема/search intent, подтверждённая фактами проекта, должна быть\nпокрыта. Неподтверждённые sub-intents не покрываются (см. BUSINESS FACTS / SEMANTIC SAFETY RULE).'
+      : multi
+        ? 'словоформа, но каждая значимая тема/search intent внутри каждого кластера должна быть покрыта.'
+        : 'словоформа, но каждая значимая тема/search intent внутри кластера должна быть покрыта.',
   ].join('\n')
 }
 
@@ -198,21 +202,25 @@ function internalLinksRuleBlock(kind: 'improve' | 'create'): string {
   return lines.join('\n')
 }
 
-function coverageCheckBlock(multi = false): string {
+function coverageCheckBlock(multi = false, safe = false): string {
   return [
     'COVERAGE CHECK:',
     '',
     'В конце обязательно проведи SEO coverage review. Проверь:',
     multi ? '1. Primary keyword каждого кластера covered.' : '1. Primary keyword covered.',
-    '2. Significant secondary topics covered.',
-    '3. Commercial intents covered.',
+    safe ? '2. Significant secondary topics covered (только подтверждённые фактами проекта).' : '2. Significant secondary topics covered.',
+    safe ? '3. Commercial intents covered (только подтверждённые услуги и условия).' : '3. Commercial intents covered.',
     '4. Informational/question intents covered.',
     '5. CTA соответствует intent страницы.',
     '6. Есть понятный conversion path.',
     '7. Internal linking логична.',
     '8. Нет keyword stuffing.',
     '9. Нет искусственных повторов.',
-    multi ? '10. Страница полностью отвечает intent всех кластеров.' : '10. Страница полностью отвечает cluster intent.',
+    safe
+      ? '10. Страница отвечает intent подтверждённой семантики кластеров; неподтверждённые sub-intents вынесены в Intentionally not covered, самостоятельные — в CANDIDATE SEPARATE PAGES (это не FAIL).'
+      : multi
+        ? '10. Страница полностью отвечает intent всех кластеров.'
+        : '10. Страница полностью отвечает cluster intent.',
     '',
     'Финальный отчёт должен содержать:',
     '',
@@ -231,8 +239,24 @@ function coverageCheckBlock(multi = false): string {
     'X/Y covered',
     '',
     'Missing significant topics:',
-    '[...]',
+    safe ? '[... — без Intentionally not covered и CANDIDATE SEPARATE PAGES]' : '[...]',
     '',
+    ...(safe
+      ? [
+          'Intentionally not covered:',
+          '- <topic/query> — not confirmed by project facts',
+          '(или «нет»)',
+          '',
+          'CANDIDATE SEPARATE PAGES',
+          '- <тема>',
+          '- <основные запросы>',
+          '- <суммарная/доступная частотность>',
+          '- <почему это отдельный intent>',
+          '- recommended action: review for separate page',
+          '(или «нет»)',
+          '',
+        ]
+      : []),
     'CTA:',
     'present / missing',
     '',
@@ -374,6 +398,54 @@ function analyticsClustersBlock(clusters: TaskAnalyticsCluster[]): string {
   ].join('\n')
 }
 
+function businessFactsGuardBlock(): string {
+  return [
+    'BUSINESS FACTS / SEMANTIC SAFETY RULE:',
+    '',
+    'SEO keywords и SEO clusters описывают поисковый спрос, но НЕ являются источником фактов о бизнесе.',
+    '',
+    'Нельзя утверждать или добавлять на страницу только на основании SEO-семантики:',
+    '- новую услугу или новый тип работ;',
+    '- обслуживание конкретного города/района;',
+    '- работу с конкретной аудиторией или сегментом клиентов;',
+    '- рекламную/брендированную или иную специализированную разновидность услуги;',
+    '- конкретный бренд или материал;',
+    '- цену, скидку, гарантию, срок;',
+    '- наличие оборудования, партнёрство, сертификат;',
+    '- любую другую возможность бизнеса.',
+    '',
+    'Перед добавлением такого факта найди подтверждение в существующем проекте, текущей странице',
+    'или предоставленных project facts. Если подтверждения нет:',
+    '1. НЕ добавлять утверждение на страницу.',
+    '2. НЕ пытаться механически покрыть keyword.',
+    '3. Считать такой keyword/sub-intent intentionally not covered.',
+    '4. Указать его в финальном SEO COVERAGE в поле «Intentionally not covered»:',
+    '   - <topic/query> — not confirmed by project facts',
+    'Это НЕ FAIL, и не повод выдумывать контент.',
+    '',
+    'Различай три случая:',
+    '',
+    'A. Семантические варианты подтверждённой услуги (синонимы, словоформы, близкие названия',
+    'того же предложения) — используй естественно.',
+    '',
+    'B. Новый бизнес-факт или sub-intent, которого нет в проекте — не добавляй, это',
+    'intentionally not covered. Присутствие запроса в confirmed-кластере не делает его',
+    'существующей услугой.',
+    '',
+    'C. Самостоятельный search intent: группа запросов с отдельным commercial intent,',
+    'отдельным сценарием/аудиторией/услугой, потенциально требующая другого оффера, цены, CTA',
+    'или содержания и логичнее раскрываемая отдельной посадочной. НЕ покрывай её искусственно на',
+    'этой странице и НЕ создавай новую страницу. Вынеси в блок CANDIDATE SEPARATE PAGES финального',
+    'SEO COVERAGE (тема, основные запросы, суммарная/доступная частотность, почему это отдельный',
+    'intent, recommended action: review for separate page). Это не Missing significant topic и не',
+    'FAIL. Кандидатом может быть только самостоятельная группа запросов, а не каждый long-tail',
+    'keyword; вариант основного intent остаётся на странице.',
+    '',
+    'Content scope страницы определяется кластерами, переданными выше; запросы, относящиеся к',
+    'другим услугам или сегментам, не расширяют его.',
+  ].join('\n')
+}
+
 function clustersListBlock(clusters: TaskCluster[], scoped: boolean): string {
   const parts = [
     scoped
@@ -458,13 +530,15 @@ export function buildImproveTask(
     `Description: ${dash(page.description)}`,
     `Locale: ${dash(page.locale ?? locale)}`,
     '',
-    seoRuleBlock(multi),
+    businessFactsGuardBlock(),
+    '',
+    seoRuleBlock(multi, true),
     '',
     ctaRuleBlock('improve', multi ? combinedIntent(clusters) : clusters[0].intent),
     '',
     internalLinksRuleBlock('improve'),
     '',
-    coverageCheckBlock(multi),
+    coverageCheckBlock(multi, true),
     '',
     contentQualityGateBlock(),
     '',

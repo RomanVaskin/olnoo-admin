@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { buildImproveTask, type TaskCluster, type TaskPage } from './seo-task-generator.ts'
+import { buildCreateTask, buildImproveTask, type TaskCluster, type TaskPage } from './seo-task-generator.ts'
 import { buildImproveTaskForPage, clustersConfirmedForPage, type ImproveClusterInput } from './improve-page-task.ts'
 import type { PageOption } from './cluster-pages.ts'
 
@@ -33,12 +33,44 @@ function single(intent: string): TaskCluster {
   }
 }
 
-// Golden hashes: the single-cluster prompt must stay byte-identical to the pre-change output.
-test('single cluster output is unchanged (golden hashes)', () => {
-  assert.equal(sha(buildImproveTask(project, single('commercial'), page, 'ru')), '40dba33db37e86ebd844fc12ccab8c8e3d85f2de6b399c27325d07da16552116')
-  assert.equal(sha(buildImproveTask(project, single('informational'), page, 'ru')), '69da19c757c7bebb0985a933d6a79864024db2c1d356c8019ad623b195aaf418')
-  assert.equal(sha(buildImproveTask(project, single('mixed'), page, 'ru')), '69ed58e07607c0138898c3d92485aced3b7753e6f703285b60a1d42daf7a18e1')
+// Create flow must stay byte-identical (golden hashes from before the Improve guardrail change).
+test('Create prompt is unchanged (golden hashes)', () => {
+  assert.equal(sha(buildCreateTask(project, single('commercial'), 'ru')), '30b6a02638f48b2906c1a2b5cc1e359f944564ec306afbdb13f732efb5c3fdf4')
+  assert.equal(sha(buildCreateTask(project, single('informational'), 'ru')), 'bdda23d2928c8ea64bd47ee2ece2faf69bee0f192205ddeca2d1ef8e9539a65f')
+  assert.equal(sha(buildCreateTask(project, single('mixed'), 'ru')), '3ec2d3995adc4d48a7746188b52ecde9be2775157ba28518e75a9c11f486443f')
+})
+
+test('single-cluster call: array and plain cluster are equivalent', () => {
   assert.equal(buildImproveTask(project, [single('commercial')], page, 'ru'), buildImproveTask(project, single('commercial'), page, 'ru'))
+})
+
+test('Improve prompt carries the business-facts guardrail (single and multi)', () => {
+  const multi = buildImproveTaskForPage(project, [row({ id: 1, name: 'A' }), row({ id: 2, name: 'B' })], pages, 7)!
+  for (const text of [buildImproveTask(project, single('commercial'), page, 'ru'), multi]) {
+    assert.ok(text.includes('BUSINESS FACTS / SEMANTIC SAFETY RULE:'))
+    assert.ok(text.includes('НЕ являются источником фактов о бизнесе'))
+    assert.ok(text.includes('обслуживание конкретного города/района'))
+    assert.ok(text.includes('новую услугу или новый тип работ'))
+    assert.ok(text.includes('НЕ добавлять утверждение на страницу.'))
+    assert.ok(text.includes('НЕ пытаться механически покрыть keyword.'))
+    assert.ok(text.includes('Intentionally not covered:\n- <topic/query> — not confirmed by project facts'))
+    assert.ok(text.includes('Это НЕ FAIL'))
+    assert.ok(text.includes('CANDIDATE SEPARATE PAGES\n- <тема>'))
+    assert.ok(text.includes('recommended action: review for separate page'))
+    assert.ok(text.includes('НЕ создавай новую страницу'))
+    assert.ok(text.includes('не каждый long-tail'))
+    // the guardrail precedes the SEO RULE, and the quality gate stays
+    assert.ok(text.indexOf('BUSINESS FACTS / SEMANTIC SAFETY RULE:') < text.indexOf('SEO RULE:'))
+    assert.ok(text.includes('CONTENT QUALITY GATE:') && text.includes('3. Выдуманные факты.'))
+    // old absolute coverage wording must be gone
+    assert.ok(!text.includes('каждая значимая тема/search intent внутри кластера должна быть покрыта.'))
+    assert.ok(!text.includes('каждая значимая тема/search intent внутри каждого кластера должна быть покрыта.'))
+    assert.ok(!text.includes('Страница полностью отвечает'))
+  }
+})
+
+test('Create prompt does not get the guardrail', () => {
+  assert.ok(!buildCreateTask(project, single('commercial'), 'ru').includes('BUSINESS FACTS'))
 })
 
 function row(over: Partial<ImproveClusterInput> & { id: number; name: string }): ImproveClusterInput {
@@ -139,5 +171,5 @@ test('only navigational clusters confirmed for the page → no task', () => {
 
 test('no navigational clusters → prompt identical to before the filter', () => {
   const a = buildImproveTaskForPage(project, [body, lights], pages, 7)!
-  assert.ok(a.includes('SEO clusters страницы (2):') && !a.includes('Аналитические кластеры'))
+  assert.ok(a.includes('SEO clusters страницы (2):') && !a.includes('Аналитические кластеры страницы'))
 })
