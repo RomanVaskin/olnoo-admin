@@ -250,3 +250,37 @@ test('parse / prompt helpers: slug sanitising, one decision per id, unparseable 
   assert.match(prompt, /keywords \(40\)/)
   assert.match(prompt, /\+25 more/)
 })
+
+test('force re-decides pending clusters that already have an AI decision (with the current pages); human-reviewed ones stay untouched', async (t) => {
+  const seeds: Seed[] = [...SEEDS, { name: 'Уже решено', keywords: [['ручной кластер', 10]], reviewStatus: 'confirmed' }]
+  await withClusters(t, seeds, async ({ pool, projectId, clusterIds, pageIds }) => {
+    const first = fakeModel(decide(clusterIds, pageIds))
+    await run(pool, projectId, { llm: first.llm })
+    assert.equal((await rowOf(pool, clusterIds['Детейлинг салона'])).ai_decision, 'create')
+
+    // A page for the "create" cluster appears (Pages sync); the manual cluster is already confirmed.
+    const detailing = (await pool.query(`INSERT INTO pages (project_id, url, title, h1) VALUES ($1, 'https://x.example/detejling', 'Детейлинг', 'Детейлинг салона') RETURNING id`, [projectId])).rows[0].id
+    const confirmedBefore = await rowOf(pool, clusterIds['Уже решено'])
+
+    const plain = fakeModel(decide(clusterIds, pageIds))
+    const skipped = await run(pool, projectId, { llm: plain.llm })
+    assert.equal(skipped.total, 0, 'without force nothing is re-sent')
+    assert.equal(plain.prompts.length, 0)
+
+    const second = fakeModel((id, name) =>
+      id === clusterIds['Детейлинг салона'] ? [id, 'I', 'https://x.example/detejling', 'Теперь есть страница'] : decide(clusterIds, pageIds)(id, name),
+    )
+    const job = await run(pool, projectId, { llm: second.llm, force: true })
+    assert.equal(job.status, 'done')
+    assert.equal(job.total, 3, 'all pending clusters are re-sent, the confirmed one is not')
+    assert.match(second.prompts.join('\n'), /https:\/\/x\.example\/detejling \| title: Детейлинг/, 'the prompt carries the current pages')
+    assert.ok(!second.prompts.join('\n').includes('ручной кластер'))
+
+    const redone = await rowOf(pool, clusterIds['Детейлинг салона'])
+    assert.equal(redone.ai_decision, 'improve')
+    assert.equal(redone.recommended_page_id, detailing)
+    assert.equal(redone.needs_new_page, false)
+    assert.equal(redone.suggested_slug, null, 'the old CREATE suggestion is cleared')
+    assert.deepEqual(await rowOf(pool, clusterIds['Уже решено']), confirmedBefore)
+  })
+})

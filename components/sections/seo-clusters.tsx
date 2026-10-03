@@ -500,13 +500,16 @@ export function SeoClusters() {
 
   async function handleAiReview() {
     if (projectId === null) return
+    // A re-run re-decides every pending cluster against the current pages (human-reviewed ones are never touched);
+    // only the continuation of a failed run goes on with the still undecided clusters.
+    const force = aiReview?.status !== 'failed' && clusters.some((c) => c.aiDecision)
     setAiReviewing(true)
     setError(null)
     try {
       const res = await fetch('/api/seo-clusters/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId }),
+        body: JSON.stringify({ projectId, force }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || t.seoClusters.aiReviewError)
