@@ -338,7 +338,7 @@ export function contextCaps(ctx: SeoContext | null, pages: ContextPage[]): Conte
   return { business: seoContextKnowsBusiness(ctx) || pagesKnown, region: seoContextKnowsRegion(ctx) || pagesKnown }
 }
 
-function seoContextBlock(ctx: SeoContext | null): string {
+export function seoContextBlock(ctx: SeoContext | null): string {
   const none = '(not specified)'
   const list = (text: string) => {
     const items = listItems(text)

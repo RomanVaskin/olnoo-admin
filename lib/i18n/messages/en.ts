@@ -368,6 +368,16 @@ export const en = {
     generateButton: 'AI clustering',
     generating: 'Clustering…',
     generateError: 'Clustering failed. Please try again.',
+    aiReviewButton: 'AI review all clusters',
+    aiReviewing: 'AI review…',
+    aiReviewError: 'AI cluster review failed. Please try again.',
+    aiReviewProgress: (batchesDone: number, batchesTotal: number, reviewed: number, total: number) =>
+      `AI review: batch ${batchesDone} of ${batchesTotal}, ${reviewed} of ${total} decisions`,
+    aiReviewSummary: (create: number, improve: number, ignore: number, skipped: number) =>
+      `AI decisions: CREATE ${create} · IMPROVE ${improve} · IGNORE ${ignore}${skipped ? ` · undecided ${skipped}` : ''}`,
+    aiReviewFailed: (failed: number) => `${failed} batch(es) failed — click again to continue with the rest`,
+    aiDecisionLabel: { create: 'CREATE', improve: 'IMPROVE', ignore: 'IGNORE' },
+    aiSuggestedPage: 'Suggested new page',
     progress: {
       processed: (done: string, total: string) => `Processed ${done} / ${total} keywords`,
       batch: (done: number, total: number) => `Batch ${done} / ${total}`,

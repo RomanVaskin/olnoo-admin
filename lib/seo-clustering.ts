@@ -48,6 +48,8 @@ type RawCluster = {
   reason: string
 }
 
+export type AiClusterDecision = 'create' | 'improve' | 'ignore'
+
 export type ReviewStatus = 'pending' | 'confirmed' | 'no_page' | 'ignored'
 
 export type SavedCluster = {
@@ -67,6 +69,11 @@ export type SavedCluster = {
   confirmedPageUrl: string | null
   reviewStatus: ReviewStatus
   reviewedAt: string | null
+  /** The AI's bulk review decision (null = not reviewed yet); needs migration 0014. */
+  aiDecision: AiClusterDecision | null
+  suggestedSlug: string | null
+  suggestedH1: string | null
+  suggestedTitle: string | null
   keywords: { id: number; query: string; frequency: number | null }[]
 }
 
@@ -204,7 +211,7 @@ function parseClusterResponse(raw: string): RawCluster[] {
   return result
 }
 
-function normalizePageUrl(url: string): string {
+export function normalizePageUrl(url: string): string {
   try {
     const u = new URL(url)
     return (u.pathname.replace(/\/+$/, '') || '/').toLowerCase()
@@ -218,7 +225,7 @@ function normalizePageUrl(url: string): string {
 // study/about pages used as filler recommendations) is rejected here deterministically too.
 const NON_SEO_PAGE_LAST_SEGMENTS = new Set(['contact', 'cases', 'about'])
 
-function isNonSeoUtilityPage(pageUrl: string): boolean {
+export function isNonSeoUtilityPage(pageUrl: string): boolean {
   const path = normalizePageUrl(pageUrl)
   const lastSegment = path.split('/').filter(Boolean).pop() ?? ''
   return NON_SEO_PAGE_LAST_SEGMENTS.has(lastSegment)
@@ -843,8 +850,7 @@ export async function generateClustersForProject(pool: Pool, projectId: number, 
 
 /** Loads the saved clusters for a project, with keyword and page details joined in for the UI. */
 export async function listClustersForProject(pool: Pool, projectId: number): Promise<SavedCluster[]> {
-  const { rows: clusterRows } = await pool.query(
-    `
+  const select = (aiColumns: string) => `
     SELECT
       sc.id,
       sc.name,
@@ -861,16 +867,22 @@ export async function listClustersForProject(pool: Pool, projectId: number): Pro
       sc.confirmed_page_id,
       cp.url AS confirmed_page_url,
       sc.review_status,
-      sc.reviewed_at
+      sc.reviewed_at${aiColumns}
     FROM seo_clusters sc
     LEFT JOIN keywords pk ON pk.id = sc.primary_keyword_id
     LEFT JOIN pages rp ON rp.id = sc.recommended_page_id
     LEFT JOIN pages cp ON cp.id = sc.confirmed_page_id
     WHERE sc.project_id = $1
     ORDER BY sc.total_frequency DESC NULLS LAST, sc.id ASC
-    `,
-    [projectId],
-  )
+    `
+  let clusterRows: Record<string, any>[]
+  try {
+    clusterRows = (await pool.query(select(', sc.ai_decision, sc.suggested_slug, sc.suggested_h1, sc.suggested_title'), [projectId])).rows
+  } catch (err) {
+    // Migration 0014 not applied yet: the list keeps working, just without the AI review columns.
+    if ((err as { code?: string }).code !== '42703') throw err
+    clusterRows = (await pool.query(select(''), [projectId])).rows
+  }
 
   if (clusterRows.length === 0) return []
 
@@ -909,6 +921,10 @@ export async function listClustersForProject(pool: Pool, projectId: number): Pro
     confirmedPageUrl: r.confirmed_page_url,
     reviewStatus: r.review_status,
     reviewedAt: r.reviewed_at,
+    aiDecision: r.ai_decision ?? null,
+    suggestedSlug: r.suggested_slug ?? null,
+    suggestedH1: r.suggested_h1 ?? null,
+    suggestedTitle: r.suggested_title ?? null,
     keywords: keywordsByCluster.get(r.id) ?? [],
   }))
 }
