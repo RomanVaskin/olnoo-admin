@@ -7,7 +7,8 @@ import { useI18n } from '@/components/i18n-provider'
 import { useProjects, ProjectPicker } from '@/components/sections/seo-project-picker'
 import { displayStatus, hasHumanDecision, showCreateSuggestion, showNoPagePlaceholder } from '@/lib/cluster-decision'
 import { clusterLocale, getRecommendedPages, pagePath, pagesForLocale, searchPages, type PageOption } from '@/lib/cluster-pages'
-import { buildCreateTask, buildImproveTask, type TaskLocale, type TaskPage } from '@/lib/seo-task-generator'
+import { buildCreateTask, type TaskLocale } from '@/lib/seo-task-generator'
+import { buildImproveTaskForPage } from '@/lib/improve-page-task'
 
 type ReviewStatus = 'pending' | 'confirmed' | 'no_page' | 'ignored'
 
@@ -492,11 +493,9 @@ export function SeoClusters() {
 
     if (kind === 'improve') {
       if (cluster.confirmedPageId == null) return
-      const matched = pages.find((p) => p.id === cluster.confirmedPageId)
-      const page: TaskPage = matched
-        ? { url: matched.url, title: matched.title, h1: matched.h1, description: matched.description, locale: matched.locale }
-        : { url: cluster.confirmedPageUrl ?? '', title: null, h1: null, description: null, locale: null }
-      const text = buildImproveTask({ name: project.name, domain: project.domain }, clusterInput, page, taskLocale)
+      // One task per page: every confirmed cluster of this page, regardless of which row was clicked.
+      const text = buildImproveTaskForPage({ name: project.name, domain: project.domain }, clusters, pages, cluster.confirmedPageId)
+      if (!text) return
       setTaskPanel({ title: t.seoClusters.improvePage, text })
     } else {
       const text = buildCreateTask({ name: project.name, domain: project.domain }, clusterInput, taskLocale)
