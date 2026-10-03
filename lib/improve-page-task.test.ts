@@ -105,3 +105,39 @@ test('locale follows the target page, not the cluster order', () => {
   const ru2 = row({ id: 12, name: 'Полировка', confirmedPageId: 21 })
   assert.ok(buildImproveTaskForPage(project, [ru2], [enPage], 21)!.includes('Locale: en'))
 })
+
+test('navigational clusters stay out of the content scope (A + B(nav) + C)', () => {
+  const a = row({ id: 31, name: 'Оклейка авто', intent: 'commercial', totalFrequency: 3000, primaryKeyword: 'оклейка авто' })
+  const nav = row({ id: 32, name: 'Бренд Икс', intent: 'navigational', totalFrequency: 800, primaryKeyword: 'бренд икс', keywords: [{ query: 'бренд икс отзывы', frequency: 800 }] })
+  const c = row({ id: 33, name: 'Защитная оклейка', intent: 'informational', totalFrequency: 1200, primaryKeyword: 'защитная оклейка' })
+  const text = buildImproveTaskForPage(project, [nav, c, a], pages, 7)!
+  assert.equal(text.split('Задача:').length - 1, 1)
+  const scopeStart = text.indexOf('Content scope — SEO clusters страницы, обязательные для content coverage (2):')
+  const analyticsStart = text.indexOf('Аналитические кластеры страницы (1)')
+  assert.ok(scopeStart >= 0 && analyticsStart > scopeStart)
+  const scope = text.slice(scopeStart, analyticsStart)
+  assert.ok(scope.includes('Name: Оклейка авто') && scope.includes('Name: Защитная оклейка'))
+  assert.ok(!scope.includes('Бренд Икс'))
+  // excluded cluster: listed by name only for analytics, no primary keyword / keywords anywhere
+  assert.ok(text.includes('- Бренд Икс (intent: navigational, total frequency: 800)'))
+  assert.ok(!text.includes('Primary keyword: бренд икс') && !text.includes('бренд икс отзывы') && !text.includes('Name: Бренд Икс'))
+  assert.ok(text.includes('НЕ создавать новую страницу.'))
+})
+
+test('single content cluster + navigational one: classic cluster block plus analytics block', () => {
+  const nav = row({ id: 41, name: 'Бренд Икс', intent: 'navigational' })
+  const text = buildImproveTaskForPage(project, [lights, nav], pages, 7)!
+  assert.ok(text.includes('SEO cluster:') && text.includes('Name: Полировка фар'))
+  assert.ok(text.includes('Аналитические кластеры страницы (1)') && !text.includes('Name: Бренд Икс'))
+})
+
+test('only navigational clusters confirmed for the page → no task', () => {
+  const n1 = row({ id: 51, name: 'Бренд Икс', intent: 'navigational' })
+  const n2 = row({ id: 52, name: 'Бренд Игрек', intent: 'navigational' })
+  assert.equal(buildImproveTaskForPage(project, [n1, n2], pages, 7), null)
+})
+
+test('no navigational clusters → prompt identical to before the filter', () => {
+  const a = buildImproveTaskForPage(project, [body, lights], pages, 7)!
+  assert.ok(a.includes('SEO clusters страницы (2):') && !a.includes('Аналитические кластеры'))
+})
