@@ -95,3 +95,13 @@ test('mixed intents across clusters include both CTA rules', () => {
   const text = buildImproveTaskForPage(project, [body, info], pages, 7)!
   assert.ok(text.includes('Для commercial intent:') && text.includes('Для informational intent:'))
 })
+
+test('locale follows the target page, not the cluster order', () => {
+  const ruPage: PageOption = { id: 20, url: 'https://driveset.ru/ru/polirovka', locale: null, title: null, h1: null, description: null }
+  const enPage: PageOption = { id: 21, url: 'https://driveset.ru/en/polish', locale: null, title: null, h1: null, description: null }
+  const en = row({ id: 10, name: 'Headlight polish', totalFrequency: 5000, confirmedPageId: 20 })
+  const ru = row({ id: 11, name: 'Полировка', totalFrequency: 10, confirmedPageId: 20 })
+  assert.ok(buildImproveTaskForPage(project, [en, ru], [ruPage], 20)!.includes('Locale: ru'))
+  const ru2 = row({ id: 12, name: 'Полировка', confirmedPageId: 21 })
+  assert.ok(buildImproveTaskForPage(project, [ru2], [enPage], 21)!.includes('Locale: en'))
+})

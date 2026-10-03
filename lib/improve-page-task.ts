@@ -3,7 +3,7 @@
 // Pure — no DB/network — so every "Улучшить страницу" button yields the same prompt for a page.
 
 import { buildImproveTask, type TaskCluster, type TaskLocale, type TaskPage, type TaskProject } from './seo-task-generator.ts'
-import { clusterLocale, type ClusterPageInput, type PageOption } from './cluster-pages.ts'
+import { clusterLocale, pageLocale, type ClusterPageInput, type PageOption } from './cluster-pages.ts'
 
 export type ImproveClusterInput = ClusterPageInput &
   TaskCluster & {
@@ -38,7 +38,11 @@ export function buildImproveTaskForPage(
     ? { url: matched.url, title: matched.title, h1: matched.h1, description: matched.description, locale: matched.locale }
     : { url: group[0].confirmedPageUrl ?? '', title: null, h1: null, description: null, locale: null }
 
-  const locale: TaskLocale = clusterLocale(group[0], pages) === 'ru' ? 'ru' : 'en'
+  // The task targets one page, so its own language wins (URL prefix, then stored locale); only a
+  // language-neutral page falls back to the clusters' language (first cluster that has one).
+  const loc =
+    (matched ? pageLocale(matched) : null) ?? group.map((c) => clusterLocale(c, pages)).find((l) => l != null) ?? null
+  const locale: TaskLocale = loc === 'ru' ? 'ru' : 'en'
   const taskClusters: TaskCluster[] = group.map((c) => ({
     name: c.name,
     primaryKeyword: c.primaryKeyword,
