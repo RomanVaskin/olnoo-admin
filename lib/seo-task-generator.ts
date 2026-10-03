@@ -60,17 +60,29 @@ function clusterBlock(cluster: TaskCluster): string {
   ].join('\n')
 }
 
-function seoRuleBlock(): string {
+function seoRuleBlock(multi = false): string {
   return [
     'SEO RULE:',
     '',
-    'Используй весь SEO-кластер как семантическое задание для одной страницы.',
-    'Не создавай отдельные страницы под близкие запросы одного search intent.',
+    ...(multi
+      ? [
+          'Используй ВСЕ SEO-кластеры страницы как единое семантическое задание для этой одной страницы:',
+          'применяй правила ниже к совокупной семантике всех кластеров, а не к каждому по отдельности.',
+          'Не создавай отдельные страницы под близкие запросы или отдельные кластеры.',
+          '',
+          'Primary keyword каждого кластера — основной поисковый запрос соответствующей темы страницы;',
+          'главным запросом страницы считай primary keyword кластера с наибольшей суммарной частотой.',
+        ]
+      : [
+          'Используй весь SEO-кластер как семантическое задание для одной страницы.',
+          'Не создавай отдельные страницы под близкие запросы одного search intent.',
+          '',
+          'Primary keyword — основной поисковый запрос страницы.',
+        ]),
     '',
-    'Primary keyword — основной поисковый запрос страницы.',
-    '',
-    'Все значимые secondary keywords, темы и поисковые формулировки кластера должны быть',
-    'содержательно покрыты на странице естественным образом.',
+    multi
+      ? 'Все значимые secondary keywords, темы и поисковые формулировки всех кластеров должны быть\nсодержательно покрыты на странице естественным образом.'
+      : 'Все значимые secondary keywords, темы и поисковые формулировки кластера должны быть\nсодержательно покрыты на странице естественным образом.',
     '',
     'Не делать keyword stuffing.',
     'Не вставлять список ключей механически.',
@@ -90,7 +102,9 @@ function seoRuleBlock(): string {
     'под ключ) — раскрывать в коммерчески релевантных блоках.',
     '',
     'Не обязательно использовать каждую длинную фразу дословно, если это близкий дубль или',
-    'словоформа, но каждая значимая тема/search intent внутри кластера должна быть покрыта.',
+    multi
+      ? 'словоформа, но каждая значимая тема/search intent внутри каждого кластера должна быть покрыта.'
+      : 'словоформа, но каждая значимая тема/search intent внутри кластера должна быть покрыта.',
   ].join('\n')
 }
 
@@ -184,12 +198,12 @@ function internalLinksRuleBlock(kind: 'improve' | 'create'): string {
   return lines.join('\n')
 }
 
-function coverageCheckBlock(): string {
+function coverageCheckBlock(multi = false): string {
   return [
     'COVERAGE CHECK:',
     '',
     'В конце обязательно проведи SEO coverage review. Проверь:',
-    '1. Primary keyword covered.',
+    multi ? '1. Primary keyword каждого кластера covered.' : '1. Primary keyword covered.',
     '2. Significant secondary topics covered.',
     '3. Commercial intents covered.',
     '4. Informational/question intents covered.',
@@ -198,13 +212,13 @@ function coverageCheckBlock(): string {
     '7. Internal linking логична.',
     '8. Нет keyword stuffing.',
     '9. Нет искусственных повторов.',
-    '10. Страница полностью отвечает cluster intent.',
+    multi ? '10. Страница полностью отвечает intent всех кластеров.' : '10. Страница полностью отвечает cluster intent.',
     '',
     'Финальный отчёт должен содержать:',
     '',
     'SEO COVERAGE',
     '',
-    'Primary keyword:',
+    multi ? 'Primary keyword (по каждому кластеру):' : 'Primary keyword:',
     'covered / not covered',
     '',
     'Secondary topics:',
@@ -341,12 +355,46 @@ function styleGuardBlock(): string {
   ].join('\n')
 }
 
+function clustersListBlock(clusters: TaskCluster[]): string {
+  const parts = [`SEO clusters страницы (${clusters.length}):`]
+  clusters.forEach((c, i) => {
+    parts.push(
+      '',
+      `Cluster ${i + 1}/${clusters.length}`,
+      '',
+      `Name: ${c.name}`,
+      `Primary keyword: ${dash(c.primaryKeyword)}`,
+      `Intent: ${c.intent}`,
+      `Total frequency: ${c.totalFrequency ?? 0}`,
+      '',
+      'Keywords:',
+      keywordsBlock(c.keywords),
+    )
+  })
+  return parts.join('\n')
+}
+
+// One cluster → its own intent. Several → shared intent if all agree, otherwise 'mixed'
+// (which makes the CTA rule include both commercial and informational guidance).
+function combinedIntent(clusters: TaskCluster[]): string {
+  const intents = new Set(clusters.map((c) => c.intent))
+  return intents.size === 1 ? clusters[0].intent : 'mixed'
+}
+
+/**
+ * Improve task for ONE existing page. Accepts a single cluster or all clusters confirmed for the page;
+ * a single cluster yields the classic prompt unchanged.
+ */
 export function buildImproveTask(
   project: TaskProject,
-  cluster: TaskCluster,
+  clusterOrClusters: TaskCluster | TaskCluster[],
   page: TaskPage,
   locale: TaskLocale,
 ): string {
+  const clusters = Array.isArray(clusterOrClusters) ? clusterOrClusters : [clusterOrClusters]
+  if (clusters.length === 0) throw new Error('buildImproveTask: at least one cluster is required')
+  const multi = clusters.length > 1
+
   return [
     `Работай только в проекте сайта ${project.name} (${projectUrl(project.domain)}).`,
     '',
@@ -356,7 +404,9 @@ export function buildImproveTask(
     page.url,
     '',
     'Задача:',
-    'улучшить существующую страницу под SEO-кластер.',
+    multi
+      ? 'улучшить существующую страницу под ВСЕ перечисленные ниже SEO-кластеры (одна страница — одна задача).'
+      : 'улучшить существующую страницу под SEO-кластер.',
     '',
     'НЕ создавать новую страницу.',
     '',
@@ -365,9 +415,11 @@ export function buildImproveTask(
     '2. изучить существующую структуру;',
     '3. сохранить существующий дизайн и компоненты;',
     '4. проверить текущие Title, Description, H1, H2/H3, текст, FAQ, CTA;',
-    '5. изменить только то, что нужно для покрытия SEO-кластера и conversion intent.',
+    multi
+      ? '5. изменить только то, что нужно для покрытия всех SEO-кластеров страницы и conversion intent.'
+      : '5. изменить только то, что нужно для покрытия SEO-кластера и conversion intent.',
     '',
-    clusterBlock(cluster),
+    multi ? clustersListBlock(clusters) : clusterBlock(clusters[0]),
     '',
     'Current page:',
     '',
@@ -377,13 +429,13 @@ export function buildImproveTask(
     `Description: ${dash(page.description)}`,
     `Locale: ${dash(page.locale ?? locale)}`,
     '',
-    seoRuleBlock(),
+    seoRuleBlock(multi),
     '',
-    ctaRuleBlock('improve', cluster.intent),
+    ctaRuleBlock('improve', multi ? combinedIntent(clusters) : clusters[0].intent),
     '',
     internalLinksRuleBlock('improve'),
     '',
-    coverageCheckBlock(),
+    coverageCheckBlock(multi),
     '',
     contentQualityGateBlock(),
     '',
