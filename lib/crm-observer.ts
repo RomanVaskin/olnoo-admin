@@ -86,6 +86,13 @@ export type ObserverLead = {
   utmCampaign: string
   utmContent: string
   utmTerm: string
+  /** Attribution identifiers captured by the client; NULL for leads created before A1 or when not sent. Internal: keep out of AI prompts and logs. */
+  leadTrackingId: string | null
+  /** Yandex Metrika ClientID as a STRING (UInt64, can exceed the JS safe-integer range). */
+  metrikaClientId: string | null
+  yclid: string | null
+  /** ISO UTC; reported by the browser. */
+  firstSeenAt: string | null
 }
 
 export type ObserverPayload = {
@@ -114,6 +121,7 @@ export async function readLeadsForPeriod(
     `SELECT l.id, l.created_at, l.name, l.phone, l.status, l.source, l.service, l.contact,
             l.landing_page, l.page_path, l.referrer,
             l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term,
+            l.lead_tracking_id, l.metrika_client_id, l.yclid, l.first_seen_at,
             count(*) OVER() AS total
        FROM leads l
       WHERE l.project_id = $1
@@ -147,6 +155,10 @@ export async function readLeadsForPeriod(
       utmCampaign: r.utm_campaign,
       utmContent: r.utm_content,
       utmTerm: r.utm_term,
+      leadTrackingId: r.lead_tracking_id ?? null,
+      metrikaClientId: r.metrika_client_id ?? null,
+      yclid: r.yclid ?? null,
+      firstSeenAt: r.first_seen_at ? new Date(r.first_seen_at).toISOString() : null,
     })),
   }
 }
