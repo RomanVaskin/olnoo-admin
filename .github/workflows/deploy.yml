@@ -28,6 +28,25 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$PROD_HOST" >> ~/.ssh/known_hosts
 
+      - name: Deliver Yandex Direct env
+        # Secrets -> a separate, deploy-managed file on the server (Next.js reads .env.production.local
+        # before .env.local). The existing .env.local is never read for content, written or replaced.
+        env:
+          YANDEX_DIRECT_TOKEN: ${{ secrets.YANDEX_DIRECT_TOKEN }}
+          YANDEX_DIRECT_CAMPAIGN_IDS: ${{ secrets.YANDEX_DIRECT_CAMPAIGN_IDS }}
+        run: |
+          set -e
+          if [ -z "$YANDEX_DIRECT_TOKEN" ] || [ -z "$YANDEX_DIRECT_CAMPAIGN_IDS" ]; then
+            echo "::error::Required Yandex Direct secrets are missing"
+            exit 1
+          fi
+          # Values go into a dotenv file: refuse anything outside the expected shapes (no quoting/expansion surprises).
+          case "$YANDEX_DIRECT_TOKEN" in *[!A-Za-z0-9_.-]*) echo "::error::YANDEX_DIRECT_TOKEN has unexpected characters"; exit 1;; esac
+          case "$YANDEX_DIRECT_CAMPAIGN_IDS" in *[!0-9,]*) echo "::error::YANDEX_DIRECT_CAMPAIGN_IDS must be digits and commas"; exit 1;; esac
+          # Written over ssh stdin: the values never appear in a command line, a heredoc or the job log.
+          printf 'YANDEX_DIRECT_TOKEN=%s\nYANDEX_DIRECT_CAMPAIGN_IDS=%s\n' "$YANDEX_DIRECT_TOKEN" "$YANDEX_DIRECT_CAMPAIGN_IDS" |
+            ssh -i ~/.ssh/deploy_key "$PROD_USER@$PROD_HOST" "set -e; cd '$PROD_DIR'; umask 077; cat > .env.production.local.tmp; if [ -f .env.local ]; then chown --reference=.env.local .env.production.local.tmp; chmod --reference=.env.local .env.production.local.tmp; fi; mv -f .env.production.local.tmp .env.production.local; echo \"Yandex Direct env delivered: \$(grep -c '^YANDEX_DIRECT_' .env.production.local) keys\""
+
       - name: Deploy to production
         run: |
           set -e
