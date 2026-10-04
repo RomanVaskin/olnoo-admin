@@ -165,6 +165,7 @@ export type CampaignMeta = {
   status: string
   type: string
   startDate: string | null
+  settings: CampaignSettings
 }
 
 export type ObserverPayload = {
@@ -172,6 +173,8 @@ export type ObserverPayload = {
   campaign: CampaignMeta & { totals: { impressions: number; clicks: number; spend: number; cpc: number | null } }
   daily: DailyRow[]
   searchQueries: SearchQueryRow[]
+  /** Present only when the caller asked for it (`?structure=1`). */
+  structure?: DirectStructure
   meta: { includeVat: boolean; units: string | null; requestIds: string[] }
 }
 
@@ -180,6 +183,7 @@ export function buildObserverPayload(input: {
   campaign: CampaignMeta
   daily: DailyRow[]
   searchQueries: SearchQueryRow[]
+  structure?: DirectStructure
   units: string | null
   requestIds: string[]
 }): ObserverPayload {
@@ -191,6 +195,7 @@ export function buildObserverPayload(input: {
     campaign: { ...input.campaign, totals: { impressions, clicks, spend, cpc: cpc(spend, clicks) } },
     daily: input.daily,
     searchQueries: input.searchQueries,
+    ...(input.structure ? { structure: input.structure } : {}),
     meta: { includeVat: INCLUDE_VAT === 'YES', units: input.units, requestIds: input.requestIds },
   }
 }
@@ -203,4 +208,228 @@ export function observerPeriod(now: Date, days: number): { from: string; to: str
     return d.toISOString().slice(0, 10)
   }
   return { from: day(days), to: day(1) }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Campaign structure (read-only, Observer v0.2). Shapes below follow Direct's own answers:
+// campaigns.get → TextCampaign|UnifiedCampaign{BiddingStrategy,Settings,CounterIds,
+// NegativeKeywordSharedSetIds}, top-level NegativeKeywords{Items}; adgroups.get (no `State` field —
+// `Status` + `ServingStatus`); keywords.get (Bid/ContextBid in micros, autotargeting is the keyword
+// "---autotargeting"). Money fields are micros, converted like everywhere else.
+// ---------------------------------------------------------------------------------------------
+
+type Json = Record<string, unknown>
+
+function obj(value: unknown): Json | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : null
+}
+
+function str(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+function microsOrNull(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(n) ? microsToMoney(n) : null
+}
+
+function idOrNull(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(n) ? n : null
+}
+
+/** Direct wraps lists as `{ Items: [...] }` (or null). */
+function items(value: unknown): unknown[] {
+  const wrapped = obj(value)
+  const list = wrapped ? wrapped.Items : value
+  return Array.isArray(list) ? list : []
+}
+
+function strings(value: unknown): string[] {
+  return items(value).filter((v): v is string => typeof v === 'string')
+}
+
+function ids(value: unknown): number[] {
+  return items(value).map(idOrNull).filter((v): v is number => v !== null)
+}
+
+export type StrategySide = {
+  type: string
+  weeklySpendLimit: number | null
+  bidCeiling: number | null
+  budgetType: string | null
+}
+
+export type CampaignSettings = {
+  timeZone: string | null
+  currency: string | null
+  endDate: string | null
+  dailyBudget: { amount: number | null; mode: string | null } | null
+  /** Campaign-level negative keywords (phrases exactly as Direct stores them). */
+  negativeKeywords: string[]
+  negativeKeywordSharedSetIds: number[]
+  counterIds: number[]
+  strategy: { search: StrategySide | null; network: StrategySide | null }
+  /** Direct's campaign options as `OPTION → YES/NO`. */
+  options: Record<string, string>
+}
+
+function strategySide(raw: unknown): StrategySide | null {
+  const side = obj(raw)
+  const type = str(side?.BiddingStrategyType)
+  if (!side || !type) return null
+  // The parameters live in a sibling object named after the strategy type (e.g. WbMaximumClicks).
+  const params = Object.entries(side).find(([key, value]) => key !== 'BiddingStrategyType' && obj(value))?.[1] as Json | undefined
+  return {
+    type,
+    weeklySpendLimit: microsOrNull(params?.WeeklySpendLimit),
+    bidCeiling: microsOrNull(params?.BidCeiling),
+    budgetType: str(params?.BudgetType),
+  }
+}
+
+/** Normalises one campaigns.get item (TEXT_CAMPAIGN or UNIFIED_CAMPAIGN; absent parts become empty values). */
+export function normalizeCampaignSettings(raw: unknown): CampaignSettings {
+  const c = obj(raw) ?? {}
+  const typed = obj(c.TextCampaign) ?? obj(c.UnifiedCampaign) ?? {}
+  const strategy = obj(typed.BiddingStrategy)
+  const budget = obj(c.DailyBudget)
+  const options: Record<string, string> = {}
+  for (const entry of items(typed.Settings)) {
+    const e = obj(entry)
+    const option = str(e?.Option)
+    const value = str(e?.Value)
+    if (option && value) options[option] = value
+  }
+  return {
+    timeZone: str(c.TimeZone),
+    currency: str(c.Currency),
+    endDate: str(c.EndDate),
+    dailyBudget: budget ? { amount: microsOrNull(budget.Amount), mode: str(budget.Mode) } : null,
+    negativeKeywords: strings(c.NegativeKeywords),
+    negativeKeywordSharedSetIds: ids(typed.NegativeKeywordSharedSetIds),
+    counterIds: ids(typed.CounterIds),
+    strategy: { search: strategySide(strategy?.Search), network: strategySide(strategy?.Network) },
+    options,
+  }
+}
+
+export type AdGroupRow = {
+  id: number | null
+  campaignId: number | null
+  name: string
+  status: string | null
+  servingStatus: string | null
+  type: string | null
+  regionIds: number[]
+}
+
+export type KeywordRow = {
+  id: number | null
+  adGroupId: number | null
+  campaignId: number | null
+  keyword: string
+  isAutotargeting: boolean
+  state: string | null
+  status: string | null
+  servingStatus: string | null
+  /** Rubles. null = Direct returned none (bid-less strategy). */
+  bid: number | null
+  contextBid: number | null
+  strategyPriority: string | null
+  /** Only for the autotargeting pseudo-keyword. */
+  autotargeting?: {
+    searchBidIsAuto: string | null
+    categories: { category: string; value: string }[]
+    brandOptions: { option: string; value: string }[]
+  }
+}
+
+export type NegativeKeywords = {
+  campaign: string[]
+  campaignSharedSetIds: number[]
+  adGroups: { adGroupId: number | null; phrases: string[]; sharedSetIds: number[] }[]
+}
+
+export type DirectStructure = {
+  adGroups: AdGroupRow[]
+  keywords: { items: KeywordRow[]; truncated: boolean }
+  /** Where a phrase is already excluded: the campaign, or one ad group (shared sets: ids only). */
+  negativeKeywords: NegativeKeywords
+}
+
+export const AUTOTARGETING_KEYWORD = '---autotargeting'
+
+export const ADGROUP_FIELDS = ['Id', 'CampaignId', 'Name', 'Status', 'ServingStatus', 'Type', 'RegionIds', 'NegativeKeywords', 'NegativeKeywordSharedSetIds']
+export const KEYWORD_FIELDS = [
+  'Id', 'AdGroupId', 'CampaignId', 'Keyword', 'State', 'Status', 'ServingStatus', 'Bid', 'ContextBid', 'StrategyPriority',
+  'AutotargetingSearchBidIsAuto', 'AutotargetingCategories', 'AutotargetingBrandOptions',
+]
+
+export function normalizeAdGroups(raw: unknown[]): AdGroupRow[] {
+  return raw
+    .map(obj)
+    .filter((g): g is Json => g !== null)
+    .map((g) => ({
+      id: idOrNull(g.Id),
+      campaignId: idOrNull(g.CampaignId),
+      name: str(g.Name) ?? '',
+      status: str(g.Status),
+      servingStatus: str(g.ServingStatus),
+      type: str(g.Type),
+      regionIds: ids(g.RegionIds),
+    }))
+}
+
+export function normalizeKeywords(raw: unknown[]): KeywordRow[] {
+  return raw
+    .map(obj)
+    .filter((k): k is Json => k !== null)
+    .map((k) => {
+      const keyword = str(k.Keyword) ?? ''
+      const row: KeywordRow = {
+        id: idOrNull(k.Id),
+        adGroupId: idOrNull(k.AdGroupId),
+        campaignId: idOrNull(k.CampaignId),
+        keyword,
+        isAutotargeting: keyword === AUTOTARGETING_KEYWORD,
+        state: str(k.State),
+        status: str(k.Status),
+        servingStatus: str(k.ServingStatus),
+        bid: microsOrNull(k.Bid),
+        contextBid: microsOrNull(k.ContextBid),
+        strategyPriority: str(k.StrategyPriority),
+      }
+      if (row.isAutotargeting) {
+        row.autotargeting = {
+          searchBidIsAuto: str(k.AutotargetingSearchBidIsAuto),
+          categories: items(k.AutotargetingCategories).flatMap((c) => {
+            const e = obj(c)
+            const category = str(e?.Category)
+            const value = str(e?.Value)
+            return category && value ? [{ category, value }] : []
+          }),
+          brandOptions: items(k.AutotargetingBrandOptions).flatMap((o) => {
+            const e = obj(o)
+            const option = str(e?.Option)
+            const value = str(e?.Value)
+            return option && value ? [{ option, value }] : []
+          }),
+        }
+      }
+      return row
+    })
+}
+
+/** Negative keywords of the campaign and of every ad group, taken from the raw Direct answers. */
+export function normalizeNegativeKeywords(settings: CampaignSettings, rawAdGroups: unknown[]): NegativeKeywords {
+  return {
+    campaign: settings.negativeKeywords,
+    campaignSharedSetIds: settings.negativeKeywordSharedSetIds,
+    adGroups: rawAdGroups
+      .map(obj)
+      .filter((g): g is Json => g !== null)
+      .map((g) => ({ adGroupId: idOrNull(g.Id), phrases: strings(g.NegativeKeywords), sharedSetIds: ids(g.NegativeKeywordSharedSetIds) }))
+      .filter((g) => g.phrases.length > 0 || g.sharedSetIds.length > 0),
+  }
 }

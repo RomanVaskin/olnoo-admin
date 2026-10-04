@@ -208,12 +208,17 @@ test('allowlist: only configured campaign ids; no arbitrary campaignId', () => {
   assert.equal(directConfigFromEnv({ YANDEX_DIRECT_TOKEN: 't', YANDEX_DIRECT_CAMPAIGN_IDS: '714796268,abc' }), null)
 })
 
-test('the client is read-only: only campaigns.get is representable', () => {
-  assert.equal(isReadOnlyDirectMethod('campaigns', 'get'), true)
-  for (const method of ['add', 'update', 'delete', 'suspend', 'resume', 'archive', 'unarchive', 'setBids']) {
-    assert.equal(isReadOnlyDirectMethod('campaigns', method), false)
+test('the client is read-only: only campaigns.get, adgroups.get and keywords.get are representable', () => {
+  for (const service of ['campaigns', 'adgroups', 'keywords']) assert.equal(isReadOnlyDirectMethod(service, 'get'), true)
+  const mutations = ['add', 'update', 'delete', 'suspend', 'resume', 'archive', 'unarchive', 'setBids', 'set', 'setAuto', 'setAutoBid', 'moderate']
+  for (const service of ['campaigns', 'adgroups', 'keywords']) {
+    for (const method of mutations) assert.equal(isReadOnlyDirectMethod(service, method), false, `${service}.${method}`)
   }
-  for (const service of ['keywords', 'bids', 'ads', 'adgroups', 'reports']) assert.equal(isReadOnlyDirectMethod(service, 'get'), false)
+  // everything else stays closed, including other read services that are not part of this PR
+  for (const service of ['ads', 'bids', 'keywordbids', 'sitelinks', 'adextensions', 'negativekeywordsharedsets', 'strategies', 'reports', 'clients', 'agencyclients']) {
+    assert.equal(isReadOnlyDirectMethod(service, 'get'), false, service)
+  }
+  assert.equal(isReadOnlyDirectMethod('campaigns', 'GET'), false)
 })
 
 test('the OAuth token never appears in errors, even if Direct or the network echoes it', async () => {
@@ -251,4 +256,217 @@ test('the OAuth token never appears in errors, even if Direct or the network ech
       await assert.rejects(raw.c.getCampaign(CID), (e: unknown) => e instanceof DirectApiError && !e.message.includes(TOKEN) && !e.message.includes('<html>'))
     },
   )
+})
+
+// ---- Observer v0.2: campaign structure (synthetic data, not copied from any real account) ----
+
+const campaignWithSettings = () =>
+  new Response(
+    JSON.stringify({
+      result: {
+        Campaigns: [
+          {
+            Id: CID, Name: 'Test campaign', State: 'ON', Status: 'ACCEPTED', Type: 'TEXT_CAMPAIGN', StartDate: '2026-09-25',
+            EndDate: null, TimeZone: 'Europe/Moscow', Currency: 'RUB', DailyBudget: null, NegativeKeywords: { Items: ['бесплатно', 'своими руками'] },
+            TextCampaign: {
+              BiddingStrategy: {
+                Search: { BiddingStrategyType: 'WB_MAXIMUM_CLICKS', WbMaximumClicks: { WeeklySpendLimit: 7_000_000_000, BudgetType: 'WEEKLY_BUDGET', BidCeiling: 200_000_000 } },
+                Network: { BiddingStrategyType: 'SERVING_OFF' },
+              },
+              Settings: [{ Option: 'ADD_METRICA_TAG', Value: 'NO' }, { Option: 'ENABLE_SITE_MONITORING', Value: 'YES' }],
+              CounterIds: { Items: [111, 222] },
+              NegativeKeywordSharedSetIds: { Items: [] },
+            },
+          },
+        ],
+      },
+    }),
+    { status: 200, headers: { RequestId: 'req-campaign' } },
+  )
+
+const adGroupsJson = (rows: unknown[], limitedBy?: number) =>
+  new Response(JSON.stringify({ result: { AdGroups: rows, ...(limitedBy ? { LimitedBy: limitedBy } : {}) } }), { status: 200, headers: { RequestId: 'req-groups' } })
+const keywordsJson = (rows: unknown[], limitedBy?: number) =>
+  new Response(JSON.stringify({ result: { Keywords: rows, ...(limitedBy ? { LimitedBy: limitedBy } : {}) } }), { status: 200, headers: { RequestId: 'req-keywords' } })
+
+const group = (id: number, extra: Record<string, unknown> = {}) => ({
+  Id: id, CampaignId: CID, Name: `Group ${id}`, Status: 'ACCEPTED', ServingStatus: 'ELIGIBLE', Type: 'TEXT_AD_GROUP', RegionIds: [213],
+  NegativeKeywords: { Items: ['авито'] }, NegativeKeywordSharedSetIds: null, ...extra,
+})
+const kw = (id: number, keyword: string, extra: Record<string, unknown> = {}) => ({
+  Id: id, AdGroupId: 10, CampaignId: CID, Keyword: keyword, State: 'ON', Status: 'ACCEPTED', ServingStatus: 'ELIGIBLE', Bid: 150_000_000, ContextBid: 300_000, StrategyPriority: 'NORMAL', ...extra,
+})
+
+function structureHandler(overrides: { groups?: (call: Call, n: number) => Response; keywords?: (call: Call, n: number) => Response } = {}): Handler {
+  let groupCalls = 0
+  let keywordCalls = 0
+  return (call) => {
+    if (call.url.endsWith('/campaigns')) return campaignWithSettings()
+    if (call.url.endsWith('/adgroups')) return (overrides.groups ?? (() => adGroupsJson([group(10), group(11, { NegativeKeywords: null })])))(call, ++groupCalls)
+    if (call.url.endsWith('/keywords')) {
+      return (
+        overrides.keywords ??
+        (() =>
+          keywordsJson([
+            kw(1, 'оклейка авто'),
+            kw(2, '---autotargeting', {
+              Bid: 100_000_000,
+              AutotargetingSearchBidIsAuto: 'NO',
+              AutotargetingCategories: { Items: [{ Category: 'EXACT', Value: 'YES' }, { Category: 'BROADER', Value: 'NO' }] },
+              AutotargetingBrandOptions: { Items: [{ Option: 'WITHOUT_BRANDS', Value: 'YES' }] },
+            }),
+          ]))
+      )(call, ++keywordCalls)
+    }
+    return isReports(call) ? (reportType(call) === 'CAMPAIGN_PERFORMANCE_REPORT' ? tsvResponse(dailyTsv()) : tsvResponse(queryTsv())) : new Response('{}', { status: 500 })
+  }
+}
+
+test('campaign settings are always part of campaign (same single campaigns.get request)', async () => {
+  const { c } = client()
+  await withFetch(structureHandler(), async (calls) => {
+    const payload = await c.observe(CID, 7)
+    const s = payload.campaign.settings
+    assert.equal(payload.campaign.name, 'Test campaign') // existing fields unchanged
+    assert.deepEqual(s.strategy.search, { type: 'WB_MAXIMUM_CLICKS', weeklySpendLimit: 7000, bidCeiling: 200, budgetType: 'WEEKLY_BUDGET' })
+    assert.deepEqual(s.strategy.network, { type: 'SERVING_OFF', weeklySpendLimit: null, bidCeiling: null, budgetType: null })
+    assert.deepEqual(s.counterIds, [111, 222])
+    assert.deepEqual(s.negativeKeywords, ['бесплатно', 'своими руками'])
+    assert.deepEqual(s.negativeKeywordSharedSetIds, [])
+    assert.equal(s.options.ADD_METRICA_TAG, 'NO')
+    assert.equal(s.options.ENABLE_SITE_MONITORING, 'YES')
+    assert.equal(s.timeZone, 'Europe/Moscow')
+    assert.equal(s.currency, 'RUB')
+    assert.equal(s.dailyBudget, null)
+    assert.equal('structure' in payload, false) // opt-in: v0.1 callers get the same 3 Direct requests
+    assert.equal(calls.filter((x) => x.url.endsWith('/campaigns')).length, 1)
+    assert.equal(calls.length, 3)
+  })
+})
+
+test('campaign settings tolerate a unified campaign and missing blocks', async () => {
+  const { c } = client()
+  const unified = new Response(
+    JSON.stringify({ result: { Campaigns: [{ Id: CID, Name: 'U', State: 'ON', Status: 'ACCEPTED', Type: 'UNIFIED_CAMPAIGN', UnifiedCampaign: { CounterIds: { Items: [5] } } }] } }),
+    { status: 200 },
+  )
+  await withFetch((call) => (call.url.endsWith('/campaigns') ? unified.clone() : isReports(call) ? (reportType(call) === 'CAMPAIGN_PERFORMANCE_REPORT' ? tsvResponse(dailyTsv()) : tsvResponse(queryTsv())) : campaignJson()), async () => {
+    const s = (await c.observe(CID, 7)).campaign.settings
+    assert.deepEqual(s.counterIds, [5])
+    assert.equal(s.strategy.search, null)
+    assert.deepEqual(s.negativeKeywords, [])
+    assert.deepEqual(s.options, {})
+  })
+})
+
+test('structure: ad groups, keywords with bids, autotargeting and negative keywords, in one request per list', async () => {
+  const { c } = client()
+  await withFetch(structureHandler(), async (calls) => {
+    const payload = await c.observe(CID, 7, { structure: true })
+    const st = payload.structure!
+    assert.deepEqual(st.adGroups[0], { id: 10, campaignId: CID, name: 'Group 10', status: 'ACCEPTED', servingStatus: 'ELIGIBLE', type: 'TEXT_AD_GROUP', regionIds: [213] })
+    assert.equal('state' in st.adGroups[0], false) // ad groups have Status + ServingStatus, no State
+    assert.deepEqual(st.keywords.items[0], {
+      id: 1, adGroupId: 10, campaignId: CID, keyword: 'оклейка авто', isAutotargeting: false, state: 'ON', status: 'ACCEPTED', servingStatus: 'ELIGIBLE',
+      bid: 150, contextBid: 0.3, strategyPriority: 'NORMAL',
+    })
+    const auto = st.keywords.items[1]
+    assert.equal(auto.isAutotargeting, true)
+    assert.equal(auto.bid, 100)
+    assert.deepEqual(auto.autotargeting, {
+      searchBidIsAuto: 'NO',
+      categories: [{ category: 'EXACT', value: 'YES' }, { category: 'BROADER', value: 'NO' }],
+      brandOptions: [{ option: 'WITHOUT_BRANDS', value: 'YES' }],
+    })
+    assert.equal(st.keywords.truncated, false)
+    // "is this phrase already excluded, and where?"
+    assert.deepEqual(st.negativeKeywords.campaign, ['бесплатно', 'своими руками'])
+    assert.deepEqual(st.negativeKeywords.adGroups, [{ adGroupId: 10, phrases: ['авито'], sharedSetIds: [] }]) // group 11 has none → omitted
+    // batch calls: exactly one request per list, no per-object calls
+    assert.equal(calls.filter((x) => x.url.endsWith('/adgroups')).length, 1)
+    assert.equal(calls.filter((x) => x.url.endsWith('/keywords')).length, 1)
+    assert.ok(payload.meta.requestIds.includes('req-groups') && payload.meta.requestIds.includes('req-keywords'))
+  })
+})
+
+test('structure requests are fixed read-only calls scoped to the allowed campaign', async () => {
+  const { c } = client()
+  await withFetch(structureHandler(), async (calls) => {
+    await c.observe(CID, 7, { structure: true })
+    for (const call of calls.filter((x) => x.url.endsWith('/adgroups') || x.url.endsWith('/keywords'))) {
+      const body = JSON.parse(call.body)
+      assert.equal(body.method, 'get')
+      assert.deepEqual(body.params.SelectionCriteria.CampaignIds, [CID])
+      assert.ok(!('Ids' in body.params.SelectionCriteria) && !('AdGroupIds' in body.params.SelectionCriteria))
+      assert.equal(call.headers.Authorization, `Bearer ${TOKEN}`)
+    }
+    const methods = calls.filter((x) => !isReports(x)).map((x) => `${x.url.split('/').pop()}.${JSON.parse(x.body).method}`)
+    assert.deepEqual(methods, ['campaigns.get', 'adgroups.get', 'keywords.get'])
+  })
+})
+
+test('rows of another campaign returned by Direct are dropped', async () => {
+  const { c } = client()
+  await withFetch(
+    structureHandler({
+      groups: () => adGroupsJson([group(10), group(99, { CampaignId: 555 })]),
+      keywords: () => keywordsJson([kw(1, 'ok'), kw(2, 'foreign', { CampaignId: 555 }), { Id: 3, Keyword: 'no campaign id' }]),
+    }),
+    async () => {
+      const st = (await c.observe(CID, 7, { structure: true })).structure!
+      assert.deepEqual(st.adGroups.map((g) => g.id), [10])
+      assert.deepEqual(st.keywords.items.map((k) => k.keyword), ['ok'])
+      assert.ok(!st.negativeKeywords.adGroups.some((g) => g.adGroupId === 99))
+    },
+  )
+})
+
+test('structure lists are paged by LimitedBy and flagged when the page cap is reached', async () => {
+  const { c } = client()
+  await withFetch(
+    structureHandler({ keywords: (call, n) => {
+      const offset = JSON.parse(call.body).params.Page.Offset as number
+      assert.equal(offset, (n - 1) * 2) // each page continues at LimitedBy
+      return n < 3 ? keywordsJson([kw(n * 10, `a${n}`), kw(n * 10 + 1, `b${n}`)], n * 2) : keywordsJson([kw(99, 'last')])
+    } }),
+    async (calls) => {
+      const st = (await c.observe(CID, 7, { structure: true })).structure!
+      assert.equal(st.keywords.items.length, 5)
+      assert.equal(st.keywords.truncated, false)
+      assert.equal(calls.filter((x) => x.url.endsWith('/keywords')).length, 3)
+    },
+  )
+  const capped = client()
+  await withFetch(
+    structureHandler({ keywords: (call) => keywordsJson([kw(Number(JSON.parse(call.body).params.Page.Offset) + 1, 'x')], Number(JSON.parse(call.body).params.Page.Offset) + 1) }),
+    async (calls) => {
+      const st = (await capped.c.observe(CID, 7, { structure: true })).structure!
+      assert.equal(st.keywords.truncated, true)
+      assert.equal(calls.filter((x) => x.url.endsWith('/keywords')).length, 5) // bounded
+    },
+  )
+})
+
+test('a failing structure request fails the whole request with a normalised error; the token never leaks', async () => {
+  const { c } = client()
+  await withFetch(
+    structureHandler({ keywords: () => new Response(errBody(54, `no rights ${TOKEN}`, 'req-kw-err'), { status: 200 }) }),
+    async () => {
+      await assert.rejects(c.observe(CID, 7, { structure: true }), (e: unknown) => {
+        assert.ok(e instanceof DirectApiError)
+        assert.equal(e.kind, 'rights')
+        assert.equal(e.directCode, 54)
+        assert.equal(e.requestId, 'req-kw-err')
+        assert.ok(!`${e.message}${e.stack}${JSON.stringify(e)}`.includes(TOKEN))
+        return true
+      })
+    },
+  )
+  // v0.1 behaviour is untouched when structure is not requested, even if the structure endpoints would fail
+  const plain = client()
+  await withFetch(structureHandler({ groups: () => new Response(errBody(152), { status: 200 }), keywords: () => new Response(errBody(152), { status: 200 }) }), async () => {
+    const payload = await plain.c.observe(CID, 7)
+    assert.equal(payload.daily.length, 2)
+    assert.equal('structure' in payload, false)
+  })
 })
