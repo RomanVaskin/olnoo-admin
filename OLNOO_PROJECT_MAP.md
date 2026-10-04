@@ -37,9 +37,10 @@ No authentication layer exists on this app yet (no login, no session, no middlew
 
 ### Access to admin.olnoo.com
 
-- **Application level:** `olnoo-admin` has no authentication of its own (no login, session cookie, or middleware). The `/admin/login` page and the `olnoo_admin_session` cookie belong to the separate `olnoo` repo (olnoo.com); `olnoo-admin` does not use them.
-- **Confirmed fact (external check):** an unauthenticated request to the production site (`https://admin.olnoo.com/api/projects`) receives HTTP 401 before it reaches the application, so the site including `/api/*` sits behind an external access layer; the owner describes it as HTTP Basic Auth (login `admin` + password).
-- That layer is infrastructure, **not implemented in this repository**, and its configuration has not been reviewed here — do not describe how it is implemented. It does not protect anything that reaches the app port directly (e.g. the `127.0.0.1` scheduler call), so new endpoints must not assume more than "behind the external layer".
+- **Application level:** `olnoo-admin` has no authentication of its own (no login, session, or middleware in this repository).
+- **Confirmed fact (external check):** an unauthenticated request to the production endpoint `https://admin.olnoo.com/api/projects` receives HTTP 401.
+- **Conclusion:** production `admin.olnoo.com` sits behind an external access layer that answers before the request reaches Next.js.
+- The configuration and the specific technology of that external layer were not checked in this repository or by these changes; do not document or assume anything beyond the facts above.
 
 ## CRM
 
