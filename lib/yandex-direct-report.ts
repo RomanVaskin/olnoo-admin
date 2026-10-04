@@ -353,6 +353,9 @@ export type NegativeKeywords = {
 
 export type DirectStructure = {
   adGroups: AdGroupRow[]
+  /** The ad group list hit the page cap (then `adGroups` and the ad-group part of `negativeKeywords` are incomplete). */
+  adGroupsTruncated: boolean
+  /** `truncated` concerns the keyword list only. */
   keywords: { items: KeywordRow[]; truncated: boolean }
   /** Where a phrase is already excluded: the campaign, or one ad group (shared sets: ids only). */
   negativeKeywords: NegativeKeywords

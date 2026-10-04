@@ -379,6 +379,7 @@ test('structure: ad groups, keywords with bids, autotargeting and negative keywo
       brandOptions: [{ option: 'WITHOUT_BRANDS', value: 'YES' }],
     })
     assert.equal(st.keywords.truncated, false)
+    assert.equal(st.adGroupsTruncated, false)
     // "is this phrase already excluded, and where?"
     assert.deepEqual(st.negativeKeywords.campaign, ['бесплатно', 'своими руками'])
     assert.deepEqual(st.negativeKeywords.adGroups, [{ adGroupId: 10, phrases: ['авито'], sharedSetIds: [] }]) // group 11 has none → omitted
@@ -445,6 +446,37 @@ test('structure lists are paged by LimitedBy and flagged when the page cap is re
       assert.equal(calls.filter((x) => x.url.endsWith('/keywords')).length, 5) // bounded
     },
   )
+})
+
+test('truncation is reported separately for ad groups and for keywords', async () => {
+  const offsetOf = (call: Call) => Number(JSON.parse(call.body).params.Page.Offset)
+  const capGroups = (call: Call) => adGroupsJson([group(offsetOf(call) + 1)], offsetOf(call) + 1) // never ends → hits the page cap
+  const capKeywords = (call: Call) => keywordsJson([kw(offsetOf(call) + 1, 'x')], offsetOf(call) + 1)
+
+  // ad groups capped, keywords complete → only adGroupsTruncated
+  const a = client()
+  await withFetch(structureHandler({ groups: capGroups }), async (calls) => {
+    const st = (await a.c.observe(CID, 7, { structure: true })).structure!
+    assert.equal(st.adGroupsTruncated, true)
+    assert.equal(st.keywords.truncated, false)
+    assert.equal(calls.filter((x) => x.url.endsWith('/adgroups')).length, 5) // bounded
+  })
+
+  // keywords capped, ad groups complete → only keywords.truncated
+  const b = client()
+  await withFetch(structureHandler({ keywords: capKeywords }), async () => {
+    const st = (await b.c.observe(CID, 7, { structure: true })).structure!
+    assert.equal(st.keywords.truncated, true)
+    assert.equal(st.adGroupsTruncated, false)
+  })
+
+  // both capped → both flags
+  const both = client()
+  await withFetch(structureHandler({ groups: capGroups, keywords: capKeywords }), async () => {
+    const st = (await both.c.observe(CID, 7, { structure: true })).structure!
+    assert.equal(st.adGroupsTruncated, true)
+    assert.equal(st.keywords.truncated, true)
+  })
 })
 
 test('a failing structure request fails the whole request with a normalised error; the token never leaks', async () => {

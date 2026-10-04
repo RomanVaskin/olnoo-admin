@@ -309,7 +309,8 @@ export function createDirectClient(config: DirectConfig, deps: DirectDeps = {}) 
     const keywords = await getAllForCampaign('keywords', 'Keywords', campaignId, KEYWORD_FIELDS, { States: ['ON', 'OFF', 'SUSPENDED'] })
     return {
       adGroups: normalizeAdGroups(groups.rows),
-      keywords: { items: normalizeKeywords(keywords.rows), truncated: keywords.truncated || groups.truncated },
+      adGroupsTruncated: groups.truncated,
+      keywords: { items: normalizeKeywords(keywords.rows), truncated: keywords.truncated },
       negativeKeywords: normalizeNegativeKeywords(settings, groups.rows),
     }
   }
