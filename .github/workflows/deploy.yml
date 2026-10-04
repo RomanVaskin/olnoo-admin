@@ -37,8 +37,8 @@ jobs:
         run: |
           set -e
           if [ -z "$YANDEX_DIRECT_TOKEN" ] || [ -z "$YANDEX_DIRECT_CAMPAIGN_IDS" ]; then
-            echo "::warning::YANDEX_DIRECT_TOKEN / YANDEX_DIRECT_CAMPAIGN_IDS secret is empty; Yandex Direct env not delivered (the observer endpoint answers 503)."
-            exit 0
+            echo "::error::Required Yandex Direct secrets are missing"
+            exit 1
           fi
           # Values go into a dotenv file: refuse anything outside the expected shapes (no quoting/expansion surprises).
           case "$YANDEX_DIRECT_TOKEN" in *[!A-Za-z0-9_.-]*) echo "::error::YANDEX_DIRECT_TOKEN has unexpected characters"; exit 1;; esac
