@@ -32,6 +32,7 @@ Project is the main connecting object between modules. One Client can have sever
 
 - **Yandex-first, observer first.** OLNOO Ads Agent v0.1 only reads (Yandex Direct, later Metrika + CRM) and analyses; it changes nothing in an ad account. No multi-platform adapter layer before a second real integration exists.
 - **Deterministic layer vs AI.** Integration clients (e.g. `lib/yandex-direct.ts`) are plain server-side code: typed responses, normalised errors, no AI, no UI knowledge. Code computes spend/CPC/CPL/funnel; the AI Router only interprets, prioritises and recommends.
+- **Pipeline order.** Direct Observer (ready) → CRM Observer, read-only (`/api/crm/observer/leads`) → Metrika read-only → unified analytics → AI recommendations → drafts/approval → writes. Each stage only reads and exposes a stable, period-compatible shape (calendar days in `Europe/Moscow`); the join of Direct, Metrika and CRM is a later, separate layer and is never guessed inside a source.
 - **Honest signals.** A click on a contact link is a contact intent, not a lead; attribution is EXACT / PROBABLE / UNKNOWN, never presented stronger than it is.
 - **Writes are a separate future path** (AI proposal → deterministic draft → BEFORE/AFTER → human approval → deterministic apply → audit log) with its own module; the read client must not grow write methods.
 
