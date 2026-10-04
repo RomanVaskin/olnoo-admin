@@ -19,7 +19,10 @@ const MAX_DAYS = 30
  * OAuth token. No application-level auth here (the app has none): in production admin.olnoo.com is
  * protected by an external layer in front of Next.js (see OLNOO_PROJECT_MAP.md, "Access to admin.olnoo.com").
  *
- * GET /api/ads/yandex-direct/observer[?days=7][&campaignId=<allow-listed id>]
+ * GET /api/ads/yandex-direct/observer[?days=7][&campaignId=<allow-listed id>][&structure=1]
+ *
+ * `structure=1` adds ad groups, keywords (with bids) and negative keywords of that campaign (read-only; the
+ * Direct methods are fixed in the client — nothing here can select a method or another campaign).
  */
 export async function GET(req: Request) {
   const config = directConfigFromEnv()
@@ -34,9 +37,14 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: { kind: 'request', message: `days must be an integer from 1 to ${MAX_DAYS}` } }, { status: 400 })
   }
 
+  const structureParam = searchParams.get('structure')
+  if (structureParam !== null && structureParam !== '1' && structureParam !== 'true') {
+    return NextResponse.json({ error: { kind: 'request', message: 'structure must be 1 or true' } }, { status: 400 })
+  }
+
   try {
     const campaignId = resolveCampaignId(searchParams.get('campaignId'), config.campaignIds)
-    const payload = await createDirectClient(config).observe(campaignId, days)
+    const payload = await createDirectClient(config).observe(campaignId, days, { structure: structureParam !== null })
     return NextResponse.json(payload)
   } catch (error) {
     if (error instanceof DirectApiError) {

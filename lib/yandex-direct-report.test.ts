@@ -11,6 +11,10 @@ import {
   toDailyRows,
   toSearchQueryRows,
   microsToMoney,
+  normalizeAdGroups,
+  normalizeCampaignSettings,
+  normalizeKeywords,
+  normalizeNegativeKeywords,
 } from './yandex-direct-report.ts'
 
 const tsv = (fields: string[], ...rows: string[][]) =>
@@ -80,4 +84,36 @@ test('period: last N complete days in Moscow time, ending yesterday', () => {
   assert.deepEqual(observerPeriod(new Date('2026-10-04T10:00:00Z'), 7), { from: '2026-09-27', to: '2026-10-03' })
   // 22:00 UTC is already the next day in Moscow
   assert.deepEqual(observerPeriod(new Date('2026-10-03T22:00:00Z'), 1), { from: '2026-10-03', to: '2026-10-03' })
+})
+
+test('normalizers: missing/odd Direct shapes become empty values, money is rubles', () => {
+  const empty = normalizeCampaignSettings(undefined)
+  assert.deepEqual(empty.counterIds, [])
+  assert.deepEqual(empty.negativeKeywords, [])
+  assert.equal(empty.strategy.search, null)
+  assert.deepEqual(empty.options, {})
+
+  const s = normalizeCampaignSettings({
+    DailyBudget: { Amount: 500_000_000, Mode: 'STANDARD' },
+    TextCampaign: { BiddingStrategy: { Search: { BiddingStrategyType: 'AVERAGE_CPC', AverageCpc: { AverageCpc: 40_000_000, WeeklySpendLimit: 1_000_000_000 } } } },
+  })
+  assert.deepEqual(s.dailyBudget, { amount: 500, mode: 'STANDARD' })
+  assert.deepEqual(s.strategy.search, { type: 'AVERAGE_CPC', weeklySpendLimit: 1000, bidCeiling: null, budgetType: null })
+
+  assert.deepEqual(normalizeAdGroups([{ Id: 1, CampaignId: 2, Name: 'G' }, 'junk', null]), [
+    { id: 1, campaignId: 2, name: 'G', status: null, servingStatus: null, type: null, regionIds: [] },
+  ])
+  const k = normalizeKeywords([{ Id: 1, Keyword: 'x', Bid: null, ContextBid: 0 }])[0]
+  assert.equal(k.bid, null)
+  assert.equal(k.contextBid, 0)
+  assert.equal('autotargeting' in k, false)
+})
+
+test('negative keywords: campaign + ad group phrases and shared-set ids; empty groups are omitted', () => {
+  const settings = normalizeCampaignSettings({ NegativeKeywords: { Items: ['a', 'b'] }, TextCampaign: { NegativeKeywordSharedSetIds: { Items: [7] } } })
+  const nk = normalizeNegativeKeywords(settings, [
+    { Id: 1, NegativeKeywords: { Items: ['c'] }, NegativeKeywordSharedSetIds: { Items: [8, 9] } },
+    { Id: 2, NegativeKeywords: null, NegativeKeywordSharedSetIds: null },
+  ])
+  assert.deepEqual(nk, { campaign: ['a', 'b'], campaignSharedSetIds: [7], adGroups: [{ adGroupId: 1, phrases: ['c'], sharedSetIds: [8, 9] }] })
 })

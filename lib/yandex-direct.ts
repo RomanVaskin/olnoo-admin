@@ -1,13 +1,19 @@
 // Minimal READ-ONLY Yandex Direct API client for the OLNOO Ads Observer (server-side only).
-// It calls exactly: campaigns.get (JSON service) and the Reports service. Nothing here can change
+// It calls exactly: campaigns.get, adgroups.get, keywords.get (JSON services) and the Reports service. Nothing here can change
 // Direct: only an explicit list of read methods is accepted, and no write method is implemented.
 // The OAuth token comes from the server env, is never logged, and is stripped from every error.
 // Deterministic integration layer — no AI, no DB, no UI knowledge.
 
 import { fetchTextWithRetry, FetchRetryError, type RetryOptions } from './fetch-retry.ts'
 import {
+  ADGROUP_FIELDS,
   buildObserverPayload,
   dailyReport,
+  KEYWORD_FIELDS,
+  normalizeAdGroups,
+  normalizeCampaignSettings,
+  normalizeKeywords,
+  normalizeNegativeKeywords,
   observerPeriod,
   parseReportTsv,
   ReportFormatError,
@@ -18,6 +24,8 @@ import {
   SEARCH_QUERY_FIELDS,
   SEARCH_QUERY_FIELDS_WITHOUT_CATEGORY,
   type CampaignMeta,
+  type CampaignSettings,
+  type DirectStructure,
   type ObserverPayload,
   type ReportDefinition,
 } from './yandex-direct-report.ts'
@@ -26,7 +34,7 @@ const API_BASE = 'https://api.direct.yandex.com/json/v501'
 const REPORTS_URL = `${API_BASE}/reports`
 
 /** The only (service, method) pairs the client will send. Writes are deliberately not representable. */
-const READ_ONLY_METHODS: Record<string, readonly string[]> = { campaigns: ['get'] }
+const READ_ONLY_METHODS: Record<string, readonly string[]> = { campaigns: ['get'], adgroups: ['get'], keywords: ['get'] }
 
 // Reports: at most 20 requests / 10 s and 5 offline reports in the queue per user. Calls are strictly
 // sequential with a gap that keeps us far below the rate limit; the poll loop is bounded.
@@ -37,6 +45,9 @@ const REPORT_DEADLINE_MS = 45_000 // keeps the whole HTTP request under typical 
 const DEFAULT_RETRY_IN_S = 5
 const MAX_RETRY_IN_S = 15
 const BUSY_ATTEMPTS = 3
+// Structure reads are paged (Direct answers `LimitedBy` = next offset when a page is full).
+const STRUCTURE_PAGE_LIMIT = 2_000
+const STRUCTURE_MAX_PAGES = 5
 
 export function isReadOnlyDirectMethod(service: string, method: string): boolean {
   return READ_ONLY_METHODS[service]?.includes(method) === true
@@ -241,17 +252,76 @@ export function createDirectClient(config: DirectConfig, deps: DirectDeps = {}) 
   }
 
   async function getCampaign(campaignId: number): Promise<CampaignMeta> {
+    // The type-specific blocks are requested for both text and unified campaigns; Direct returns only the one that matches.
+    const typeFields = ['CounterIds', 'BiddingStrategy', 'Settings', 'NegativeKeywordSharedSetIds']
     const result = (await callJson('campaigns', 'get', {
       SelectionCriteria: { Ids: [campaignId] },
-      FieldNames: ['Id', 'Name', 'State', 'Status', 'Type', 'StartDate'],
-    })) as { Campaigns?: { Id: number; Name: string; State: string; Status: string; Type: string; StartDate?: string }[] } | undefined
+      FieldNames: ['Id', 'Name', 'State', 'Status', 'Type', 'StartDate', 'EndDate', 'TimeZone', 'Currency', 'DailyBudget', 'NegativeKeywords'],
+      TextCampaignFieldNames: typeFields,
+      UnifiedCampaignFieldNames: typeFields,
+    })) as { Campaigns?: ({ Id: number; Name: string; State: string; Status: string; Type: string; StartDate?: string } & Record<string, unknown>)[] } | undefined
     const c = result?.Campaigns?.find((item) => Number(item.Id) === campaignId)
     if (!c) throw new DirectApiError('campaign_not_found', 'campaign not found in Direct')
-    return { id: Number(c.Id), name: c.Name, state: c.State, status: c.Status, type: c.Type, startDate: c.StartDate ?? null }
+    return {
+      id: Number(c.Id),
+      name: c.Name,
+      state: c.State,
+      status: c.Status,
+      type: c.Type,
+      startDate: c.StartDate ?? null,
+      settings: normalizeCampaignSettings(c),
+    }
   }
 
-  /** Campaign, daily stats and search queries for the last `days` complete days. Sequential on purpose. */
-  async function observe(campaignId: number, days: number): Promise<ObserverPayload> {
+  /**
+   * All pages of one read-only list. The selection is ALWAYS `CampaignIds: [campaignId]` with the id that already
+   * passed the allow-list, and rows of any other campaign are dropped, so an ad group / keyword id can never be
+   * used to read another campaign.
+   */
+  async function getAllForCampaign(
+    service: 'adgroups' | 'keywords',
+    resultKey: 'AdGroups' | 'Keywords',
+    campaignId: number,
+    fieldNames: string[],
+    extraSelection: Record<string, unknown> = {},
+  ): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    const rows: Record<string, unknown>[] = []
+    let offset = 0
+    for (let page = 1; page <= STRUCTURE_MAX_PAGES; page++) {
+      const result = (await callJson(service, 'get', {
+        SelectionCriteria: { CampaignIds: [campaignId], ...extraSelection },
+        FieldNames: fieldNames,
+        Page: { Limit: STRUCTURE_PAGE_LIMIT, Offset: offset },
+      })) as ({ LimitedBy?: number } & Partial<Record<string, Record<string, unknown>[]>>) | undefined
+      for (const row of result?.[resultKey] ?? []) {
+        if (Number(row.CampaignId) === campaignId) rows.push(row)
+      }
+      const next = result?.LimitedBy
+      if (typeof next !== 'number' || next <= offset) return { rows, truncated: false }
+      offset = next
+    }
+    return { rows, truncated: true }
+  }
+
+  /** Ad groups, keywords (with real bids) and negative keywords of the campaign: 2+ sequential requests, no per-object calls. */
+  async function getStructure(campaignId: number, settings: CampaignSettings): Promise<DirectStructure> {
+    const groups = await getAllForCampaign('adgroups', 'AdGroups', campaignId, ADGROUP_FIELDS)
+    const keywords = await getAllForCampaign('keywords', 'Keywords', campaignId, KEYWORD_FIELDS, { States: ['ON', 'OFF', 'SUSPENDED'] })
+    return {
+      adGroups: normalizeAdGroups(groups.rows),
+      adGroupsTruncated: groups.truncated,
+      keywords: { items: normalizeKeywords(keywords.rows), truncated: keywords.truncated },
+      negativeKeywords: normalizeNegativeKeywords(settings, groups.rows),
+    }
+  }
+
+  /**
+   * Campaign (+ settings), daily stats and search queries for the last `days` complete days; with
+   * `structure` also ad groups, keywords and negative keywords. Sequential on purpose. If a requested
+   * structure read fails the whole request fails: negative-keyword checks ("is this already excluded?")
+   * must never be answered from a half-read structure.
+   */
+  async function observe(campaignId: number, days: number, opts: { structure?: boolean } = {}): Promise<ObserverPayload> {
     const period = observerPeriod(new Date(now()), days)
     const campaign = await getCampaign(campaignId)
     const daily = toDailyRows(rows(await runReport(dailyReport(campaignId, period.from, period.to)), DAILY_FIELDS))
@@ -265,7 +335,9 @@ export function createDirectClient(config: DirectConfig, deps: DirectDeps = {}) 
       queryRows = rows(await runReport(searchQueryReport(campaignId, period.from, period.to, false)), SEARCH_QUERY_FIELDS_WITHOUT_CATEGORY)
     }
 
-    return buildObserverPayload({ period, campaign, daily, searchQueries: toSearchQueryRows(queryRows), units, requestIds: [...requestIds] })
+    const structure = opts.structure ? await getStructure(campaignId, campaign.settings) : undefined
+
+    return buildObserverPayload({ period, campaign, daily, searchQueries: toSearchQueryRows(queryRows), structure, units, requestIds: [...requestIds] })
   }
 
   return { observe, getCampaign }
