@@ -43,10 +43,19 @@ export async function POST(req: Request) {
     service: typeof body.service === 'string' ? body.service : undefined,
     message: typeof body.message === 'string' ? body.message : undefined,
     source: typeof body.source === 'string' ? body.source : undefined,
+    // Optional attribution identifiers (snake_case like utm_*, camelCase accepted). Validated, never logged.
+    attribution: {
+      leadTrackingId: body.lead_tracking_id ?? body.leadTrackingId,
+      metrikaClientId: body.metrika_client_id ?? body.metrikaClientId,
+      yclid: body.yclid,
+      firstSeenAt: body.first_seen_at ?? body.firstSeenAt,
+    },
   })
 
   if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status })
-  return NextResponse.json(result.row, { status: 201 })
+  // A replayed lead_tracking_id returns the existing lead with the same 201 callers already expect
+  // (DriveSet treats anything else as a failure); the header tells the two cases apart.
+  return NextResponse.json(result.row, { status: 201, headers: result.replay ? { 'X-Idempotent-Replay': 'true' } : undefined })
 }
 
 // Accept both the data-layer names and the public OLNOO form's URL-style names.

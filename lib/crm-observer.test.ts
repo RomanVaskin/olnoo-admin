@@ -77,16 +77,16 @@ test('no mutations: the route exports GET only and the data layer issues SELECT 
   for (const s of statements) assert.match(s.trim(), /^SELECT\b/)
 })
 
-// ---- DB integration (skipped without a reachable Postgres that has the leads table, migrations through 0010) ----
+// ---- DB integration (skipped without a reachable Postgres that has the leads table, migrations through 0015) ----
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://olnoo_admin:CHANGE_ME@localhost:5432/olnoo_admin'
 
 async function withDb(t: TestContext, fn: (pool: Pool, project: (name?: string) => Promise<{ id: number; slug: string }>) => Promise<void>) {
   const pool = new Pool({ connectionString: DATABASE_URL })
   try {
-    await pool.query('SELECT page_path, utm_content, utm_term, phone, contact FROM leads LIMIT 1')
+    await pool.query('SELECT page_path, utm_content, utm_term, phone, contact, lead_tracking_id, metrika_client_id, yclid, first_seen_at FROM leads LIMIT 1')
   } catch (err) {
-    t.skip(`No reachable Postgres with the leads table at DATABASE_URL — skipping (${(err as Error).message})`)
+    t.skip(`No reachable Postgres with the leads table incl. migration 0015 at DATABASE_URL — skipping (${(err as Error).message})`)
     await pool.end()
     return
   }
@@ -109,12 +109,14 @@ async function lead(pool: Pool, projectId: number, createdAt: string, extra: Rec
   const id = `crm-obs-${Date.now()}-${++seq}`
   await pool.query(
     `INSERT INTO leads (id, project_id, name, email, phone, contact, source, status, service, landing_page, page_path, referrer,
-                        utm_source, utm_medium, utm_campaign, utm_content, utm_term, created_at)
-     VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+                        utm_source, utm_medium, utm_campaign, utm_content, utm_term, created_at,
+                        lead_tracking_id, metrika_client_id, yclid, first_seen_at)
+     VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::timestamptz)`,
     [
       id, projectId, extra.name ?? 'Lead', 'phone' in extra ? extra.phone : '+70000000000', extra.contact ?? null, extra.source ?? 'Ads', extra.status ?? 'New', extra.service ?? '',
       extra.landing_page ?? '', extra.page_path ?? '', extra.referrer ?? '', extra.utm_source ?? '', extra.utm_medium ?? '', extra.utm_campaign ?? '',
       extra.utm_content ?? '', extra.utm_term ?? '', createdAt,
+      extra.lead_tracking_id ?? null, extra.metrika_client_id ?? null, extra.yclid ?? null, extra.first_seen_at ?? null,
     ],
   )
   return id
@@ -187,6 +189,7 @@ test('DB: every saved UTM field, page, referrer, contact and phone come back (ut
         id: 'x', createdAt: '2026-10-02T09:00:00.000Z', name: 'Anna', phone: '+79990001122', status: 'In progress', source: 'Ads', service: 'Полировка', contact: null,
         landingPage: 'https://driveset.ru/polirovka-avto?utm_source=yandex', pagePath: '/polirovka-avto', referrer: 'https://yandex.ru/',
         utmSource: 'yandex', utmMedium: 'cpc', utmCampaign: '714796268', utmContent: 'ad-1', utmTerm: 'полировка фар',
+        leadTrackingId: null, metrikaClientId: null, yclid: null, firstSeenAt: null, // a lead created before attribution capture
       },
     )
     assert.equal(r.leads[1].phone, null)
@@ -218,5 +221,42 @@ test('DB: reading changes nothing', async (t) => {
     await read(pool, p.slug, '2026-10-01', '2026-10-03')
     await read(pool, p.slug, '2026-10-01', '2026-10-03')
     assert.deepEqual(await counts(), before)
+  })
+})
+
+test('DB: attribution identifiers are returned (ClientID as a string); old leads have nulls', async (t) => {
+  await withDb(t, async (pool, project) => {
+    const p = await project()
+    const clientId = '18446744073709551615'
+    await lead(pool, p.id, '2026-10-02T09:00:00Z', {
+      name: 'New', lead_tracking_id: '0b6f4c1e-5d4a-4f0e-9a3b-7c2d1e8f9a10', metrika_client_id: clientId, yclid: 'yc-1', first_seen_at: '2026-10-01T18:30:00+03:00',
+    })
+    await lead(pool, p.id, '2026-10-02T10:00:00Z', { name: 'Old' })
+
+    const r = await read(pool, p.slug, '2026-10-01', '2026-10-03')
+    const [withIds, old] = r.leads
+    assert.equal(withIds.leadTrackingId, '0b6f4c1e-5d4a-4f0e-9a3b-7c2d1e8f9a10')
+    assert.equal(withIds.metrikaClientId, clientId)
+    assert.equal(typeof withIds.metrikaClientId, 'string')
+    assert.equal(withIds.yclid, 'yc-1')
+    assert.equal(withIds.firstSeenAt, '2026-10-01T15:30:00.000Z')
+    assert.deepEqual([old.leadTrackingId, old.metrikaClientId, old.yclid, old.firstSeenAt], [null, null, null, null])
+    // the JSON a consumer receives keeps the ClientID exact (a number would round it)
+    assert.ok(JSON.stringify(r).includes(`"metrikaClientId":"${clientId}"`))
+  })
+})
+
+test('DB: attribution fields do not widen project isolation or the period filter', async (t) => {
+  await withDb(t, async (pool, project) => {
+    const a = await project('A')
+    const b = await project('B')
+    const sameId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const la = await lead(pool, a.id, '2026-10-02T09:00:00Z', { lead_tracking_id: sameId, metrika_client_id: '555' })
+    await lead(pool, b.id, '2026-10-02T09:00:00Z', { metrika_client_id: '555' }) // same ClientID in another project
+    await lead(pool, a.id, '2026-09-30T20:59:59Z', { metrika_client_id: '555' }) // 23:59:59 MSK the day before → outside
+
+    const r = await read(pool, a.slug, '2026-10-01', '2026-10-03')
+    assert.deepEqual(r.leads.map((l) => l.id), [la])
+    assert.equal(r.totals.leads, 1)
   })
 })
