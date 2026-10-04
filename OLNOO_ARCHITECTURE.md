@@ -28,6 +28,13 @@ Project is the main connecting object between modules. One Client can have sever
 - **One open lead per person per channel.** Follow-up messages never create another lead while one is open; after Won/Lost a new message is a new enquiry.
 - **No invented attribution.** A messenger message carries no ad attribution, so such leads are `source=Direct` (the CRM's direct/unknown value) — never Ads/Yandex Direct without confirmed attribution.
 
+## Ads Agent
+
+- **Yandex-first, observer first.** OLNOO Ads Agent v0.1 only reads (Yandex Direct, later Metrika + CRM) and analyses; it changes nothing in an ad account. No multi-platform adapter layer before a second real integration exists.
+- **Deterministic layer vs AI.** Integration clients (e.g. `lib/yandex-direct.ts`) are plain server-side code: typed responses, normalised errors, no AI, no UI knowledge. Code computes spend/CPC/CPL/funnel; the AI Router only interprets, prioritises and recommends.
+- **Honest signals.** A click on a contact link is a contact intent, not a lead; attribution is EXACT / PROBABLE / UNKNOWN, never presented stronger than it is.
+- **Writes are a separate future path** (AI proposal → deterministic draft → BEFORE/AFTER → human approval → deterministic apply → audit log) with its own module; the read client must not grow write methods.
+
 ## SEO
 
 - One search intent = one page. Do not create thin pages for synonyms.
