@@ -10,6 +10,8 @@ export type RetryOptions = {
   timeoutMs?: number
   /** Pause before attempt n+1 is n × this value (1 s, 2 s by default). Tests pass 0. */
   retryDelayMs?: number
+  /** Prefix of the journald lines ("[tag] …"); default `pages-sync`. */
+  logTag?: string
 }
 
 export class FetchRetryError extends Error {
@@ -40,10 +42,11 @@ export async function fetchTextWithRetry(
   url: string,
   init: RequestInit = {},
   opts: RetryOptions = {},
-): Promise<{ status: number; ok: boolean; text: string }> {
+): Promise<{ status: number; ok: boolean; text: string; headers: Headers }> {
   const attempts = opts.attempts ?? FETCH_ATTEMPTS
   const timeoutMs = opts.timeoutMs ?? FETCH_TIMEOUT_MS
   const delay = opts.retryDelayMs ?? RETRY_DELAY_MS
+  const tag = opts.logTag ?? 'pages-sync'
   let reason = 'unknown error'
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -52,8 +55,8 @@ export async function fetchTextWithRetry(
       if (!isTransientStatus(res.status)) {
         const text = await res.text()
         // Journald line per recovered fetch: shows how often the network path really fails before a fix is chosen.
-        if (attempt > 1) console.warn(`[pages-sync] ${url}: ok on attempt ${attempt} after ${attempt - 1} failed (last: ${reason})`)
-        return { status: res.status, ok: res.ok, text }
+        if (attempt > 1) console.warn(`[${tag}] ${url}: ok on attempt ${attempt} after ${attempt - 1} failed (last: ${reason})`)
+        return { status: res.status, ok: res.ok, text, headers: res.headers }
       }
       reason = `HTTP ${res.status}`
     } catch (err) {
@@ -61,6 +64,6 @@ export async function fetchTextWithRetry(
     }
     if (attempt < attempts && delay > 0) await new Promise((r) => setTimeout(r, delay * attempt))
   }
-  console.error(`[pages-sync] ${url}: all ${attempts} attempts failed (last: ${reason})`)
+  console.error(`[${tag}] ${url}: all ${attempts} attempts failed (last: ${reason})`)
   throw new FetchRetryError(`${url}: ${reason} after ${attempts} attempts`, attempts)
 }

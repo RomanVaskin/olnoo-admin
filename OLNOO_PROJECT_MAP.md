@@ -35,6 +35,12 @@ CRM Overview: `/en?screen=crm-overview&project=<slug>`. CRM Leads: `/en?screen=c
 
 No authentication layer exists on this app yet (no login, no session, no middleware) — every route, including CRM writes, is reachable by anyone who can reach the domain. This is a known, pre-existing gap, not something to silently patch as a side effect of an unrelated task.
 
+### Access to admin.olnoo.com
+
+- **Application level:** `olnoo-admin` has no authentication of its own (no login, session cookie, or middleware). The `/admin/login` page and the `olnoo_admin_session` cookie belong to the separate `olnoo` repo (olnoo.com); `olnoo-admin` does not use them.
+- **Confirmed fact (external check):** an unauthenticated request to the production site (`https://admin.olnoo.com/api/projects`) receives HTTP 401 before it reaches the application, so the site including `/api/*` sits behind an external access layer; the owner describes it as HTTP Basic Auth (login `admin` + password).
+- That layer is infrastructure, **not implemented in this repository**, and its configuration has not been reviewed here — do not describe how it is implemented. It does not protect anything that reaches the app port directly (e.g. the `127.0.0.1` scheduler call), so new endpoints must not assume more than "behind the external layer".
+
 ## CRM
 
 Source of truth: Postgres (same database used by `olnoo-admin`).
@@ -186,7 +192,7 @@ Trigger, chosen over the alternative of a public/authenticated client-facing end
 
 ## Ads
 
-MVP: a single project-scoped campaigns screen, part of the same Client → Project → SEO → CRM → Social → Ads → Analytics architecture — not a separate app. Live at `?screen=ads&project=<slug>` (nav: Ads, no sub-items). No ad-platform API is connected yet (no Yandex Direct/Google Ads/VK/Meta/Telegram Ads integration) — all fields (spend, impressions, clicks, leads, sales, revenue) are entered/edited manually in this MVP; the schema is shaped so a future sync job can write into the same columns without a redesign, but no integrations/accounts/queue table exists yet — deliberately not built ahead of need.
+MVP: a single project-scoped campaigns screen, part of the same Client → Project → SEO → CRM → Social → Ads → Analytics architecture — not a separate app. Live at `?screen=ads&project=<slug>` (nav: Ads, no sub-items). No ad-platform API feeds `ads_campaigns` (the only integration is the separate read-only Yandex Direct observer below, which is not wired to this table or the UI) — all fields (spend, impressions, clicks, leads, sales, revenue) are entered/edited manually in this MVP; the schema is shaped so a future sync job can write into the same columns without a redesign, but no integrations/accounts/queue table exists yet — deliberately not built ahead of need.
 
 Source of truth: Postgres (`olnoo-admin`), table `ads_campaigns`, `project_id → projects.id`. Columns: `id`, `project_id`, `platform`, `name`, `status`, `budget`, `spend`, `impressions`, `clicks`, `leads`, `sales`, `revenue`, `utm_source`, `utm_medium`, `utm_campaign`, `started_at` (plain text, same simplification as `social_posts.publish_date`), `ended_at`, `created_at`, `updated_at`. `platform` one of `yandex_direct`/`google_ads`/`vk_ads`/`meta_ads`/`telegram_ads`; `status` one of `draft`/`active`/`paused`/`completed` — both validated in application code (`lib/ads.ts`), no DB CHECK constraint, same convention as every other enum-like column in this project.
 
@@ -198,6 +204,18 @@ UI (`components/sections/ads-view.tsx`, mirrors `social-accounts-view.tsx`'s lis
 
 Migration: `db/migrations/0009_ads_campaigns.sql`. **Applied manually, same as every other migration in this repo** — `.github/workflows/deploy.yml` has no database-migration step of any kind (`git fetch` → `git reset --hard` → `npm ci` → `npm run build` → `systemctl restart`), and none was added as part of this task (deploy/nginx/systemd were explicitly out of scope). Apply it by hand on KZ after deploy: `psql "$DATABASE_URL" -f db/migrations/0009_ads_campaigns.sql`.
 
+
+### Yandex Direct observer (read-only, Ads Agent v0.1, PR1)
+
+Purpose: first real ad data source for the Ads Agent (Observer/Analyst) — own Direct client, no AdCab. **Read-only**: only `campaigns.get` and the Reports service are representable (`isReadOnlyDirectMethod`); no add/update/delete/suspend/resume/archive/unarchive exists. No AI, Metrika, scheduler, DB table or UI is attached to it.
+
+- Endpoint: `GET /api/ads/yandex-direct/observer[?days=7][&campaignId=…]` (`days` 1–30, period = last N complete days ending yesterday, Moscow time). `campaignId` may only be an id from `YANDEX_DIRECT_CAMPAIGN_IDS`, otherwise 403; with a single allowed id it can be omitted. Access: external layer only (see "Access to admin.olnoo.com"); no application-level auth.
+- Response: `{ period, campaign{id,name,state,status,type,startDate,totals}, daily[], searchQueries[], meta{includeVat,units,requestIds} }`. Money is rubles (Direct micros ÷ 1 000 000, `IncludeVAT=YES`); CPC is computed by our code (spend ÷ clicks), not taken from Direct. `searchQueries` keep Direct's raw `criteria`/`criteriaType` (`---autotargeting` / `AUTOTARGETING`); the deprecated `TargetingCategory` is returned only as an optional raw `targetingCategory` and must not drive logic (if Direct rejects that field the report is re-asked without it).
+- Direct calls (`https://api.direct.yandex.com/json/v501/…`, `Authorization: Bearer`, no `Client-Login`): `campaigns.get` (Id, Name, State, Status, Type, StartDate), Reports `CAMPAIGN_PERFORMANCE_REPORT` (Date, CampaignId, Impressions, Clicks, Cost) and `SEARCH_QUERY_PERFORMANCE_REPORT` (CampaignId, AdGroupId, Query, Criteria, CriteriaType, TargetingCategory, Impressions, Clicks, Cost). Calls are sequential. Reports lifecycle: POST → 201/202 → wait `retryIn` → the identical request again → 200 TSV; bounded (≤12 polls, 45 s total). Direct limits: 20 requests / 10 s and 5 offline reports per user.
+- Errors: normalised to `kind`, Direct `error_code`, `RequestId` (auth 53 / rights 54 / quota 152 / busy 52,506 retried / request / network / report_timeout / report_format → HTTP 502/502/429/503/502/502/504/502; unknown campaign 404; not configured 503). The token is stripped from every error and never logged or returned.
+- Env (server-only, `/opt/olnoo/projects/olnoo-admin/.env.local`, **not set yet**): `YANDEX_DIRECT_TOKEN` (OAuth token obtained manually; no refresh flow, expiry is handled by hand), `YANDEX_DIRECT_CAMPAIGN_IDS` (allow-list; PR1 = `714796268`, DriveSet). Missing/invalid → endpoint answers 503.
+- Code: `lib/yandex-direct.ts` (client), `lib/yandex-direct-report.ts` (pure: report definitions, TSV parser, response shape), `app/api/ads/yandex-direct/observer/route.ts`; tests `lib/yandex-direct*.test.ts` use a scripted `fetch` — **no real Direct call has been made yet**; `lib/fetch-retry.ts` now also returns response headers and takes a log tag.
+- Not included: OAuth flow/refresh, Client-Login, Metrika, AI, scheduler, caching/DB, UI, ad-group/ad/keyword/negative-keyword/settings reads, any write.
 ## AI Router
 
 - repo: `RomanVaskin/olnoo-ai-router`
