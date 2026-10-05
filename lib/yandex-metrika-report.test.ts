@@ -118,3 +118,70 @@ test('payload: breakdown rows carry no identifiers; lead goal shown per row; lim
   assert.ok(p.meta.limitations.some((l) => l.startsWith('Direct → Metrika: AGGREGATED')))
   assert.deepEqual(p.meta.attributionModel, { sources: 'lastsign', utm: 'lastsign', direct: 'lastDirectClick' })
 })
+
+// ---- Unified Analytics extras -------------------------------------------------------------------------
+
+import {
+  ALLOWED_FILTER_RE,
+  dailyGoalsQuery,
+  directSegmentQuery,
+  matchesTestRules,
+  parseDailyGoals,
+  parseDirectSegment,
+  parseTestSegment,
+  SEGMENT_EVENTS,
+  testSegmentQuery,
+} from './yandex-metrika-report.ts'
+
+const RULES = { utmContent: ['a2_production_test'], utmTerm: ['test_attribution'] }
+
+test('extras queries: only allowed dimensions/metrics, within the 20-metric limit; the test filter has the allowed shape', () => {
+  const test = testSegmentQuery(RULES)!
+  for (const query of [dailyGoalsQuery(), directSegmentQuery(), test]) {
+    assert.ok(query.dimensions.every((d) => ALLOWED_DIMENSIONS.includes(d)))
+    assert.ok(query.metrics.every((m) => ALLOWED_METRIC_RE.test(m)))
+    assert.ok(query.metrics.length <= 20)
+  }
+  assert.equal(test.filters, "ym:s:lastsignUTMContent=='a2_production_test' OR ym:s:lastsignUTMTerm=='test_attribution'")
+  assert.ok(ALLOWED_FILTER_RE.test(test.filters!))
+  assert.ok(!ALLOWED_FILTER_RE.test("ym:s:clientID=='1'"))
+  assert.ok(!ALLOWED_FILTER_RE.test("ym:s:lastsignUTMContent=='x' OR 1=1"))
+  assert.equal(testSegmentQuery({ utmContent: [], utmTerm: [] }), null)
+  assert.throws(() => testSegmentQuery({ utmContent: ["x' OR '1'='1"], utmTerm: [] }), ReportFormatError)
+  assert.equal(directSegmentQuery().dimensions[0], 'ym:s:lastDirectClickOrder')
+  assert.equal(dailyGoalsQuery().metrics.length, 2)
+})
+
+test('test rules: exact normalised match only — substrings, other "test" strings and empty values are not test traffic', () => {
+  assert.equal(matchesTestRules(RULES, 'a2_production_test', null), true)
+  assert.equal(matchesTestRules(RULES, ' A2_Production_Test ', ''), true) // normalised
+  assert.equal(matchesTestRules(RULES, null, 'test_attribution'), true)
+  assert.equal(matchesTestRules(RULES, 'a2_production_test_2', null), false) // not a substring rule
+  assert.equal(matchesTestRules(RULES, 'my_test_page', 'тест'), false)
+  assert.equal(matchesTestRules(RULES, 'test', 'test'), false)
+  assert.equal(matchesTestRules(RULES, '1922380925577514960', '---autotargeting'), false)
+  assert.equal(matchesTestRules(RULES, '', ''), false)
+  assert.equal(matchesTestRules({ utmContent: [''], utmTerm: [''] }, '', ''), false)
+})
+
+test('direct segment: matched by lastDirectClickOrder.id (exact), never by name or UTM', () => {
+  const metrics = (visits: number) => [visits, ...SEGMENT_EVENTS.flatMap((_, i) => [10 + i, 20 + i])]
+  const r = resp([
+    { dimensions: [{ id: '999', name: 'Единая перфоманс-кампания №4 от 25-09-2026' }], metrics: metrics(5) },
+    { dimensions: [{ id: '714796268', name: 'Другое имя' }], metrics: metrics(66) },
+  ])
+  const seg = parseDirectSegment(r, 714796268)
+  assert.deepEqual([seg.found, seg.idsPresent, seg.visits], [true, true, 66])
+  assert.deepEqual(seg.goals.quiz_start, { visits: 10, reaches: 20 })
+  assert.deepEqual(seg.goals.phone_click, { visits: 17, reaches: 27 })
+  const byNameOnly = parseDirectSegment(resp([{ dimensions: [{ id: null, name: '714796268' }], metrics: metrics(3) }]), 714796268)
+  assert.deepEqual([byNameOnly.found, byNameOnly.idsPresent, byNameOnly.visits], [false, false, 0])
+  assert.deepEqual([parseDirectSegment(resp([]), 714796268).found, parseDirectSegment(resp([]), 714796268).idsPresent], [false, true])
+})
+
+test('test segment and daily goals are parsed; rows that fail the exact rule are ignored', () => {
+  const row = (content: string, term: string, visits: number) => ({ dimensions: [{ id: null, name: content }, { id: null, name: term }], metrics: [visits, ...SEGMENT_EVENTS.map(() => 1), 3] })
+  const seg = parseTestSegment(resp([row('a2_production_test', 'test_attribution', 1), row('other', 'test_attribution', 2), row('other', 'x', 50)]), RULES)
+  assert.deepEqual([seg.visits, seg.rows, seg.goalVisits.lead_submit, seg.leadSubmitReaches], [3, 2, 2, 6])
+  assert.deepEqual(parseDailyGoals(resp([{ dimensions: [{ id: null, name: '2026-10-05' }], metrics: [7, 3] }, { dimensions: [], metrics: [1, 1] }])), [{ date: '2026-10-05', quizStartVisits: 7, leadSubmitVisits: 3 }])
+})

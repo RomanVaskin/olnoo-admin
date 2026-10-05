@@ -7,12 +7,26 @@
 import { fetchTextWithRetry, FetchRetryError, type RetryOptions } from './fetch-retry.ts'
 import type { ResolvedPeriod } from './observer-period.ts'
 import {
+  ALLOWED_FILTER_RE,
   ALLOWED_DIMENSIONS,
   ALLOWED_METRIC_RE,
   breakdownQuery,
   buildMetrikaPayload,
   checkGoals,
+  dailyGoalsQuery,
   dailyQuery,
+  directSegmentQuery,
+  emptyTestSegment,
+  parseDailyGoals,
+  parseDirectSegment,
+  parseTestSegment,
+  testSegmentQuery,
+  type DailyGoalRow,
+  type DirectSegment,
+  type TestRules,
+  type UnifiedExtras,
+  type TestSegment,
+  type Warning,
   DIM,
   goalsQuery,
   parseManagedGoals,
@@ -147,6 +161,10 @@ export function createMetrikaClient(config: MetrikaConfig, deps: MetrikaDeps = {
     url.searchParams.set('date2', period.to)
     url.searchParams.set('metrics', query.metrics.join(','))
     if (query.dimensions.length) url.searchParams.set('dimensions', query.dimensions.join(','))
+    if (query.filters !== undefined) {
+      if (!ALLOWED_FILTER_RE.test(query.filters)) throw new MetrikaApiError('request', 'filter is not allowed')
+      url.searchParams.set('filters', query.filters)
+    }
     if (query.sort) url.searchParams.set('sort', query.sort)
     url.searchParams.set('limit', String(query.limit))
     url.searchParams.set('accuracy', 'full') // ask for unsampled data; `sampled` is reported either way
@@ -218,5 +236,34 @@ export function createMetrikaClient(config: MetrikaConfig, deps: MetrikaDeps = {
     })
   }
 
-  return { observe, stat }
+  /**
+   * Extra aggregated reads for Unified Analytics (3 sequential requests): goal visits per day, the Direct-click
+   * segment of the funnel (`lastDirectClickOrder.id` = the Direct campaign) and the explicit test-traffic segment.
+   * Each read is independent: a failure of one becomes a warning and a null, never a failure of the others.
+   */
+  async function observeUnifiedExtras(project: string, period: ResolvedPeriod, campaignId: number, testRules: TestRules): Promise<UnifiedExtras> {
+    const id = resolveMetrikaProject(project).counterId
+    const warnings: Warning[] = []
+    let sampled = false
+    async function tolerant<T>(block: string, read: () => Promise<StatResponse>, parse: (r: StatResponse) => T): Promise<T | null> {
+      try {
+        const response = await read()
+        sampled = sampled || response.sampled
+        return parse(response)
+      } catch (err) {
+        if (err instanceof MetrikaApiError) {
+          warnings.push({ code: 'extras_unavailable', message: `${block}: ${err.kind}${err.metrikaCode ? ` (${err.metrikaCode})` : ''}` })
+          return null
+        }
+        throw err
+      }
+    }
+    const dailyGoals = await tolerant('dailyGoals', () => stat(dailyGoalsQuery(), id, period), parseDailyGoals)
+    const directSegment = await tolerant('directSegment', () => stat(directSegmentQuery(), id, period), (r) => parseDirectSegment(r, campaignId))
+    const testQuery = testSegmentQuery(testRules)
+    const testSegment = testQuery ? await tolerant('testSegment', () => stat(testQuery, id, period), (r) => parseTestSegment(r, testRules)) : emptyTestSegment()
+    return { dailyGoals, directSegment, testSegment, sampled, warnings }
+  }
+
+  return { observe, observeUnifiedExtras, stat }
 }

@@ -260,3 +260,57 @@ test('DB: attribution fields do not widen project isolation or the period filter
     assert.equal(r.totals.leads, 1)
   })
 })
+
+// ---- readLeadSignalsForPeriod (no database needed: scripted `query`) -----------------------------------
+
+import { readLeadSignalsForPeriod } from './crm-observer.ts'
+
+function fakeDb(rows: Record<string, unknown>[], project: { id: number; slug: string; name: string } | null = { id: 7, slug: 'driveset', name: 'DriveSet' }) {
+  const statements: { sql: string; params: unknown[] }[] = []
+  return {
+    statements,
+    query: async (sql: string, params: unknown[] = []) => {
+      statements.push({ sql, params })
+      return { rows: sql.includes('FROM projects') ? (project ? [project] : []) : rows } as never
+    },
+  }
+}
+
+test('lead signals: the SELECT names no personal-data column and returns only the safe signal fields', async () => {
+  const period = buildPeriod('2026-10-01', '2026-10-03') as ObserverPeriod
+  const dirty = {
+    created_at: '2026-10-02T09:00:00Z', status: 'New', utm_source: 'yandex', utm_medium: 'cpc', utm_campaign: '714796268', utm_content: '1', utm_term: 'x',
+    has_metrika_client_id: true, has_yclid: false, total: '1',
+    // what a careless query could have returned — must never reach the output:
+    name: 'LEAK-NAME', phone: 'LEAK-PHONE', contact: 'LEAK-CONTACT', email: 'LEAK-EMAIL', message: 'LEAK-MESSAGE',
+    metrika_client_id: 'LEAK-CLIENT', yclid: 'LEAK-YCLID', lead_tracking_id: 'LEAK-TRACKING',
+  }
+  const db = fakeDb([dirty])
+  const result = await readLeadSignalsForPeriod(db as never, { project: 'driveset', period })
+  assert.ok(!('error' in result))
+  const text = JSON.stringify(result)
+  assert.doesNotMatch(text, /LEAK/)
+  assert.deepEqual(result.signals[0], {
+    createdAt: '2026-10-02T09:00:00.000Z', status: 'New', utmSource: 'yandex', utmMedium: 'cpc', utmCampaign: '714796268', utmContent: '1', utmTerm: 'x',
+    hasMetrikaClientId: true, hasYclid: false,
+  })
+  const select = db.statements.find((s) => s.sql.includes('FROM leads'))!.sql
+  const selected = select.slice(0, select.indexOf('FROM leads'))
+  for (const column of ['name', 'phone', 'contact', 'email', 'message', 'notes', 'company', 'lead_tracking_id']) assert.doesNotMatch(selected, new RegExp(`l\\.${column}\\b`))
+  const withoutBooleans = selected
+    .replace("(l.metrika_client_id IS NOT NULL AND l.metrika_client_id <> '') AS has_metrika_client_id", '')
+    .replace("(l.yclid IS NOT NULL AND l.yclid <> '') AS has_yclid", '')
+  assert.doesNotMatch(withoutBooleans, /l\.(metrika_client_id|yclid)\b/) // the values appear only inside the two IS NOT NULL booleans
+  assert.deepEqual(db.statements.find((s) => s.sql.includes('FROM leads'))!.params, [7, period.fromUtc, period.toUtcExclusive, 2000])
+})
+
+test('lead signals: truncation reports the real total; unknown project is a 404 and issues no lead query', async () => {
+  const period = buildPeriod('2026-10-01', '2026-10-03') as ObserverPeriod
+  const row = (i: number) => ({ created_at: `2026-10-02T09:0${i}:00Z`, status: 'New', utm_source: '', utm_medium: '', utm_campaign: '', utm_content: '', utm_term: '', has_metrika_client_id: false, has_yclid: false, total: '5' })
+  const cut = await readLeadSignalsForPeriod(fakeDb([row(1), row(2)]) as never, { project: 'driveset', period }, 2)
+  assert.ok(!('error' in cut) && cut.truncated && cut.total === 5 && cut.signals.length === 2)
+  const missing = fakeDb([], null)
+  const none = await readLeadSignalsForPeriod(missing as never, { project: 'nope', period })
+  assert.deepEqual(none, { error: 'project not found', status: 404 })
+  assert.equal(missing.statements.length, 1)
+})
