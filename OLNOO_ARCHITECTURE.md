@@ -39,7 +39,7 @@ Project is the main connecting object between modules. One Client can have sever
 ## Lead traffic classification
 
 - **Three classes, not a boolean.** A lead is `REAL`, `TEST` or `UNKNOWN`; a lead that cannot be proven REAL or TEST is UNKNOWN, and UNKNOWN is never treated as REAL. Automatic class + reason are stored with the lead; a human override (REAL/TEST) wins; effective class = `override ?? auto`.
-- **Step A (foundation) is in place; rollout is not active.** The schema, the classifier (historical explicit markers → TEST, everything else UNKNOWN) and the effective-class semantics exist, but Unified Analytics still uses the legacy marker logic. The signed, short-lived, project-bound Test Mode (browser test session, Metrika visit marker, REAL for instrumented web leads, known test contacts) is the next step; a plain client-side `is_test` flag is never authoritative.
+- **Step A (foundation) is in place; rollout is not active.** The schema, the classifier (historical explicit markers → TEST, everything else UNKNOWN) and the effective-class semantics exist, but Unified Analytics still uses the legacy marker logic. PR B adds the issuing side of the signed, short-lived (2 h default, 12 h max), project-bound test link (HMAC-SHA256, per-project secret, token never stored) — but DriveSet cannot accept it yet and the CRM does not classify by it. The rest of the Test Mode (browser test session, Metrika visit marker, REAL for instrumented web leads, known test contacts) is still ahead; a plain client-side `is_test` flag is never authoritative.
 
 ## SEO
 
