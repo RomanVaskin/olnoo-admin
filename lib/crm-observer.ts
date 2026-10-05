@@ -3,6 +3,7 @@
 // No `@/` imports so it runs under `node --test`; the route passes the pool in.
 
 import type { Pool, PoolClient } from 'pg'
+import { effectiveTrafficClass, parseTrafficClass, parseTrafficOverride, type TrafficClass, type TrafficOverride } from './traffic-class.ts'
 
 /** Same calendar the Direct Observer uses (its period is "Moscow days"): Moscow has been UTC+3 without DST since 2014. */
 export const OBSERVER_TIMEZONE = 'Europe/Moscow'
@@ -179,6 +180,14 @@ export type LeadSignal = {
   utmTerm: string
   hasMetrikaClientId: boolean
   hasYclid: boolean
+  /**
+   * Present ONLY when read with `{ withTrafficClass: true }` (needs migration 0016): the automatic class, its reason, the
+   * manual override and the effective class (`override ?? auto`). No personal data. Unified does not read these yet.
+   */
+  trafficClassAuto?: TrafficClass
+  trafficClassReason?: string
+  trafficClassOverride?: TrafficOverride | null
+  trafficClass?: TrafficClass
 }
 
 export type LeadSignalsPayload = {
@@ -194,7 +203,10 @@ export async function readLeadSignalsForPeriod(
   db: Db,
   query: ObserverQuery,
   limit: number = MAX_LEADS,
+  opts: { withTrafficClass?: boolean } = {},
 ): Promise<LeadSignalsPayload | ObserverError> {
+  // The default statement is exactly the pre-0016 one, so Unified keeps working before the migration is applied.
+  const classColumns = opts.withTrafficClass ? ',\n            l.traffic_class_auto, l.traffic_class_reason, l.traffic_class_override' : ''
   const projects = await db.query<{ id: number; slug: string; name: string }>('SELECT id, slug, name FROM projects WHERE slug = $1', [query.project])
   const project = projects.rows[0]
   if (!project) return { error: 'project not found', status: 404 }
@@ -203,7 +215,7 @@ export async function readLeadSignalsForPeriod(
     `SELECT l.created_at, l.status,
             l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term,
             (l.metrika_client_id IS NOT NULL AND l.metrika_client_id <> '') AS has_metrika_client_id,
-            (l.yclid IS NOT NULL AND l.yclid <> '') AS has_yclid,
+            (l.yclid IS NOT NULL AND l.yclid <> '') AS has_yclid${classColumns},
             count(*) OVER() AS total
        FROM leads l
       WHERE l.project_id = $1
@@ -230,6 +242,14 @@ export async function readLeadSignalsForPeriod(
       utmTerm: String(r.utm_term ?? ''),
       hasMetrikaClientId: r.has_metrika_client_id === true,
       hasYclid: r.has_yclid === true,
+      ...(opts.withTrafficClass
+        ? {
+            trafficClassAuto: parseTrafficClass(r.traffic_class_auto),
+            trafficClassReason: String(r.traffic_class_reason ?? 'unclassified'),
+            trafficClassOverride: parseTrafficOverride(r.traffic_class_override),
+            trafficClass: effectiveTrafficClass(r.traffic_class_auto, r.traffic_class_override),
+          }
+        : {}),
     })),
   }
 }
