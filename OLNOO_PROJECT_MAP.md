@@ -229,6 +229,38 @@ CRM preparation for attribution identifiers. **DriveSet is not changed in A1**: 
 - **Reader:** `readLeadSignalsForPeriod(db, query, limit, { withTrafficClass: true })` additionally returns `trafficClassAuto`, `trafficClassReason`, `trafficClassOverride` and the effective `trafficClass` (no personal data). The default call (used by Unified) is unchanged and does not reference the new columns, so it works before the migration. The CRM Observer's public contract (`/api/crm/observer/leads`) is unchanged.
 - **Manual override primitive:** `setTrafficClassOverride(db, leadId, 'REAL' | 'TEST' | null)` in `lib/traffic-class-store.ts` — server-side only, **no endpoint and no UI yet**; keeps the current override and when it was set (no audit log in v1).
 
+### OLNOO Agent v1 (MCP) — read-only DriveSet summary
+
+- **Endpoint:** `POST /api/mcp` (`app/api/mcp/route.ts`, logic in `lib/mcp-summary.ts`): remote MCP over **Streamable HTTP**, stateless (`sessionIdGenerator: undefined`), JSON responses (`enableJsonResponse`), official `@modelcontextprotocol/sdk` + `zod` (direct dependencies). `GET`/`DELETE`/`PUT`/`PATCH` → 405 (`Allow: POST`). `Cache-Control: no-store`. `runtime=nodejs`, `force-dynamic`. No cache, no auth in the application.
+- **One tool:** `get_driveset_summary`, input `{ period: "today" | "yesterday" | "last7" }` (default `today`); annotations `readOnlyHint: true`, `destructiveHint: false`. **No project parameter** — always `driveset`; any other argument is ignored. No write tools.
+- **Data:** the existing Unified Analytics, called as a function (`GET` of `app/api/ads/unified/route.ts` with `project=driveset&period=<period>`); nothing is recomputed. The answer is a whitelist DTO: `period{from,to,complete,preset}`, `direct{status,impressions,clicks,spend,cpc,ctr}`, `metrika{status,visits}`, `crm{status,leadsTotal,leadsReal,leadsTest,leadsUnknown,leadsDirectReal}`, `conversions.cpl{value,reason?}`, `warnings[{code,message,source?}]`, `generatedAt`. **Not returned:** search queries, breakdowns, funnel, daily, attribution, test-traffic details, CRM rows, name/phone/contact/message, ClientID/yclid, tokens, error details. `null` stays `null` (never 0); partial/unavailable sources are shown via `status` and `warnings`. A Unified error answer becomes a generic tool error.
+- **Access:** production nginx protects `admin.olnoo.com` with `auth_basic`; technical endpoints are opened by exact `location =` (`/api/leads/inbound`, `/api/telegram/business-webhook`). `/api/mcp` is opened the same way **manually after merge — the application never changes nginx**; `location /` stays protected. The endpoint has no authentication of its own: anyone who can reach the URL can read this summary and trigger a Unified read (Direct/Metrika quota); the exact-path, POST-only location and `limit_req` are the guard.
+- **Manual nginx step (server block of `admin.olnoo.com`):**
+
+```nginx
+location = /api/mcp {
+    auth_basic off;
+
+    limit_except POST {
+        deny all;
+    }
+
+    client_max_body_size 16k;
+    proxy_read_timeout 70s;   # Unified can take up to ~50 s (source deadline)
+
+    proxy_pass http://127.0.0.1:3140;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+  Then `nginx -t && systemctl reload nginx`. Recommended on top (not applied by code): `limit_req` for this location.
+- **ChatGPT connection:** Settings → Connectors → Advanced → Developer mode → create a connector with URL `https://admin.olnoo.com/api/mcp`, authentication «No authentication»; then ask «Что сегодня с DriveSet?». (UI names may differ.)
+- **Limits:** `today` is a partial day (CPL `null`, `incomplete_period`); latency is Unified's (≤ ~50 s per source); the client's tool-call timeout is not controlled here.
+
 ## CRM Observer (read-only)
 
 **CRM Observer = read-only.** One GET that returns the leads of ONE project for a period, in a stable shape for the future Direct → Metrika → CRM join. It writes nothing (the route exports only `GET`, the data layer issues one `SELECT` plus the project lookup), does not touch `/api/leads`, the inbound API or the Admin UI, adds no table or migration, and has no AI.
