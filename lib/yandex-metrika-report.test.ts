@@ -142,7 +142,12 @@ test('extras queries: only allowed dimensions/metrics, within the 20-metric limi
     assert.ok(query.metrics.every((m) => ALLOWED_METRIC_RE.test(m)))
     assert.ok(query.metrics.length <= 20)
   }
-  assert.equal(test.filters, "ym:s:lastsignUTMContent=='a2_production_test' OR ym:s:lastsignUTMTerm=='test_attribution'")
+  assert.equal(test.filters, "ym:s:lastsignUTMContent=='a2_production_test' OR ym:s:lastsignUTMTerm=='test_attribution'") // legacy-only rules
+  const withPair = testSegmentQuery({ ...RULES, utmPairs: [{ source: 'olnoo', medium: 'test' }] })!
+  assert.equal(withPair.filters, "(ym:s:lastsignUTMSource=='olnoo' AND ym:s:lastsignUTMMedium=='test') OR ym:s:lastsignUTMContent=='a2_production_test' OR ym:s:lastsignUTMTerm=='test_attribution'")
+  assert.ok(ALLOWED_FILTER_RE.test(withPair.filters!))
+  assert.ok(!ALLOWED_FILTER_RE.test("ym:s:lastsignUTMSource=='olnoo' AND ym:s:clientID=='1'"))
+  assert.throws(() => testSegmentQuery({ ...RULES, utmPairs: [{ source: "x' OR '1'='1", medium: 'test' }] }), ReportFormatError)
   assert.ok(ALLOWED_FILTER_RE.test(test.filters!))
   assert.ok(!ALLOWED_FILTER_RE.test("ym:s:clientID=='1'"))
   assert.ok(!ALLOWED_FILTER_RE.test("ym:s:lastsignUTMContent=='x' OR 1=1"))
@@ -179,9 +184,22 @@ test('direct segment: matched by lastDirectClickOrder.id (exact), never by name 
   assert.deepEqual([parseDirectSegment(resp([]), 714796268).found, parseDirectSegment(resp([]), 714796268).idsPresent], [false, true])
 })
 
+test('new test UTM pair: source AND medium both required; either alone, or other mediums, are not test traffic', () => {
+  const R = { ...RULES, utmPairs: [{ source: 'olnoo', medium: 'test' }] }
+  assert.equal(matchesTestRules(R, null, null, 'olnoo', 'test'), true)
+  assert.equal(matchesTestRules(R, '', '', ' OLNOO ', 'Test'), true)
+  assert.equal(matchesTestRules(R, null, null, 'olnoo', 'cpc'), false)
+  assert.equal(matchesTestRules(R, null, null, 'yandex', 'test'), false)
+  assert.equal(matchesTestRules(R, null, null, 'olnoo', ''), false)
+  assert.equal(matchesTestRules(R, 'olnoo_test', null, 'yandex', 'cpc'), false) // content alone is not a rule
+  assert.equal(matchesTestRules(RULES, null, null, 'olnoo', 'test'), false) // no pair configured
+})
+
 test('test segment and daily goals are parsed; rows that fail the exact rule are ignored', () => {
-  const row = (content: string, term: string, visits: number) => ({ dimensions: [{ id: null, name: content }, { id: null, name: term }], metrics: [visits, ...SEGMENT_EVENTS.map(() => 1), 3] })
+  const row = (content: string, term: string, visits: number, source = 'x', medium = 'y') => ({ dimensions: [{ id: null, name: source }, { id: null, name: medium }, { id: null, name: content }, { id: null, name: term }], metrics: [visits, ...SEGMENT_EVENTS.map(() => 1), 3] })
   const seg = parseTestSegment(resp([row('a2_production_test', 'test_attribution', 1), row('other', 'test_attribution', 2), row('other', 'x', 50)]), RULES)
   assert.deepEqual([seg.visits, seg.rows, seg.goalVisits.lead_submit, seg.leadSubmitReaches], [3, 2, 2, 6])
+  const pair = parseTestSegment(resp([row('c', 't', 4, 'olnoo', 'test'), row('c', 't', 9, 'olnoo', 'cpc')]), { ...RULES, utmPairs: [{ source: 'olnoo', medium: 'test' }] })
+  assert.deepEqual([pair.visits, pair.rows], [4, 1])
   assert.deepEqual(parseDailyGoals(resp([{ dimensions: [{ id: null, name: '2026-10-05' }], metrics: [7, 3] }, { dimensions: [], metrics: [1, 1] }])), [{ date: '2026-10-05', quizStartVisits: 7, leadSubmitVisits: 3 }])
 })

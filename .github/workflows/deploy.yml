@@ -28,15 +28,13 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$PROD_HOST" >> ~/.ssh/known_hosts
 
-      - name: Deliver server env (Yandex Direct + Metrika, Test Mode secret)
+      - name: Deliver Yandex env (Direct + Metrika)
         # Secrets -> a separate, deploy-managed file on the server (Next.js reads .env.production.local
         # before .env.local). The existing .env.local is never read for content, written or replaced.
         env:
           YANDEX_DIRECT_TOKEN: ${{ secrets.YANDEX_DIRECT_TOKEN }}
           YANDEX_DIRECT_CAMPAIGN_IDS: ${{ secrets.YANDEX_DIRECT_CAMPAIGN_IDS }}
           YANDEX_METRIKA_TOKEN: ${{ secrets.YANDEX_METRIKA_TOKEN }}
-          # Optional: Test Mode (signed test links). Absent → the key is simply not delivered and POST /api/test-links answers 503.
-          OLNOO_TEST_SECRET_DRIVESET: ${{ secrets.OLNOO_TEST_SECRET_DRIVESET }}
         run: |
           set -e
           if [ -z "$YANDEX_DIRECT_TOKEN" ] || [ -z "$YANDEX_DIRECT_CAMPAIGN_IDS" ] || [ -z "$YANDEX_METRIKA_TOKEN" ]; then
@@ -47,22 +45,9 @@ jobs:
           case "$YANDEX_DIRECT_TOKEN" in *[!A-Za-z0-9_.-]*) echo "::error::YANDEX_DIRECT_TOKEN has unexpected characters"; exit 1;; esac
           case "$YANDEX_METRIKA_TOKEN" in *[!A-Za-z0-9_.-]*) echo "::error::YANDEX_METRIKA_TOKEN has unexpected characters"; exit 1;; esac
           case "$YANDEX_DIRECT_CAMPAIGN_IDS" in *[!0-9,]*) echo "::error::YANDEX_DIRECT_CAMPAIGN_IDS must be digits and commas"; exit 1;; esac
-          # The Test Mode secret is optional (the feature answers 503 without it) but, when present, must be a strong
-          # dotenv-safe value (generate with `openssl rand -hex 32`).
-          EXPECTED=3
-          if [ -n "$OLNOO_TEST_SECRET_DRIVESET" ]; then
-            case "$OLNOO_TEST_SECRET_DRIVESET" in *[!A-Za-z0-9_.-]*) echo "::error::OLNOO_TEST_SECRET_DRIVESET has unexpected characters"; exit 1;; esac
-            if [ "${#OLNOO_TEST_SECRET_DRIVESET}" -lt 32 ]; then echo "::error::OLNOO_TEST_SECRET_DRIVESET is too short (min 32 characters)"; exit 1; fi
-            EXPECTED=4
-          else
-            echo "::warning::OLNOO_TEST_SECRET_DRIVESET is not set: signed test links stay disabled (503)"
-          fi
           # Written over ssh stdin: the values never appear in a command line, a heredoc or the job log.
-          {
-            printf 'YANDEX_DIRECT_TOKEN=%s\nYANDEX_DIRECT_CAMPAIGN_IDS=%s\nYANDEX_METRIKA_TOKEN=%s\n' "$YANDEX_DIRECT_TOKEN" "$YANDEX_DIRECT_CAMPAIGN_IDS" "$YANDEX_METRIKA_TOKEN"
-            if [ "$EXPECTED" = 4 ]; then printf 'OLNOO_TEST_SECRET_DRIVESET=%s\n' "$OLNOO_TEST_SECRET_DRIVESET"; fi
-          } |
-            ssh -i ~/.ssh/deploy_key "$PROD_USER@$PROD_HOST" "set -e; cd '$PROD_DIR'; umask 077; cat > .env.production.local.tmp; if [ -f .env.local ]; then chown --reference=.env.local .env.production.local.tmp; chmod --reference=.env.local .env.production.local.tmp; fi; mv -f .env.production.local.tmp .env.production.local; test \"\$(grep -c '^\(YANDEX_\(DIRECT\|METRIKA\)\|OLNOO_TEST_SECRET\)_' .env.production.local)\" = $EXPECTED; echo \"Server env delivered: $EXPECTED keys\""
+          printf 'YANDEX_DIRECT_TOKEN=%s\nYANDEX_DIRECT_CAMPAIGN_IDS=%s\nYANDEX_METRIKA_TOKEN=%s\n' "$YANDEX_DIRECT_TOKEN" "$YANDEX_DIRECT_CAMPAIGN_IDS" "$YANDEX_METRIKA_TOKEN" |
+            ssh -i ~/.ssh/deploy_key "$PROD_USER@$PROD_HOST" "set -e; cd '$PROD_DIR'; umask 077; cat > .env.production.local.tmp; if [ -f .env.local ]; then chown --reference=.env.local .env.production.local.tmp; chmod --reference=.env.local .env.production.local.tmp; fi; mv -f .env.production.local.tmp .env.production.local; test \"\$(grep -c '^YANDEX_\(DIRECT\|METRIKA\)_' .env.production.local)\" = 3; echo \"Yandex env delivered: 3 keys\""
 
       - name: Deploy to production
         run: |

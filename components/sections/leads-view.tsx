@@ -31,7 +31,7 @@ function LeadDetail({
     setNotes(lead.notes)
   }, [lead])
 
-  async function save(patch: Partial<{ status: LeadStatus; notes: string }>) {
+  async function save(patch: Partial<{ status: LeadStatus; notes: string; trafficClassOverride: 'REAL' | 'TEST' | null }>) {
     setSaving(true)
     try {
       const res = await fetch(`/api/leads/${lead.id}`, {
@@ -137,6 +137,38 @@ function LeadDetail({
               className="w-full resize-none border border-hairline bg-card p-4 text-sm leading-relaxed text-foreground/90 focus:border-foreground/40 focus:outline-none"
             />
             {saving && <span className="label-mono text-muted-foreground">{t.common.saving}</span>}
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <span className="label-mono text-muted-foreground">{t.leadsView.trafficClass}</span>
+            <dl className="flex flex-col gap-px border border-hairline bg-hairline">
+              <Field label={t.leadsView.trafficAuto} value={`${lead.trafficClassAuto ?? 'UNKNOWN'} · ${lead.trafficClassReason ?? 'unclassified'}`} mono />
+              <Field label={t.leadsView.trafficOverride} value={lead.trafficClassOverride ?? t.leadsView.trafficNone} mono />
+              <Field label={t.leadsView.trafficEffective} value={lead.trafficClass ?? 'UNKNOWN'} mono />
+            </dl>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => save({ trafficClassOverride: 'TEST' })}
+                disabled={saving || lead.trafficClassOverride === 'TEST'}
+                className="label-mono border border-hairline px-3 py-2 text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                {t.leadsView.markTest}
+              </button>
+              <button
+                onClick={() => save({ trafficClassOverride: 'REAL' })}
+                disabled={saving || lead.trafficClassOverride === 'REAL'}
+                className="label-mono border border-hairline px-3 py-2 text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                {t.leadsView.markReal}
+              </button>
+              <button
+                onClick={() => save({ trafficClassOverride: null })}
+                disabled={saving || !lead.trafficClassOverride}
+                className="label-mono border border-hairline px-3 py-2 text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                {t.leadsView.clearOverride}
+              </button>
+            </div>
           </div>
 
           <div className="border-t border-hairline pt-6">

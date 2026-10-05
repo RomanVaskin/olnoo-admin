@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import { pool } from '@/lib/db'
 import { parseLeadAttribution, type LeadAttributionInput } from './lead-attribution.ts'
 import { insertLead } from './lead-insert.ts'
-import { classifyLead } from './traffic-class.ts'
+import { classifyLead, type LeadIntake } from './traffic-class.ts'
 
 /** Resolves a URL-facing project slug (e.g. "olnoo") to the numeric projects.id, or null for "all"/unknown. */
 export async function resolveProjectId(slug: string | null): Promise<number | null> {
@@ -34,6 +34,8 @@ export type CreateLeadInput = {
   notes?: string
   /** Optional attribution identifiers (validated here; absent/blank values are simply not stored). */
   attribution?: LeadAttributionInput
+  /** Set ONLY by the authenticated inbound API (DriveSet's server); the Admin UI and Telegram leave it unset → never REAL. */
+  intake?: LeadIntake
 }
 
 /** `replay: true` = the same lead_tracking_id was already stored; `row` is the existing lead and nothing was written. */
@@ -80,8 +82,18 @@ export async function createLeadRecord(input: CreateLeadInput, db: Pool | PoolCl
     utmContent: input.utmContent ?? '',
     utmTerm: input.utmTerm ?? '',
     attribution,
-    // Step A: only the historical explicit test markers give TEST; everything else is UNKNOWN (never REAL).
-    trafficClass: classifyLead({ project: input.project ?? '', utmContent: input.utmContent, utmTerm: input.utmTerm }),
+    // Test Traffic v1: TEST by the test UTM / legacy markers / known test contact; REAL only for trusted inbound web leads
+    // after the activation boundary; everything else UNKNOWN (see lib/traffic-class.ts).
+    trafficClass: classifyLead({
+      project: input.project ?? '',
+      intake: input.intake,
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmContent: input.utmContent,
+      utmTerm: input.utmTerm,
+      phone: phone || null,
+      contact: contact || null,
+    }),
   })
   if ('error' in result) return result
   return result.replay ? { row: result.row, replay: true } : { row: result.row }

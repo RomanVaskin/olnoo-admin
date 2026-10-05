@@ -6,10 +6,9 @@
 
 import type { LeadSignal, LeadSignalsPayload, ObserverError } from './crm-observer.ts'
 import type { ResolvedPeriod } from './observer-period.ts'
-import { LEGACY_TEST_MARKERS } from './traffic-class.ts'
+import { LEGACY_TEST_MARKERS, TEST_UTM_PAIRS } from './traffic-class.ts'
 import type { ObserverPayload as DirectPayload } from './yandex-direct-report.ts'
 import {
-  matchesTestRules,
   normalizeMarker,
   type DailyGoalRow,
   type DirectSegment,
@@ -25,7 +24,10 @@ import {
 // ---------------------------------------------------------------------------------------------
 
 /** Explicit, project-specific markers of known internal test traffic. Exact normalised string match, OR across fields. Never a substring/regex rule. */
-export const TEST_TRAFFIC_RULES: Readonly<Record<string, TestRules>> = LEGACY_TEST_MARKERS // one shared definition with the CRM classifier (lib/traffic-class.ts)
+export const TEST_TRAFFIC_RULES: Readonly<Record<string, TestRules>> = {
+  // The same definitions as the CRM classifier (lib/traffic-class.ts): the Test Link UTM pair plus the historical markers.
+  driveset: { ...LEGACY_TEST_MARKERS.driveset, utmPairs: TEST_UTM_PAIRS },
+}
 
 export type UnifiedProject = {
   /** Direct campaign id; must also be in YANDEX_DIRECT_CAMPAIGN_IDS. */
@@ -160,43 +162,75 @@ function pct(part: number | null, whole: number | null, reasons: { part: string;
 export type CrmSummary = {
   status: SourceStatus
   error?: SourceError
+  /** Real number of leads in the period, whatever their class (alias of leadsTotal). */
   leads: number | null
+  leadsTotal: number | null
+  /** Effective class counts (override ?? auto), over the leads that were read (see `truncated`). */
+  leadsReal: number | null
+  leadsTest: number | null
+  leadsUnknown: number | null
+  /** Alias of leadsTest (kept for backward compatibility). */
   testLeads: number | null
+  /** Alias: leads with the Direct UTM that are not TEST (REAL + UNKNOWN) — the pre-class meaning. */
   leadsDirect: number | null
+  /** Leads with the Direct UTM, split by effective class. CPL uses leadsDirectReal only. */
+  leadsDirectReal: number | null
+  leadsDirectTest: number | null
+  leadsDirectUnknown: number | null
+  /** Alias: non-TEST leads without the Direct UTM. */
   leadsUnattributed: number | null
+  /** Non-TEST leads by CRM status. */
   byStatus: Record<string, number> | null
   truncated: boolean
-  /** non-test leads per Moscow day (internal; used for daily[]). */
+  /** non-TEST leads per Moscow day (internal; used for daily[]). */
   perDay: Map<string, number> | null
 }
 
-export const isTestSignal = (rules: TestRules, s: Pick<LeadSignal, 'utmContent' | 'utmTerm'>) => matchesTestRules(rules, s.utmContent, s.utmTerm)
-
-/** Direct attribution at CRM level: not a known test, utm_campaign == the campaign id and utm_source in the Direct sources. AGGREGATED, not proof of a click. */
-export function isDirectLead(project: UnifiedProject, s: LeadSignal): boolean {
-  return !isTestSignal(project.testRules, s) && s.utmCampaign.trim() === String(project.campaignId) && project.directUtmSources.includes(normalizeMarker(s.utmSource))
+/** Direct attribution at CRM level: utm_campaign == the campaign id and utm_source in the Direct sources. AGGREGATED, not proof of a click; the class (REAL/TEST/UNKNOWN) is separate. */
+export function isDirectLead(project: UnifiedProject, s: Pick<LeadSignal, 'utmCampaign' | 'utmSource'>): boolean {
+  return s.utmCampaign.trim() === String(project.campaignId) && project.directUtmSources.includes(normalizeMarker(s.utmSource))
 }
 
+const emptyCrm = (source: SourceResult<LeadSignalsPayload>): CrmSummary => ({
+  status: source.status, error: source.error, leads: null, leadsTotal: null, leadsReal: null, leadsTest: null, leadsUnknown: null, testLeads: null,
+  leadsDirect: null, leadsDirectReal: null, leadsDirectTest: null, leadsDirectUnknown: null, leadsUnattributed: null, byStatus: null, truncated: false, perDay: null,
+})
+
+/** Counts by the lead's EFFECTIVE traffic class, stored in the CRM (override ?? auto). A signal without a class counts as UNKNOWN. */
 export function summarizeCrm(source: SourceResult<LeadSignalsPayload>, project: UnifiedProject): CrmSummary {
-  if (!source.data) return { status: source.status, error: source.error, leads: null, testLeads: null, leadsDirect: null, leadsUnattributed: null, byStatus: null, truncated: false, perDay: null }
-  const signals = source.data.signals
+  if (!source.data) return emptyCrm(source)
   const byStatus: Record<string, number> = {}
   const perDay = new Map<string, number>()
-  let testLeads = 0
-  let leadsDirect = 0
-  let nonTest = 0
-  for (const s of signals) {
-    if (isTestSignal(project.testRules, s)) {
-      testLeads++
-      continue
-    }
-    nonTest++
+  const count = { REAL: 0, TEST: 0, UNKNOWN: 0 }
+  const direct = { REAL: 0, TEST: 0, UNKNOWN: 0 }
+  for (const s of source.data.signals) {
+    const cls = s.trafficClass ?? 'UNKNOWN'
+    count[cls]++
+    if (isDirectLead(project, s)) direct[cls]++
+    if (cls === 'TEST') continue
     byStatus[s.status] = (byStatus[s.status] ?? 0) + 1
     const day = moscowDate(s.createdAt)
     perDay.set(day, (perDay.get(day) ?? 0) + 1)
-    if (isDirectLead(project, s)) leadsDirect++
   }
-  return { status: source.status, leads: source.data.total, testLeads, leadsDirect, leadsUnattributed: nonTest - leadsDirect, byStatus, truncated: source.data.truncated, perDay }
+  const nonTest = count.REAL + count.UNKNOWN
+  const leadsDirect = direct.REAL + direct.UNKNOWN
+  return {
+    status: source.status,
+    leads: source.data.total,
+    leadsTotal: source.data.total,
+    leadsReal: count.REAL,
+    leadsTest: count.TEST,
+    leadsUnknown: count.UNKNOWN,
+    testLeads: count.TEST,
+    leadsDirect,
+    leadsDirectReal: direct.REAL,
+    leadsDirectTest: direct.TEST,
+    leadsDirectUnknown: direct.UNKNOWN,
+    leadsUnattributed: nonTest - leadsDirect,
+    byStatus,
+    truncated: source.data.truncated,
+    perDay,
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -209,7 +243,8 @@ export const LIMITATIONS = [
   'The funnel is visits that reached each goal, not a proven same-visit sequence.',
   'No query-level or phrase-level CPL: the CRM does not store the search query.',
   'Direct spend and CPC include VAT (RUB). Direct current-day numbers are partial and lag.',
-  'Known test traffic is excluded only by the explicit project markers (exact utm_content / utm_term values); other internal traffic is not detected.',
+  'Lead classes come from the CRM (effective class = manual override ?? automatic): TEST by the test UTM (utm_source=olnoo AND utm_medium=test), the historical markers or a known test contact; REAL only for trusted web leads after the activation boundary; everything else UNKNOWN. CPL uses REAL Direct leads only.',
+  'Metrika test visits are excluded by the same UTM markers (exact, normalised); other internal traffic is not detected there.',
   'No personal data, ClientID, yclid or lead_tracking_id is requested or returned.',
 ] as const
 
@@ -237,6 +272,9 @@ export function buildUnifiedPayload(input: { project: string; config: UnifiedPro
   for (const [name, s] of Object.entries(sources)) {
     if (s.status === 'unavailable') warn('source_unavailable', `${name} is unavailable (${s.error?.kind ?? 'unknown'}); dependent metrics are null.`, name)
     if (s.status === 'partial') warn('source_partial', `${name} answered partially.`, name)
+  }
+  if ((crm.leadsDirectUnknown ?? 0) > 0) {
+    warn('unclassified_leads_pending', `${crm.leadsDirectUnknown} Direct-attributed CRM lead(s) are UNKNOWN (neither REAL nor TEST): they are not in the CPL denominator until classified (Mark REAL / Mark TEST in the CRM).`, 'crm')
   }
   if (crm.truncated) warn('crm_truncated', 'More leads matched than were read; CRM counts are incomplete and CPL is not calculated.', 'crm')
   if (mPayload) for (const w of mPayload.warnings) if (w.code !== 'incomplete_period') warn(w.code, w.message, 'metrika')
@@ -326,8 +364,8 @@ export function buildUnifiedPayload(input: { project: string; config: UnifiedPro
   else if (sources.crm.status === 'unavailable') cpl = { value: null, reason: 'crm_unavailable' }
   else if (!(direct.spend !== null && direct.spend > 0)) cpl = { value: null, reason: 'no_spend' }
   else if (crm.truncated) cpl = { value: null, reason: 'crm_truncated' }
-  else if (!crm.leadsDirect || crm.leadsDirect < 1) cpl = { value: null, reason: 'no_attributed_leads' }
-  else cpl = { value: round2(direct.spend / crm.leadsDirect), attributionConfidence: 'AGGREGATED' }
+  else if (!crm.leadsDirectReal || crm.leadsDirectReal < 1) cpl = { value: null, reason: 'no_attributed_leads' }
+  else cpl = { value: round2(direct.spend / crm.leadsDirectReal), attributionConfidence: 'AGGREGATED' }
 
   const conversions = {
     basis: test ? ('excluding_test' as const) : ('raw' as const),
@@ -335,13 +373,13 @@ export function buildUnifiedPayload(input: { project: string; config: UnifiedPro
     visitToQuizPct: pct(base.quizStartVisits, baseVisits, { part: mReason, whole: mReason, zero: 'no_visits' }),
     quizToContactPct: pct(base.quizPhoneVisits, base.quizStartVisits, { part: mReason, whole: mReason, zero: 'no_quiz_starts' }),
     visitToMetrikaLeadPct: pct(base.leadSubmitVisits, baseVisits, { part: mReason, whole: mReason, zero: 'no_visits' }),
-    visitToCrmLeadPct: pct(crm.leadsDirect, metrika.directClickVisits, { part: cReason, whole: segReason, zero: 'no_direct_visits' }),
-    clickToCrmLeadPct: pct(crm.leadsDirect, clicks, { part: cReason, whole: dReason, zero: 'no_clicks' }),
+    visitToCrmLeadPct: pct(crm.leadsDirectReal, metrika.directClickVisits, { part: cReason, whole: segReason, zero: 'no_direct_visits' }),
+    clickToCrmLeadPct: pct(crm.leadsDirectReal, clicks, { part: cReason, whole: dReason, zero: 'no_clicks' }),
     cpl,
   }
 
-  if ((clicks !== null && clicks < LOW_VOLUME_CLICKS) || (crm.leadsDirect !== null && crm.leadsDirect < LOW_VOLUME_LEADS)) {
-    warn('low_volume', `Low volume (clicks ${clicks ?? 'n/a'} < ${LOW_VOLUME_CLICKS} or Direct CRM leads ${crm.leadsDirect ?? 'n/a'} < ${LOW_VOLUME_LEADS}): percentages are noisy. Calculations are not blocked.`)
+  if ((clicks !== null && clicks < LOW_VOLUME_CLICKS) || (crm.leadsDirectReal !== null && crm.leadsDirectReal < LOW_VOLUME_LEADS)) {
+    warn('low_volume', `Low volume (clicks ${clicks ?? 'n/a'} < ${LOW_VOLUME_CLICKS} or REAL Direct CRM leads ${crm.leadsDirectReal ?? 'n/a'} < ${LOW_VOLUME_LEADS}): percentages are noisy. Calculations are not blocked.`)
   }
 
   // --- daily (merged by Moscow day; each source's columns are null when that source is unavailable)
@@ -462,11 +500,17 @@ export function buildUnifiedPayload(input: { project: string; config: UnifiedPro
   }
 
   const testTraffic = {
-    detected: (test?.visits ?? 0) > 0 || (crm.testLeads ?? 0) > 0,
+    detected: (test?.visits ?? 0) > 0 || (crm.leadsTest ?? 0) > 0,
     metrikaVisits: test ? test.visits : null,
     metrikaLeadSubmitVisits: test ? (test.goalVisits.lead_submit ?? 0) : null,
-    crmLeads: crm.testLeads,
-    rulesApplied: { utmContent: [...config.testRules.utmContent], utmTerm: [...config.testRules.utmTerm], match: 'exact_normalized_or' },
+    crmLeads: crm.leadsTest,
+    rulesApplied: {
+      utmPairs: (config.testRules.utmPairs ?? []).map((p) => ({ source: p.source, medium: p.medium })),
+      utmContent: [...config.testRules.utmContent],
+      utmTerm: [...config.testRules.utmTerm],
+      match: 'exact_normalized_or',
+      crmClassification: 'effective_class',
+    },
   }
 
   return {
@@ -478,8 +522,15 @@ export function buildUnifiedPayload(input: { project: string; config: UnifiedPro
       status: crm.status,
       ...(crm.error ? { error: crm.error } : {}),
       leads: crm.leads,
+      leadsTotal: crm.leadsTotal,
+      leadsReal: crm.leadsReal,
+      leadsTest: crm.leadsTest,
+      leadsUnknown: crm.leadsUnknown,
       testLeads: crm.testLeads,
       leadsDirect: crm.leadsDirect,
+      leadsDirectReal: crm.leadsDirectReal,
+      leadsDirectTest: crm.leadsDirectTest,
+      leadsDirectUnknown: crm.leadsDirectUnknown,
       leadsUnattributed: crm.leadsUnattributed,
       byStatus: crm.byStatus,
       truncated: crm.truncated,

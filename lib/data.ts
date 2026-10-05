@@ -1,3 +1,4 @@
+import type { TrafficClass, TrafficOverride } from './traffic-class.ts'
 export type Status =
   | 'Mapped'
   | 'No page'
@@ -70,6 +71,11 @@ export type Lead = {
   utmCampaign: string
   locale: string
   notes: string
+  /** Traffic class (Test Traffic v1): the automatic class + reason, the manual override and the effective class (override ?? auto). */
+  trafficClassAuto?: TrafficClass
+  trafficClassReason?: string
+  trafficClassOverride?: TrafficOverride | null
+  trafficClass?: TrafficClass
   activity: { date: string; text: string }[]
 }
 

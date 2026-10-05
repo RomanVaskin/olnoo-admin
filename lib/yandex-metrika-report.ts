@@ -396,20 +396,38 @@ const goalOf = (event: string): GoalSpec => OBSERVED_GOALS.find((g) => g.event =
 const visitsMetric = (event: string) => `ym:s:goal${goalOf(event).id}visits`
 const reachesMetric = (event: string) => `ym:s:goal${goalOf(event).id}reaches`
 
-export type TestRules = { utmContent: readonly string[]; utmTerm: readonly string[] }
+export type TestRules = {
+  utmContent: readonly string[]
+  utmTerm: readonly string[]
+  /** (utm_source AND utm_medium) pairs that mark test traffic, e.g. olnoo + test. */
+  utmPairs?: readonly { readonly source: string; readonly medium: string }[]
+}
 
 /** Exact, normalised string comparison — never a substring/regex match. */
 export const normalizeMarker = (value: string | null | undefined): string => (value ?? '').trim().toLowerCase()
 
-export function matchesTestRules(rules: TestRules, utmContent: string | null | undefined, utmTerm: string | null | undefined): boolean {
+export function matchesTestRules(
+  rules: TestRules,
+  utmContent: string | null | undefined,
+  utmTerm: string | null | undefined,
+  utmSource?: string | null,
+  utmMedium?: string | null,
+): boolean {
   const content = normalizeMarker(utmContent)
   const term = normalizeMarker(utmTerm)
-  return (content !== '' && rules.utmContent.some((v) => normalizeMarker(v) === content)) || (term !== '' && rules.utmTerm.some((v) => normalizeMarker(v) === term))
+  const source = normalizeMarker(utmSource)
+  const medium = normalizeMarker(utmMedium)
+  return (
+    (content !== '' && rules.utmContent.some((v) => normalizeMarker(v) === content)) ||
+    (term !== '' && rules.utmTerm.some((v) => normalizeMarker(v) === term)) ||
+    (source !== '' && medium !== '' && (rules.utmPairs ?? []).some((p) => normalizeMarker(p.source) === source && normalizeMarker(p.medium) === medium))
+  )
 }
 
 export const FILTER_VALUE_RE = /^[A-Za-z0-9_.-]{1,100}$/
-const FILTER_TERM = "ym:s:lastsignUTM(?:Content|Term)=='[A-Za-z0-9_.-]{1,100}'"
-/** The only `filters` shape the client accepts: exact UTM content/term equality joined by OR. */
+const V = "'[A-Za-z0-9_.-]{1,100}'"
+const FILTER_TERM = `(?:ym:s:lastsignUTM(?:Content|Term)==${V}|\\(ym:s:lastsignUTMSource==${V} AND ym:s:lastsignUTMMedium==${V}\\))`
+/** The only `filters` shape the client accepts: exact UTM equalities — content, term or a (source AND medium) pair — joined by OR. */
 export const ALLOWED_FILTER_RE = new RegExp(`^${FILTER_TERM}(?: OR ${FILTER_TERM})*$`)
 
 export function dailyGoalsQuery(): StatQuery {
@@ -428,18 +446,23 @@ export function directSegmentQuery(): StatQuery {
 
 /** Visits and goals of the explicit test markers only (server-side filter, so the rows cannot be cut off by the row limit). */
 export function testSegmentQuery(rules: TestRules): StatQuery | null {
-  const terms = [
+  const pairs = rules.utmPairs ?? []
+  const singles = [
     ...rules.utmContent.map((v) => [DIM.utmContent, v]),
     ...rules.utmTerm.map((v) => [DIM.utmTerm, v]),
   ]
-  if (terms.length === 0) return null
-  if (!terms.every(([, v]) => FILTER_VALUE_RE.test(v))) throw new ReportFormatError('test marker has unexpected characters')
+  if (pairs.length + singles.length === 0) return null
+  const values = [...pairs.flatMap((p) => [p.source, p.medium]), ...singles.map(([, v]) => v)]
+  if (!values.every((v) => FILTER_VALUE_RE.test(v))) throw new ReportFormatError('test marker has unexpected characters')
   return {
-    dimensions: [DIM.utmContent, DIM.utmTerm],
+    dimensions: [DIM.utmSource, DIM.utmMedium, DIM.utmContent, DIM.utmTerm],
     metrics: ['ym:s:visits', ...SEGMENT_EVENTS.map(visitsMetric), reachesMetric('lead_submit')],
     sort: '-ym:s:visits',
     limit: BREAKDOWN_LIMIT,
-    filters: terms.map(([d, v]) => `${d}=='${v}'`).join(' OR '),
+    filters: [
+      ...pairs.map((p) => `(${DIM.utmSource}=='${p.source}' AND ${DIM.utmMedium}=='${p.medium}')`),
+      ...singles.map(([d, v]) => `${d}=='${v}'`),
+    ].join(' OR '),
   }
 }
 
@@ -468,7 +491,7 @@ export const emptyTestSegment = (): TestSegment => ({ visits: 0, goalVisits: Obj
 export function parseTestSegment(r: StatResponse, rules: TestRules): TestSegment {
   const out = emptyTestSegment()
   for (const row of r.rows) {
-    if (!matchesTestRules(rules, row.dimensions[0]?.name, row.dimensions[1]?.name)) continue
+    if (!matchesTestRules(rules, row.dimensions[2]?.name, row.dimensions[3]?.name, row.dimensions[0]?.name, row.dimensions[1]?.name)) continue
     out.rows++
     out.visits += row.metrics[0] ?? 0
     SEGMENT_EVENTS.forEach((e, i) => {

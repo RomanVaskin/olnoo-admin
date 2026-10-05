@@ -8,7 +8,6 @@ import {
   collectSources,
   isAutotargetingPhrase,
   isDirectLead,
-  isTestSignal,
   resolveUnifiedProject,
   summarizeCrm,
   TEST_TRAFFIC_RULES,
@@ -81,7 +80,7 @@ function extras(over: Partial<UnifiedExtras> = {}): UnifiedExtras {
 
 const signal = (over: Partial<LeadSignal> = {}): LeadSignal => ({
   createdAt: '2026-10-04T09:00:00.000Z', status: 'New', utmSource: 'yandex', utmMedium: 'cpc', utmCampaign: String(CAMPAIGN), utmContent: '1922380925577514960', utmTerm: '---autotargeting',
-  hasMetrikaClientId: true, hasYclid: true, ...over,
+  hasMetrikaClientId: true, hasYclid: true, trafficClass: 'REAL', ...over,
 })
 const crmPayload = (signals: LeadSignal[], over: Partial<LeadSignalsPayload> = {}): LeadSignalsPayload => ({
   period: {} as never, project: { id: 1, slug: 'driveset', name: 'DriveSet' }, total: signals.length, truncated: false, signals, ...over,
@@ -91,7 +90,7 @@ const ok = <T>(data: T): SourceResult<T> => ({ status: 'ok', data })
 const down = <T>(kind = 'network'): SourceResult<T> => ({ status: 'unavailable', error: { kind, message: 'x' }, data: null })
 
 function sources(over: Partial<Sources> = {}): Sources {
-  const leads = [signal(), signal({ utmSource: 'ya' }), signal({ utmSource: 'google' }), signal({ utmCampaign: '', utmSource: '' }), signal({ utmSource: 'chatgpt.com', utmContent: 'a2_production_test', utmTerm: 'test_attribution' })]
+  const leads = [signal(), signal({ utmSource: 'ya' }), signal({ utmSource: 'google' }), signal({ utmCampaign: '', utmSource: '' }), signal({ utmSource: 'chatgpt.com', utmContent: 'a2_production_test', utmTerm: 'test_attribution', trafficClass: 'TEST' })]
   return {
     direct: ok(directPayload()),
     metrika: ok<MetrikaBundle>({ payload: metrikaPayload(), extras: extras() }),
@@ -109,29 +108,37 @@ test('project mapping: driveset → campaign 714796268 and CRM slug driveset; ot
   for (const slug of ['olnoo', 'all', '__proto__', 'constructor']) assert.equal(resolveUnifiedProject(slug), null)
 })
 
-test('test traffic: explicit exact markers only; arbitrary "test" strings are not classified', () => {
-  assert.deepEqual(TEST_TRAFFIC_RULES.driveset, { utmContent: ['a2_production_test'], utmTerm: ['test_attribution'] })
-  assert.equal(isTestSignal(project.testRules, signal({ utmContent: 'a2_production_test' })), true)
-  assert.equal(isTestSignal(project.testRules, signal({ utmTerm: ' Test_Attribution ' })), true)
-  for (const [content, term] of [['test', 'test'], ['my_test', 'тест'], ['a2_production_test_old', ''], ['1922380925577514960', '---autotargeting'], ['', '']]) {
-    assert.equal(isTestSignal(project.testRules, signal({ utmContent: content, utmTerm: term })), false, `${content}|${term}`)
-  }
+test('test traffic rules (Metrika side): legacy markers plus the new utm_source=olnoo AND utm_medium=test pair', () => {
+  assert.deepEqual(TEST_TRAFFIC_RULES.driveset, { utmContent: ['a2_production_test'], utmTerm: ['test_attribution'], utmPairs: [{ source: 'olnoo', medium: 'test' }] })
 })
 
 // ---- CRM ------------------------------------------------------------------------------------------
 
-test('CRM Direct rule: utm_campaign == campaign id AND utm_source in yandex/ya; known test traffic is excluded; everything else is unattributed', () => {
+test('CRM Direct rule is UTM-only (utm_campaign == campaign id AND utm_source in yandex/ya); the class is separate', () => {
   assert.equal(isDirectLead(project, signal()), true)
   assert.equal(isDirectLead(project, signal({ utmSource: ' YA ' })), true)
   assert.equal(isDirectLead(project, signal({ utmSource: 'google' })), false)
   assert.equal(isDirectLead(project, signal({ utmCampaign: '1' })), false)
-  assert.equal(isDirectLead(project, signal({ utmCampaign: '' , utmSource: 'yandex' })), false)
-  assert.equal(isDirectLead(project, signal({ utmContent: 'a2_production_test' })), false) // yandex + campaign id, but a known test lead
+  assert.equal(isDirectLead(project, signal({ utmCampaign: '', utmSource: 'yandex' })), false)
 
   const crm = summarizeCrm(sources().crm, project)
-  assert.deepEqual([crm.leads, crm.testLeads, crm.leadsDirect, crm.leadsUnattributed], [5, 1, 2, 2])
+  assert.deepEqual([crm.leadsTotal, crm.leadsReal, crm.leadsTest, crm.leadsUnknown], [5, 4, 1, 0])
+  assert.deepEqual([crm.leads, crm.testLeads, crm.leadsDirect, crm.leadsUnattributed], [5, 1, 2, 2]) // backward-compatible aliases
+  assert.deepEqual([crm.leadsDirectReal, crm.leadsDirectTest, crm.leadsDirectUnknown], [2, 0, 0])
   assert.deepEqual(crm.byStatus, { New: 4 }) // the test lead is not in the status split
   assert.equal(crm.perDay!.get('2026-10-04'), 4)
+})
+
+test('effective class drives the counts: TEST is excluded, UNKNOWN is counted apart, a missing class is UNKNOWN; marker-looking UTM alone does not classify', () => {
+  const crm = summarizeCrm(ok(crmPayload([
+    signal({ trafficClass: 'REAL' }),
+    signal({ trafficClass: 'TEST' }), // direct-looking test lead
+    signal({ trafficClass: 'UNKNOWN' }),
+    signal({ trafficClass: undefined }),
+    signal({ utmContent: 'a2_production_test', trafficClass: 'REAL' }), // class is the CRM's decision (e.g. manual REAL override)
+  ])), project)
+  assert.deepEqual([crm.leadsReal, crm.leadsTest, crm.leadsUnknown], [2, 1, 2])
+  assert.deepEqual([crm.leadsDirectReal, crm.leadsDirectTest, crm.leadsDirectUnknown, crm.leadsDirect], [2, 1, 2, 4])
 })
 
 test('CRM days are Moscow days (21:00 UTC rolls over)', () => {
@@ -166,12 +173,31 @@ test('payload: Direct, Metrika, funnel (all / excluding test / Direct segment), 
   assert.deepEqual(p.conversions.visitToCrmLeadPct, { value: 3.03 }) // 2 direct CRM leads / 66
   assert.deepEqual(p.conversions.clickToCrmLeadPct, { value: 1.33 }) // 2 / 150
   assert.deepEqual(p.conversions.cpl, { value: 3750, attributionConfidence: 'AGGREGATED' }) // 7500 / 2
-  assert.deepEqual(p.testTraffic, { detected: true, metrikaVisits: 1, metrikaLeadSubmitVisits: 1, crmLeads: 1, rulesApplied: { utmContent: ['a2_production_test'], utmTerm: ['test_attribution'], match: 'exact_normalized_or' } })
+  assert.deepEqual(p.testTraffic, { detected: true, metrikaVisits: 1, metrikaLeadSubmitVisits: 1, crmLeads: 1, rulesApplied: { utmPairs: [{ source: 'olnoo', medium: 'test' }], utmContent: ['a2_production_test'], utmTerm: ['test_attribution'], match: 'exact_normalized_or', crmClassification: 'effective_class' } })
   assert.equal(p.attribution.directToMetrika.status, 'EXACT_CAMPAIGN_AGGREGATED_VISITS')
   assert.deepEqual(p.attribution.directToMetrika.evidence, ['campaign_id_match'])
   assert.equal(p.attribution.metrikaToCrm.status, 'AGGREGATED')
   assert.equal(p.attribution.overall.status, 'AGGREGATED')
   assert.ok(p.warnings.some((w) => w.code === 'funnel_not_strict'))
+})
+
+test('CPL = Direct spend / REAL direct leads: TEST and UNKNOWN are excluded; UNKNOWN direct leads raise unclassified_leads_pending', () => {
+  const leads = [signal(), signal({ trafficClass: 'TEST' }), signal({ trafficClass: 'UNKNOWN' }), signal({ trafficClass: 'UNKNOWN' }), signal({ utmSource: 'google', trafficClass: 'REAL' })]
+  const p = build(sources({ crm: ok(crmPayload(leads)) }))
+  assert.deepEqual(p.conversions.cpl, { value: 7500, attributionConfidence: 'AGGREGATED' }) // 7500 / 1 real direct lead
+  assert.equal(p.crm.leadsDirectReal, 1)
+  assert.equal(p.crm.leadsDirectTest, 1)
+  assert.equal(p.crm.leadsDirectUnknown, 2)
+  assert.ok(p.warnings.some((w) => w.code === 'unclassified_leads_pending'))
+  const clean = build(sources())
+  assert.ok(!clean.warnings.some((w) => w.code === 'unclassified_leads_pending'))
+  assert.equal(clean.crm.leadsReal, 4)
+})
+
+test('CPL is null (never a fake zero) when no REAL direct lead exists, even with UNKNOWN or TEST direct leads', () => {
+  const p = build(sources({ crm: ok(crmPayload([signal({ trafficClass: 'TEST' }), signal({ trafficClass: 'UNKNOWN' })])) }))
+  assert.equal((p.conversions.cpl as { value: number | null }).value, null)
+  assert.ok(p.warnings.some((w) => w.code === 'unclassified_leads_pending'))
 })
 
 // ---- CPL ----------------------------------------------------------------------------------------------

@@ -12,6 +12,7 @@ export async function GET(req: Request) {
       l.id, l.project_id, l.name, l.company, l.email, l.phone, l.service, l.message,
       l.source, l.landing_page, l.referrer, l.utm_source, l.utm_medium, l.utm_campaign,
       l.locale, l.status, l.notes, l.created_at, l.updated_at,
+      l.traffic_class_auto, l.traffic_class_reason, l.traffic_class_override, l.traffic_class_override_at,
       p.slug AS project_slug, p.name AS project_name
     FROM leads l
     JOIN projects p ON p.id = l.project_id

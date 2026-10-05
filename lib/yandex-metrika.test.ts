@@ -239,12 +239,12 @@ test('extras: 3 read-only requests (daily goals, Direct-click segment by id, exp
       const m = (url.searchParams.get('metrics') ?? '').split(',').map(() => 2)
       return json({ data: [{ dimensions: [{ id: '714796268', name: 'Campaign' }], metrics: m }], totals: m, sampled: true })
     }
-    return json({ data: [{ dimensions: [{ name: 'a2_production_test' }, { name: 'test_attribution' }], metrics: [1, 1, 1, 1, 1, 1, 0, 0, 0, 3] }], totals: [], sampled: false })
+    return json({ data: [{ dimensions: [{ name: 'x' }, { name: 'y' }, { name: 'a2_production_test' }, { name: 'test_attribution' }], metrics: [1, 1, 1, 1, 1, 1, 0, 0, 0, 3] }], totals: [], sampled: false })
   }
   await withFetch(answer, async (calls) => {
     const extras = await client().observeUnifiedExtras('driveset', q('period=today'), 714796268, rules)
     assert.equal(calls.length, 3)
-    assert.deepEqual(calls.map((c) => c.url.searchParams.get('dimensions')), ['ym:s:date', 'ym:s:lastDirectClickOrder', 'ym:s:lastsignUTMContent,ym:s:lastsignUTMTerm'])
+    assert.deepEqual(calls.map((c) => c.url.searchParams.get('dimensions')), ['ym:s:date', 'ym:s:lastDirectClickOrder', 'ym:s:lastsignUTMSource,ym:s:lastsignUTMMedium,ym:s:lastsignUTMContent,ym:s:lastsignUTMTerm'])
     assert.equal(calls[2].url.searchParams.get('filters'), "ym:s:lastsignUTMContent=='a2_production_test' OR ym:s:lastsignUTMTerm=='test_attribution'")
     assert.ok(calls.every((c) => c.init.method === 'GET' && !c.url.search.match(/clientID|yclid/i)))
     assert.deepEqual(extras.dailyGoals, [{ date: '2026-10-05', quizStartVisits: 4, leadSubmitVisits: 1 }])

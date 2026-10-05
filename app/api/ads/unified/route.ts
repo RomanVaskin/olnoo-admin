@@ -53,7 +53,7 @@ export async function GET(req: Request) {
       const extras = await client.observeUnifiedExtras(project, period, config.campaignId, config.testRules).catch(() => null)
       return { payload, extras }
     },
-    crm: () => readLeadSignalsForPeriod(pool, { project: config.crmSlug, period: crmPeriod }),
+    crm: () => readLeadSignalsForPeriod(pool, { project: config.crmSlug, period: crmPeriod }, undefined, { withTrafficClass: true }),
   })
 
   // Journald: only which source failed and its error kind — never messages with data, tokens or lead rows.
