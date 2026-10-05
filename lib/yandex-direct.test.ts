@@ -502,3 +502,38 @@ test('a failing structure request fails the whole request with a normalised erro
     assert.equal('structure' in payload, false)
   })
 })
+
+test('observePeriod: an explicit range (even the current day) is sent as is; observe(days) delegates with the same requests', async () => {
+  const router = (call: Call) => (!isReports(call) ? campaignJson() : reportType(call) === 'CAMPAIGN_PERFORMANCE_REPORT' ? tsvResponse(dailyTsv()) : tsvResponse(queryTsv()))
+  const bodies = async (run: (c: ReturnType<typeof client>['c']) => Promise<unknown>) => {
+    const { c } = client()
+    return withFetch(router, async (calls) => {
+      await run(c)
+      return calls.map((x) => x.body)
+    })
+  }
+  const viaPeriod = await bodies((c) => c.observePeriod(CID, { from: '2026-09-27', to: '2026-10-03' }))
+  const viaDays = await bodies((c) => c.observe(CID, 7))
+  assert.deepEqual(viaDays, viaPeriod) // observe(days) is observePeriod with the computed range: existing behaviour unchanged
+
+  const { c } = client()
+  await withFetch(router, async (calls) => {
+    const today = await c.observePeriod(CID, { from: '2026-10-04', to: '2026-10-04' }) // "today" in the test clock
+    assert.deepEqual(today.period, { from: '2026-10-04', to: '2026-10-04' })
+    for (const call of calls.filter(isReports)) {
+      const sel = JSON.parse(call.body).params.SelectionCriteria
+      assert.deepEqual([sel.DateFrom, sel.DateTo], ['2026-10-04', '2026-10-04'])
+    }
+    assert.equal(calls.length, 3) // still campaigns.get + 2 reports
+  })
+})
+
+test('observePeriod: a failing report for the current day is a normalised error (the caller decides what to do)', async () => {
+  const { c } = client()
+  await withFetch(
+    (call) => (isReports(call) ? new Response(errBody(8000, 'DateTo is too late'), { status: 400 }) : campaignJson()),
+    async () => {
+      await assert.rejects(c.observePeriod(CID, { from: '2026-10-04', to: '2026-10-04' }), (e: unknown) => e instanceof DirectApiError && e.kind === 'request')
+    },
+  )
+})

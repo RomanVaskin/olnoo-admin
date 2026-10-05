@@ -162,3 +162,74 @@ export async function readLeadsForPeriod(
     })),
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Lead SIGNALS for Unified Analytics: the analytics-safe columns of a project's leads for a period. This statement
+// selects no name, phone, contact, email, message, notes, ClientID/yclid/tracking-id VALUE: personal data never
+// leaves the database for the unified layer (the two booleans only say whether an identifier exists).
+// ---------------------------------------------------------------------------------------------
+
+export type LeadSignal = {
+  createdAt: string
+  status: string
+  utmSource: string
+  utmMedium: string
+  utmCampaign: string
+  utmContent: string
+  utmTerm: string
+  hasMetrikaClientId: boolean
+  hasYclid: boolean
+}
+
+export type LeadSignalsPayload = {
+  period: ObserverPeriod
+  project: { id: number; slug: string; name: string }
+  total: number
+  /** True when more than `limit` leads matched: `signals` holds the first `limit`, `total` is the real count. */
+  truncated: boolean
+  signals: LeadSignal[]
+}
+
+export async function readLeadSignalsForPeriod(
+  db: Db,
+  query: ObserverQuery,
+  limit: number = MAX_LEADS,
+): Promise<LeadSignalsPayload | ObserverError> {
+  const projects = await db.query<{ id: number; slug: string; name: string }>('SELECT id, slug, name FROM projects WHERE slug = $1', [query.project])
+  const project = projects.rows[0]
+  if (!project) return { error: 'project not found', status: 404 }
+
+  const { rows } = await db.query(
+    `SELECT l.created_at, l.status,
+            l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term,
+            (l.metrika_client_id IS NOT NULL AND l.metrika_client_id <> '') AS has_metrika_client_id,
+            (l.yclid IS NOT NULL AND l.yclid <> '') AS has_yclid,
+            count(*) OVER() AS total
+       FROM leads l
+      WHERE l.project_id = $1
+        AND l.created_at >= $2::timestamptz
+        AND l.created_at <  $3::timestamptz
+      ORDER BY l.created_at ASC, l.id ASC
+      LIMIT $4`,
+    [project.id, query.period.fromUtc, query.period.toUtcExclusive, limit],
+  )
+  const total = rows.length > 0 ? Number(rows[0].total) : 0
+  return {
+    period: query.period,
+    project: { id: project.id, slug: project.slug, name: project.name },
+    total,
+    truncated: total > rows.length,
+    // Explicit field-by-field mapping: nothing else a row might carry is passed on.
+    signals: rows.map((r) => ({
+      createdAt: new Date(r.created_at).toISOString(),
+      status: String(r.status ?? ''),
+      utmSource: String(r.utm_source ?? ''),
+      utmMedium: String(r.utm_medium ?? ''),
+      utmCampaign: String(r.utm_campaign ?? ''),
+      utmContent: String(r.utm_content ?? ''),
+      utmTerm: String(r.utm_term ?? ''),
+      hasMetrikaClientId: r.has_metrika_client_id === true,
+      hasYclid: r.has_yclid === true,
+    })),
+  }
+}

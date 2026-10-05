@@ -47,7 +47,7 @@ export const ALLOWED_DIMENSIONS: readonly string[] = Object.values(DIM)
 /** Visit metrics and per-goal metrics only. */
 export const ALLOWED_METRIC_RE = /^ym:s:(visits|users|bounceRate|avgVisitDurationSeconds|goal\d+(reaches|visits))$/
 
-export type StatQuery = { dimensions: string[]; metrics: string[]; sort?: string; limit: number }
+export type StatQuery = { dimensions: string[]; metrics: string[]; sort?: string; limit: number; filters?: string }
 
 export const BASE_METRICS = ['ym:s:visits', 'ym:s:users', 'ym:s:bounceRate', 'ym:s:avgVisitDurationSeconds'] as const
 const goalMetrics = (id: number) => [`ym:s:goal${id}reaches`, `ym:s:goal${id}visits`]
@@ -382,3 +382,108 @@ export function buildMetrikaPayload(input: PayloadInput) {
 }
 
 export type MetrikaPayload = ReturnType<typeof buildMetrikaPayload>
+
+// ---------------------------------------------------------------------------------------------
+// Unified Analytics extras (read-only, aggregated): per-day goal visits, the Direct-click segment of the funnel and
+// the explicit test-traffic segment. Same allow-listed dimensions/metrics as everything above.
+// ---------------------------------------------------------------------------------------------
+
+export const CONTACT_EVENTS = ['telegram_click', 'max_click', 'phone_click'] as const
+/** Goals read for the Direct-click segment: the funnel plus the three contact intents. */
+export const SEGMENT_EVENTS = [...FUNNEL_EVENTS, ...CONTACT_EVENTS] as const
+
+const goalOf = (event: string): GoalSpec => OBSERVED_GOALS.find((g) => g.event === event) as GoalSpec
+const visitsMetric = (event: string) => `ym:s:goal${goalOf(event).id}visits`
+const reachesMetric = (event: string) => `ym:s:goal${goalOf(event).id}reaches`
+
+export type TestRules = { utmContent: readonly string[]; utmTerm: readonly string[] }
+
+/** Exact, normalised string comparison — never a substring/regex match. */
+export const normalizeMarker = (value: string | null | undefined): string => (value ?? '').trim().toLowerCase()
+
+export function matchesTestRules(rules: TestRules, utmContent: string | null | undefined, utmTerm: string | null | undefined): boolean {
+  const content = normalizeMarker(utmContent)
+  const term = normalizeMarker(utmTerm)
+  return (content !== '' && rules.utmContent.some((v) => normalizeMarker(v) === content)) || (term !== '' && rules.utmTerm.some((v) => normalizeMarker(v) === term))
+}
+
+export const FILTER_VALUE_RE = /^[A-Za-z0-9_.-]{1,100}$/
+const FILTER_TERM = "ym:s:lastsignUTM(?:Content|Term)=='[A-Za-z0-9_.-]{1,100}'"
+/** The only `filters` shape the client accepts: exact UTM content/term equality joined by OR. */
+export const ALLOWED_FILTER_RE = new RegExp(`^${FILTER_TERM}(?: OR ${FILTER_TERM})*$`)
+
+export function dailyGoalsQuery(): StatQuery {
+  return { dimensions: [DIM.date], metrics: [visitsMetric('quiz_start'), visitsMetric('lead_submit')], sort: DIM.date, limit: MAX_DAYS + 8 }
+}
+
+/** Visits and goal visits/reaches per Direct campaign (`lastDirectClickOrder`): the Direct-click segment, no filter syntax needed. */
+export function directSegmentQuery(): StatQuery {
+  return {
+    dimensions: [DIM.directCampaign],
+    metrics: ['ym:s:visits', ...SEGMENT_EVENTS.flatMap((e) => [visitsMetric(e), reachesMetric(e)])],
+    sort: '-ym:s:visits',
+    limit: BREAKDOWN_LIMIT,
+  }
+}
+
+/** Visits and goals of the explicit test markers only (server-side filter, so the rows cannot be cut off by the row limit). */
+export function testSegmentQuery(rules: TestRules): StatQuery | null {
+  const terms = [
+    ...rules.utmContent.map((v) => [DIM.utmContent, v]),
+    ...rules.utmTerm.map((v) => [DIM.utmTerm, v]),
+  ]
+  if (terms.length === 0) return null
+  if (!terms.every(([, v]) => FILTER_VALUE_RE.test(v))) throw new ReportFormatError('test marker has unexpected characters')
+  return {
+    dimensions: [DIM.utmContent, DIM.utmTerm],
+    metrics: ['ym:s:visits', ...SEGMENT_EVENTS.map(visitsMetric), reachesMetric('lead_submit')],
+    sort: '-ym:s:visits',
+    limit: BREAKDOWN_LIMIT,
+    filters: terms.map(([d, v]) => `${d}=='${v}'`).join(' OR '),
+  }
+}
+
+export type DailyGoalRow = { date: string; quizStartVisits: number | null; leadSubmitVisits: number | null }
+export const parseDailyGoals = (r: StatResponse): DailyGoalRow[] =>
+  r.rows.map((row) => ({ date: row.dimensions[0]?.name ?? '', quizStartVisits: row.metrics[0] ?? null, leadSubmitVisits: row.metrics[1] ?? null })).filter((d) => d.date !== '')
+
+export type GoalCounts = { visits: number | null; reaches: number | null }
+export type DirectSegment = { campaignId: number; found: boolean; /** false when Metrika answered rows that carry no campaign id at all (matching is then impossible). */ idsPresent: boolean; visits: number | null; goals: Record<string, GoalCounts> }
+
+/** The row whose `lastDirectClickOrder.id` equals the campaign id (exact id match; the name is never used to match). */
+export function parseDirectSegment(r: StatResponse, campaignId: number): DirectSegment {
+  const row = r.rows.find((x) => x.dimensions[0]?.id === String(campaignId))
+  const goals: Record<string, GoalCounts> = {}
+  SEGMENT_EVENTS.forEach((event, i) => {
+    goals[event] = { visits: row ? (row.metrics[1 + i * 2] ?? null) : 0, reaches: row ? (row.metrics[2 + i * 2] ?? null) : 0 }
+  })
+  return { campaignId, found: row !== undefined, idsPresent: r.rows.length === 0 || r.rows.some((x) => x.dimensions[0]?.id != null), visits: row ? (row.metrics[0] ?? null) : 0, goals }
+}
+
+export type TestSegment = { visits: number; goalVisits: Record<string, number>; leadSubmitReaches: number; rows: number }
+
+export const emptyTestSegment = (): TestSegment => ({ visits: 0, goalVisits: Object.fromEntries(SEGMENT_EVENTS.map((e) => [e, 0])), leadSubmitReaches: 0, rows: 0 })
+
+/** Sums only rows that satisfy the exact rules (a defensive re-check of the server-side filter). */
+export function parseTestSegment(r: StatResponse, rules: TestRules): TestSegment {
+  const out = emptyTestSegment()
+  for (const row of r.rows) {
+    if (!matchesTestRules(rules, row.dimensions[0]?.name, row.dimensions[1]?.name)) continue
+    out.rows++
+    out.visits += row.metrics[0] ?? 0
+    SEGMENT_EVENTS.forEach((e, i) => {
+      out.goalVisits[e] += row.metrics[1 + i] ?? 0
+    })
+    out.leadSubmitReaches += row.metrics[1 + SEGMENT_EVENTS.length] ?? 0
+  }
+  return out
+}
+
+export type UnifiedExtras = {
+  dailyGoals: DailyGoalRow[] | null
+  directSegment: DirectSegment | null
+  /** null = the test-segment read failed; zeros = no rule matched anything / no rules configured. */
+  testSegment: TestSegment | null
+  sampled: boolean
+  warnings: Warning[]
+}

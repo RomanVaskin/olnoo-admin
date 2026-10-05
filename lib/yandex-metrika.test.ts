@@ -229,3 +229,55 @@ test('route: exports GET only', () => {
   assert.deepEqual([...route.matchAll(/export\s+(?:async\s+)?function\s+(\w+)/g)].map((m) => m[1]), ['GET'])
   assert.doesNotMatch(route, /console\.(log|error)\([^)]*(token|config)/i)
 })
+
+test('extras: 3 read-only requests (daily goals, Direct-click segment by id, explicit test segment); a failing one is a warning, not a failure', async () => {
+  const rules = { utmContent: ['a2_production_test'], utmTerm: ['test_attribution'] }
+  const answer = (url: URL) => {
+    const dims = url.searchParams.get('dimensions')
+    if (dims === 'ym:s:date') return json({ data: [{ dimensions: [{ name: '2026-10-05' }], metrics: [4, 1] }], totals: [4, 1], sampled: false })
+    if (dims === 'ym:s:lastDirectClickOrder') {
+      const m = (url.searchParams.get('metrics') ?? '').split(',').map(() => 2)
+      return json({ data: [{ dimensions: [{ id: '714796268', name: 'Campaign' }], metrics: m }], totals: m, sampled: true })
+    }
+    return json({ data: [{ dimensions: [{ name: 'a2_production_test' }, { name: 'test_attribution' }], metrics: [1, 1, 1, 1, 1, 1, 0, 0, 0, 3] }], totals: [], sampled: false })
+  }
+  await withFetch(answer, async (calls) => {
+    const extras = await client().observeUnifiedExtras('driveset', q('period=today'), 714796268, rules)
+    assert.equal(calls.length, 3)
+    assert.deepEqual(calls.map((c) => c.url.searchParams.get('dimensions')), ['ym:s:date', 'ym:s:lastDirectClickOrder', 'ym:s:lastsignUTMContent,ym:s:lastsignUTMTerm'])
+    assert.equal(calls[2].url.searchParams.get('filters'), "ym:s:lastsignUTMContent=='a2_production_test' OR ym:s:lastsignUTMTerm=='test_attribution'")
+    assert.ok(calls.every((c) => c.init.method === 'GET' && !c.url.search.match(/clientID|yclid/i)))
+    assert.deepEqual(extras.dailyGoals, [{ date: '2026-10-05', quizStartVisits: 4, leadSubmitVisits: 1 }])
+    assert.deepEqual([extras.directSegment!.found, extras.directSegment!.visits], [true, 2])
+    assert.equal(extras.testSegment!.visits, 1)
+    assert.equal(extras.sampled, true)
+    assert.deepEqual(extras.warnings, [])
+  })
+
+  // one failing read → warning + null for that block only
+  await withFetch((url) => (url.searchParams.get('dimensions') === 'ym:s:lastDirectClickOrder' ? json({ errors: [{ error_type: 'invalid_parameter', message: 'x' }] }, 400) : answer(url)), async () => {
+    const extras = await client().observeUnifiedExtras('driveset', q('period=today'), 714796268, rules)
+    assert.equal(extras.directSegment, null)
+    assert.ok(extras.dailyGoals && extras.testSegment)
+    assert.ok(extras.warnings.some((w) => w.code === 'extras_unavailable' && w.message.startsWith('directSegment')))
+  })
+
+  // no rules → no test request, zero test segment
+  await withFetch(answer, async (calls) => {
+    const extras = await client().observeUnifiedExtras('driveset', q('period=today'), 714796268, { utmContent: [], utmTerm: [] })
+    assert.equal(calls.length, 2)
+    assert.equal(extras.testSegment!.visits, 0)
+    assert.equal(extras.testSegment!.goalVisits.lead_submit, 0)
+  })
+})
+
+test('extras: the client refuses a filter outside the exact-UTM shape', async () => {
+  const c = client()
+  await withFetch(happy, async (calls) => {
+    await assert.rejects(
+      () => c.stat({ dimensions: ['ym:s:lastsignUTMContent'], metrics: ['ym:s:visits'], limit: 5, filters: "ym:s:clientID=='1'" }, 113053562, q('period=today')),
+      (e) => e instanceof MetrikaApiError && e.kind === 'request',
+    )
+    assert.equal(calls.length, 0)
+  })
+})

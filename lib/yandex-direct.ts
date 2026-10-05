@@ -316,13 +316,13 @@ export function createDirectClient(config: DirectConfig, deps: DirectDeps = {}) 
   }
 
   /**
-   * Campaign (+ settings), daily stats and search queries for the last `days` complete days; with
-   * `structure` also ad groups, keywords and negative keywords. Sequential on purpose. If a requested
-   * structure read fails the whole request fails: negative-keyword checks ("is this already excluded?")
-   * must never be answered from a half-read structure.
+   * Campaign (+ settings), daily stats and search queries for the inclusive Moscow-day range `period`
+   * (may end today: Direct's current-day numbers are partial); with `structure` also ad groups, keywords and
+   * negative keywords. Sequential on purpose. If a requested structure read fails the whole request fails:
+   * negative-keyword checks ("is this already excluded?") must never be answered from a half-read structure.
+   * `observe(campaignId, days)` below is the original "last N complete days" entry point and delegates here.
    */
-  async function observe(campaignId: number, days: number, opts: { structure?: boolean } = {}): Promise<ObserverPayload> {
-    const period = observerPeriod(new Date(now()), days)
+  async function observePeriod(campaignId: number, period: { from: string; to: string }, opts: { structure?: boolean } = {}): Promise<ObserverPayload> {
     const campaign = await getCampaign(campaignId)
     const daily = toDailyRows(rows(await runReport(dailyReport(campaignId, period.from, period.to)), DAILY_FIELDS))
 
@@ -340,5 +340,10 @@ export function createDirectClient(config: DirectConfig, deps: DirectDeps = {}) 
     return buildObserverPayload({ period, campaign, daily, searchQueries: toSearchQueryRows(queryRows), structure, units, requestIds: [...requestIds] })
   }
 
-  return { observe, getCampaign }
+  /** Last `days` complete days in Moscow time (the period ends yesterday) — the Direct Observer endpoint's contract. */
+  async function observe(campaignId: number, days: number, opts: { structure?: boolean } = {}): Promise<ObserverPayload> {
+    return observePeriod(campaignId, observerPeriod(new Date(now()), days), opts)
+  }
+
+  return { observe, observePeriod, getCampaign }
 }
