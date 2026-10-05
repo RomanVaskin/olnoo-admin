@@ -36,6 +36,11 @@ Project is the main connecting object between modules. One Client can have sever
 - **Honest signals.** A click on a contact link is a contact intent, not a lead; attribution is EXACT / PROBABLE / UNKNOWN, never presented stronger than it is.
 - **Writes are a separate future path** (AI proposal → deterministic draft → BEFORE/AFTER → human approval → deterministic apply → audit log) with its own module; the read client must not grow write methods.
 
+## Lead traffic classification
+
+- **Three classes, not a boolean.** A lead is `REAL`, `TEST` or `UNKNOWN`; a lead that cannot be proven REAL or TEST is UNKNOWN, and UNKNOWN is never treated as REAL. Automatic class + reason are stored with the lead; a human override (REAL/TEST) wins; effective class = `override ?? auto`.
+- **Step A (foundation) is in place; rollout is not active.** The schema, the classifier (historical explicit markers → TEST, everything else UNKNOWN) and the effective-class semantics exist, but Unified Analytics still uses the legacy marker logic. The signed, short-lived, project-bound Test Mode (browser test session, Metrika visit marker, REAL for instrumented web leads, known test contacts) is the next step; a plain client-side `is_test` flag is never authoritative.
+
 ## SEO
 
 - One search intent = one page. Do not create thin pages for synonyms.

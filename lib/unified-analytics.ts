@@ -6,6 +6,7 @@
 
 import type { LeadSignal, LeadSignalsPayload, ObserverError } from './crm-observer.ts'
 import type { ResolvedPeriod } from './observer-period.ts'
+import { LEGACY_TEST_MARKERS } from './traffic-class.ts'
 import type { ObserverPayload as DirectPayload } from './yandex-direct-report.ts'
 import {
   matchesTestRules,
@@ -24,9 +25,7 @@ import {
 // ---------------------------------------------------------------------------------------------
 
 /** Explicit, project-specific markers of known internal test traffic. Exact normalised string match, OR across fields. Never a substring/regex rule. */
-export const TEST_TRAFFIC_RULES: Readonly<Record<string, TestRules>> = {
-  driveset: { utmContent: ['a2_production_test'], utmTerm: ['test_attribution'] },
-}
+export const TEST_TRAFFIC_RULES: Readonly<Record<string, TestRules>> = LEGACY_TEST_MARKERS // one shared definition with the CRM classifier (lib/traffic-class.ts)
 
 export type UnifiedProject = {
   /** Direct campaign id; must also be in YANDEX_DIRECT_CAMPAIGN_IDS. */

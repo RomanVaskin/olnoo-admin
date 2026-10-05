@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import { pool } from '@/lib/db'
 import { parseLeadAttribution, type LeadAttributionInput } from './lead-attribution.ts'
 import { insertLead } from './lead-insert.ts'
+import { classifyLead } from './traffic-class.ts'
 
 /** Resolves a URL-facing project slug (e.g. "olnoo") to the numeric projects.id, or null for "all"/unknown. */
 export async function resolveProjectId(slug: string | null): Promise<number | null> {
@@ -79,6 +80,8 @@ export async function createLeadRecord(input: CreateLeadInput, db: Pool | PoolCl
     utmContent: input.utmContent ?? '',
     utmTerm: input.utmTerm ?? '',
     attribution,
+    // Step A: only the historical explicit test markers give TEST; everything else is UNKNOWN (never REAL).
+    trafficClass: classifyLead({ project: input.project ?? '', utmContent: input.utmContent, utmTerm: input.utmTerm }),
   })
   if ('error' in result) return result
   return result.replay ? { row: result.row, replay: true } : { row: result.row }
