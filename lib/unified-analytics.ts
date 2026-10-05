@@ -51,6 +51,19 @@ export const LOW_VOLUME_CLICKS = 100
 export const LOW_VOLUME_LEADS = 5
 const SEARCH_QUERY_LIMIT = 50
 
+/**
+ * How Metrika names the autotargeting condition in `lastDirectPhraseOrCond`: production returns id "11.0" and the Russian
+ * name "Автотаргетинг" (an English "Autotargeting" is also accepted). The id is preferred; the names are exact, normalised
+ * comparisons — never substring or regex heuristics.
+ */
+export const AUTOTARGETING_PHRASE_IDS: readonly string[] = ['11.0']
+export const AUTOTARGETING_PHRASE_NAMES: readonly string[] = ['автотаргетинг', 'autotargeting']
+
+export function isAutotargetingPhrase(value: { id: string | null; name: string | null }): boolean {
+  if (value.id !== null && AUTOTARGETING_PHRASE_IDS.includes(value.id)) return true
+  return AUTOTARGETING_PHRASE_NAMES.includes(normalizeMarker(value.name))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Sources
 // ---------------------------------------------------------------------------------------------
@@ -361,7 +374,7 @@ export function buildUnifiedPayload(input: { project: string; config: UnifiedPro
         return { impressions, clicks: c, spend, cpc: c > 0 ? round2(spend / c) : null }
       })()
     : null
-  const phraseRow = mPayload?.direct.phrasesOrConditions.find((r) => normalizeMarker(r.phraseOrCondition.name) === 'autotargeting')
+  const phraseRow = mPayload?.direct.phrasesOrConditions.find((r) => isAutotargetingPhrase(r.phraseOrCondition))
   const metrikaPhrase = (r: { visits: number | null; bounceRate: number | null; avgVisitDurationSeconds: number | null; leadSubmitVisits: number | null }) => ({
     visits: r.visits,
     bounceRate: r.bounceRate,
