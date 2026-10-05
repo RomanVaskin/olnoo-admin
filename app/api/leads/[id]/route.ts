@@ -36,6 +36,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     set('status', body.status)
   }
 
+  // Manual traffic-class override (Test Traffic v1): 'REAL' | 'TEST' sets it, null clears it (the automatic class applies again).
+  if ('trafficClassOverride' in body) {
+    const override = body.trafficClassOverride
+    if (override !== null && override !== 'REAL' && override !== 'TEST') return NextResponse.json({ error: 'invalid traffic class override' }, { status: 400 })
+    set('traffic_class_override', override)
+    set('traffic_class_override_at', override === null ? null : new Date().toISOString())
+  }
+
   if (!sets.length) {
     const { rows } = await pool.query('SELECT * FROM leads WHERE id = $1', [id])
     if (!rows[0]) return NextResponse.json({ error: 'not found' }, { status: 404 })

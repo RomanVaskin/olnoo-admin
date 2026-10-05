@@ -6,7 +6,18 @@ import { buildPeriod, readLeadSignalsForPeriod, type ObserverPeriod } from './cr
 import { insertLead, leadsHaveTrafficClass, resetTrafficClassProbe, type LeadRow } from './lead-insert.ts'
 import { parseLeadAttribution, type LeadAttribution } from './lead-attribution.ts'
 import { setTrafficClassOverride } from './traffic-class-store.ts'
-import { classifyLead, effectiveTrafficClass, LEGACY_TEST_MARKERS, parseTrafficClass, parseTrafficOverride } from './traffic-class.ts'
+import {
+  classifyLead,
+  effectiveTrafficClass,
+  LEGACY_TEST_MARKERS,
+  matchesTestUtm,
+  normalizeContact,
+  parseActivationBoundary,
+  parseKnownContacts,
+  parseTrafficClass,
+  parseTrafficOverride,
+  TEST_UTM_PAIRS,
+} from './traffic-class.ts'
 import { TEST_TRAFFIC_RULES } from './unified-analytics.ts'
 
 // ---- classifier (pure) -----------------------------------------------------------------------------
@@ -40,9 +51,95 @@ test('effective class = override ?? auto (REAL / TEST / null)', () => {
   assert.equal(parseTrafficOverride('TEST'), 'TEST')
 })
 
-test('the CRM classifier and Unified share ONE definition of the legacy markers', () => {
-  assert.equal(TEST_TRAFFIC_RULES, LEGACY_TEST_MARKERS)
+test('the CRM classifier and Unified share ONE definition of the test markers (test UTM pair + legacy markers)', () => {
   assert.deepEqual(LEGACY_TEST_MARKERS.driveset, { utmContent: ['a2_production_test'], utmTerm: ['test_attribution'] })
+  assert.deepEqual(TEST_UTM_PAIRS, [{ source: 'olnoo', medium: 'test' }])
+  assert.deepEqual(TEST_TRAFFIC_RULES.driveset, { utmContent: ['a2_production_test'], utmTerm: ['test_attribution'], utmPairs: TEST_UTM_PAIRS })
+})
+
+// ---- Test Traffic v1 classifier ---------------------------------------------------------------------
+
+const SINCE = '2026-10-06T09:00:00+03:00' // 06:00Z
+const BEFORE = Date.parse('2026-10-06T05:59:59Z')
+const AFTER = Date.parse('2026-10-06T06:00:00Z')
+const ENV = { DRIVESET_TEST_CLASSIFICATION_SINCE: SINCE, OLNOO_TEST_CONTACTS_DRIVESET: '+7 (999) 123-45-67, tg:123456789; 89990001122' }
+const web = (over: Partial<Parameters<typeof classifyLead>[0]> = {}) => classifyLead({ project: 'driveset', intake: 'inbound_api', now: AFTER, env: ENV, utmSource: 'yandex', utmMedium: 'cpc', phone: '+79998887766', ...over })
+
+test('TEST: the new test UTM (utm_source=olnoo AND utm_medium=test), whatever content/term say; exact and normalised', () => {
+  assert.deepEqual(web({ utmSource: 'olnoo', utmMedium: 'test', utmContent: 'olnoo_test', utmTerm: 'AbC123' }), { auto: 'TEST', reason: 'test_utm' })
+  assert.deepEqual(web({ utmSource: ' OLNOO ', utmMedium: 'Test' }), { auto: 'TEST', reason: 'test_utm' })
+  assert.deepEqual(web({ utmSource: 'olnoo', utmMedium: 'test', intake: undefined, now: BEFORE }), { auto: 'TEST', reason: 'test_utm' }) // any intake, any time
+  assert.equal(matchesTestUtm('olnoo', 'test'), true)
+})
+
+test('no false positives: one half of the pair, similar strings and the marker words in other fields are not TEST', () => {
+  for (const [source, medium] of [['olnoo', 'cpc'], ['yandex', 'test'], ['olnoo', ''], ['', 'test'], ['olnoo-x', 'test'], ['olnoo', 'testing'], ['my olnoo', 'test']]) {
+    assert.notEqual(web({ utmSource: source, utmMedium: medium }).auto, 'TEST', `${source}|${medium}`)
+  }
+  assert.notEqual(web({ utmContent: 'olnoo_test' }).auto, 'TEST') // content alone is not the marker
+  assert.notEqual(web({ utmTerm: 'olnoo_test_abc', utmCampaign: 'olnoo_test' } as never).auto, 'TEST')
+  assert.equal(web({ contact: 'olnoo_test' }).auto, 'REAL') // a stray string in an unrelated field changes nothing
+})
+
+test('TEST: historical markers and known test contacts (phone in any formatting, tg:<id>)', () => {
+  assert.deepEqual(web({ utmContent: 'a2_production_test' }), { auto: 'TEST', reason: 'legacy_utm_marker' })
+  assert.deepEqual(web({ utmTerm: 'test_attribution' }), { auto: 'TEST', reason: 'legacy_utm_marker' })
+  for (const phone of ['+79991234567', '8 999 123 45 67', '9991234567', '+7(999)123-45-67']) {
+    assert.deepEqual(web({ phone }), { auto: 'TEST', reason: 'known_test_contact' }, phone)
+  }
+  assert.deepEqual(web({ phone: '+79990001122' }), { auto: 'TEST', reason: 'known_test_contact' }) // the 8… form in the list
+  assert.deepEqual(web({ phone: null, contact: 'tg:123456789' }), { auto: 'TEST', reason: 'known_test_contact' })
+  assert.deepEqual(web({ phone: '+79991234568' }), { auto: 'REAL', reason: 'web_after_activation' }) // one digit off
+  assert.deepEqual(web({ phone: null, contact: 'tg:1234567890' }), { auto: 'REAL', reason: 'web_after_activation' })
+})
+
+test('REAL: only the trusted inbound intake at/after the activation boundary and without any test marker', () => {
+  assert.deepEqual(web(), { auto: 'REAL', reason: 'web_after_activation' })
+  assert.deepEqual(web({ now: AFTER }), { auto: 'REAL', reason: 'web_after_activation' }) // boundary instant included
+  assert.deepEqual(web({ now: BEFORE }), { auto: 'UNKNOWN', reason: 'unclassified' }) // before the boundary
+  assert.deepEqual(web({ intake: undefined }), { auto: 'UNKNOWN', reason: 'unclassified' }) // Admin UI / Telegram / anything but the inbound API
+  assert.deepEqual(classifyLead({ project: 'driveset', now: AFTER, env: ENV, contact: 'tg:777777777' }), { auto: 'UNKNOWN', reason: 'unclassified' }) // off-site lead
+  assert.deepEqual(web({ project: 'olnoo' }), { auto: 'UNKNOWN', reason: 'unclassified' }) // not a configured project
+  assert.deepEqual(web({ utmSource: 'olnoo', utmMedium: 'test' }).auto, 'TEST') // a marker beats the boundary
+})
+
+test('activation boundary: missing or malformed env keeps everything UNKNOWN (fail-safe); the format needs a time zone', () => {
+  for (const since of [undefined, '', 'tomorrow', '2026-10-06', '2026-10-06T09:00:00', '2026-13-45T09:00:00+03:00x']) {
+    assert.equal(web({ env: { DRIVESET_TEST_CLASSIFICATION_SINCE: since } }).auto, 'UNKNOWN', String(since))
+  }
+  assert.equal(parseActivationBoundary('2026-10-06T09:00:00+03:00'), Date.parse('2026-10-06T06:00:00Z'))
+  assert.equal(parseActivationBoundary('2026-10-06T06:00:00Z'), Date.parse('2026-10-06T06:00:00Z'))
+  assert.equal(parseActivationBoundary(null), null)
+})
+
+test('known contacts format: separators, normalisation, junk ignored, never partial matches', () => {
+  assert.deepEqual([...parseKnownContacts('+7 999 123-45-67,8(999)000-11-22\n tg:42424 ; junk, @name, 123')].sort(), ['phone:79990001122', 'phone:79991234567', 'tg:42424'])
+  assert.deepEqual([...parseKnownContacts(undefined)], [])
+  assert.equal(normalizeContact('TG:123456'), 'tg:123456')
+  assert.equal(normalizeContact('tg:12'), null)
+  assert.equal(normalizeContact('@username'), null)
+  assert.equal(normalizeContact('+1 202 555 0100'), 'phone:12025550100') // non-RU numbers keep their digits
+  assert.equal(normalizeContact(''), null)
+  assert.equal(classifyLead({ project: 'driveset', phone: '+79991234567', env: {} }).auto, 'UNKNOWN') // no list configured → no known contact
+})
+
+test('plumbing: only the authenticated inbound route sets intake; the Admin UI and Telegram never can produce REAL', () => {
+  const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8')
+  assert.match(read('../app/api/leads/inbound/route.ts'), /intake: 'inbound_api'/)
+  assert.doesNotMatch(read('../app/api/leads/route.ts'), /\bintake: '/)
+  assert.doesNotMatch(read('./telegram-business.ts'), /\bintake: '/)
+  const crm = read('./crm.ts')
+  assert.match(crm, /intake: input\.intake/)
+  assert.match(crm, /phone: phone \|\| null/)
+  assert.match(crm, /contact: contact \|\| null/)
+})
+
+test('override API: PATCH accepts REAL | TEST | null for trafficClassOverride and rejects anything else', () => {
+  const route = readFileSync(new URL('../app/api/leads/[id]/route.ts', import.meta.url), 'utf8')
+  assert.match(route, /'trafficClassOverride' in body/)
+  assert.match(route, /override !== null && override !== 'REAL' && override !== 'TEST'/)
+  assert.match(route, /set\('traffic_class_override', override\)/)
+  assert.match(route, /set\('traffic_class_override_at', override === null \? null : new Date\(\)\.toISOString\(\)\)/)
 })
 
 // ---- migration text + insert before/after the migration (no database needed) -----------------------------

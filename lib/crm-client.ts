@@ -1,4 +1,5 @@
 import type { Lead } from '@/lib/data'
+import { effectiveTrafficClass, parseTrafficClass, parseTrafficOverride } from '@/lib/traffic-class'
 
 /** Maps a /api/leads row (snake_case Postgres columns) to the UI's Lead shape. */
 export function fromApiLead(row: Record<string, unknown>): Lead {
@@ -20,6 +21,10 @@ export function fromApiLead(row: Record<string, unknown>): Lead {
     utmCampaign: (row.utm_campaign as string) ?? '',
     locale: (row.locale as string) ?? '',
     notes: (row.notes as string) ?? '',
+    trafficClassAuto: parseTrafficClass(row.traffic_class_auto),
+    trafficClassReason: (row.traffic_class_reason as string) ?? 'unclassified',
+    trafficClassOverride: parseTrafficOverride(row.traffic_class_override),
+    trafficClass: effectiveTrafficClass(row.traffic_class_auto, row.traffic_class_override),
     activity: [],
   }
 }

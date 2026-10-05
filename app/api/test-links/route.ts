@@ -8,13 +8,14 @@ export const dynamic = 'force-dynamic'
 const NO_STORE = { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
 
 /**
- * Generates a signed, short-lived, project-bound Test Link (Test Traffic v1, PR B). POST only (no GET generator),
- * never cached. The only database access is one SELECT of the project's domain: no token, session id or audit row is
- * stored. Nothing here logs the body, the URL, the token or a secret. No application-level auth (the app has none): in
- * production admin.olnoo.com sits behind an external access layer (see OLNOO_PROJECT_MAP.md, "Access to admin.olnoo.com").
- * The client-site route that accepts the link ships separately; this endpoint only issues it.
+ * Generates a Test Link (Test Traffic v1): a plain URL with the test UTM, e.g.
+ * https://driveset.ru/?utm_source=olnoo&utm_medium=test&utm_content=olnoo_test&utm_term=<sessionId>. The site's existing
+ * first-touch attribution stores the UTM and the CRM classifies the resulting lead as TEST — no token, cookie or secret.
+ * POST only, never cached. The only database access is one SELECT of the project's domain; nothing is stored or logged.
+ * No application-level auth (the app has none): in production admin.olnoo.com sits behind an external access layer
+ * (see OLNOO_PROJECT_MAP.md, "Access to admin.olnoo.com").
  *
- * POST /api/test-links  { "project": "driveset", "ttlMinutes"?: 120 }  →  { project, url, expiresAt, sessionId }
+ * POST /api/test-links  { "project": "driveset" }  →  { project, url, expiresAt: null, sessionId }
  */
 export async function POST(req: Request) {
   const body: unknown = await req.json().catch(() => null)

@@ -43,6 +43,8 @@ export async function POST(req: Request) {
     service: typeof body.service === 'string' ? body.service : undefined,
     message: typeof body.message === 'string' ? body.message : undefined,
     source: typeof body.source === 'string' ? body.source : undefined,
+    // This route is authenticated with the API key: only here a lead counts as a trusted web intake (Test Traffic v1).
+    intake: 'inbound_api',
     // Optional attribution identifiers (snake_case like utm_*, camelCase accepted). Validated, never logged.
     attribution: {
       leadTrackingId: body.lead_tracking_id ?? body.leadTrackingId,
