@@ -427,11 +427,23 @@ export function buildUnifiedPayload(input: { project: string; config: UnifiedPro
   }
 
   // --- attribution
-  const exactCampaign = segment !== null && segment.idsPresent
+  // EXACT only when the campaign's own row was found AND the rows carry ids: an empty answer, rows of other campaigns or rows without ids prove nothing.
+  const exactCampaign = segment !== null && segment.found === true && segment.idsPresent === true
   const attribution = {
     directToMetrika: exactCampaign
       ? { status: 'EXACT_CAMPAIGN_AGGREGATED_VISITS', evidence: ['campaign_id_match'] }
-      : { status: 'UNKNOWN', evidence: [] as string[], reason: sources.metrika.status === 'unavailable' ? 'metrika_unavailable' : 'direct_segment_unavailable' },
+      : {
+          status: 'UNKNOWN',
+          evidence: [] as string[],
+          reason:
+            sources.metrika.status === 'unavailable'
+              ? 'metrika_unavailable'
+              : segment === null
+                ? 'direct_segment_unavailable'
+                : !segment.idsPresent
+                  ? 'campaign_ids_missing'
+                  : 'campaign_id_not_found',
+        },
     metrikaToCrm: { status: 'AGGREGATED', evidence: ['utm_campaign_and_source_match'], note: 'First-touch UTM in the CRM vs last-significant-source in Metrika; no per-visit link.' },
     overall: { status: sources.direct.status !== 'unavailable' && sources.metrika.status !== 'unavailable' && sources.crm.status !== 'unavailable' ? 'AGGREGATED' : 'UNKNOWN' },
     notes: [...LIMITATIONS],

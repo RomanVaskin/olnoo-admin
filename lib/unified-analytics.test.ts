@@ -17,7 +17,7 @@ import {
   type SourceResult,
   type Sources,
 } from './unified-analytics.ts'
-import { SEGMENT_EVENTS, type DirectSegment, type MetrikaPayload, type TestSegment, type UnifiedExtras } from './yandex-metrika-report.ts'
+import { parseDirectSegment, SEGMENT_EVENTS, type DirectSegment, type MetrikaPayload, type TestSegment, type UnifiedExtras } from './yandex-metrika-report.ts'
 import type { ObserverPayload as DirectPayload } from './yandex-direct-report.ts'
 
 const NOW = new Date('2026-10-05T09:00:00Z') // 12:00 Moscow, 2026-10-05
@@ -399,4 +399,39 @@ test('route: GET only, reads the libraries directly (no internal HTTP, no full l
   assert.match(route, /observePeriod/)
   const lib = readFileSync(new URL('./unified-analytics.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(lib, /readLeadsForPeriod|ObserverLead\b/)
+})
+
+// ---- regression: EXACT campaign match needs the campaign's own row ----------------------------------------------
+
+test('attribution.directToMetrika: EXACT only when the campaign id row was found; empty, other-campaign and id-less answers are UNKNOWN', () => {
+  const metricValues = [5, ...SEGMENT_EVENTS.flatMap(() => [1, 2])]
+  const answer = (rows: { id: string | null; name: string }[]) =>
+    parseDirectSegment({ rows: rows.map((r) => ({ dimensions: [r], metrics: metricValues })), totals: [], totalRows: rows.length, sampled: false, sampleShare: null, dataLagSeconds: null }, CAMPAIGN)
+  const attributionFor = (seg: DirectSegment) => build(sources({ metrika: ok<MetrikaBundle>({ payload: metrikaPayload(), extras: extras({ directSegment: seg }) }) })).attribution.directToMetrika
+
+  const empty = answer([])
+  assert.deepEqual([empty.found, empty.idsPresent], [false, true]) // the case behind the bug
+  const emptyAttribution = attributionFor(empty)
+  assert.equal(emptyAttribution.status, 'UNKNOWN')
+  assert.deepEqual(emptyAttribution.evidence, [])
+  assert.equal((emptyAttribution as { reason?: string }).reason, 'campaign_id_not_found')
+
+  const other = answer([{ id: '123456', name: 'Another campaign' }])
+  assert.deepEqual([other.found, other.idsPresent], [false, true])
+  const otherAttribution = attributionFor(other)
+  assert.equal(otherAttribution.status, 'UNKNOWN')
+  assert.ok(!otherAttribution.evidence.includes('campaign_id_match'))
+
+  const noIds = answer([{ id: null, name: String(CAMPAIGN) }])
+  const noIdsAttribution = attributionFor(noIds)
+  assert.equal(noIdsAttribution.status, 'UNKNOWN')
+  assert.deepEqual(noIdsAttribution.evidence, [])
+  assert.equal((noIdsAttribution as { reason?: string }).reason, 'campaign_ids_missing')
+
+  const right = answer([{ id: '123456', name: 'Another campaign' }, { id: String(CAMPAIGN), name: 'DriveSet' }])
+  assert.deepEqual([right.found, right.idsPresent], [true, true])
+  assert.deepEqual(attributionFor(right), { status: 'EXACT_CAMPAIGN_AGGREGATED_VISITS', evidence: ['campaign_id_match'] })
+
+  // extras missing altogether stays UNKNOWN as before
+  assert.equal(build(sources({ metrika: { status: 'partial', data: { payload: metrikaPayload(), extras: null } } })).attribution.directToMetrika.status, 'UNKNOWN')
 })
