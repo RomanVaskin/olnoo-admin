@@ -42,6 +42,10 @@ Project is the main connecting object between modules. One Client can have sever
 - **Test traffic is marked by a plain UTM** (`utm_source=olnoo&utm_medium=test&utm_content=olnoo_test&utm_term=<sessionId>`) — no cookie, token, secret or DriveSet code. The classifier lives in the CRM (`lib/traffic-class.ts`): test UTM / legacy markers / known test contacts (server env, never in Git) → TEST; **REAL only** for leads from the trusted DriveSet inbound API at/after an explicit activation boundary (server env `DRIVESET_TEST_CLASSIFICATION_SINCE`) with no marker; everything else UNKNOWN. A client-side flag is never authoritative.
 - **Unified Analytics counts by the effective class** and computes CPL from REAL direct leads only (TEST and UNKNOWN excluded; `unclassified_leads_pending` warns when UNKNOWN direct leads exist). Old Unified fields remain as aliases. Metrika excludes the same test traffic by exact UTM filters. Details and activation steps: `OLNOO_PROJECT_MAP.md`.
 
+## OLNOO Agent v1 (MCP)
+
+- **AI reads OLNOO through one read-only MCP tool**, `get_driveset_summary(period)` at `POST /api/mcp` (official SDK, stateless Streamable HTTP). It calls the existing Unified Analytics and returns a small whitelist DTO — no second implementation of Direct/Metrika/CRM, no personal data, no write tools, no project parameter. The endpoint has no application auth; nginx opens exactly this path. Details and the manual nginx step: `OLNOO_PROJECT_MAP.md`.
+
 ## SEO
 
 - One search intent = one page. Do not create thin pages for synonyms.
