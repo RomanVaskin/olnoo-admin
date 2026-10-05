@@ -6,6 +6,7 @@ import { resolveObserverPeriod, type ResolvedPeriod } from './observer-period.ts
 import {
   buildUnifiedPayload,
   collectSources,
+  isAutotargetingPhrase,
   isDirectLead,
   isTestSignal,
   resolveUnifiedProject,
@@ -434,4 +435,36 @@ test('attribution.directToMetrika: EXACT only when the campaign id row was found
 
   // extras missing altogether stays UNKNOWN as before
   assert.equal(build(sources({ metrika: { status: 'partial', data: { payload: metrikaPayload(), extras: null } } })).attribution.directToMetrika.status, 'UNKNOWN')
+})
+
+// ---- regression: Metrika names the autotargeting condition "Автотаргетинг" (id 11.0) ---------------------------------
+
+test('autotargeting phrase: found by id 11.0 or by the exact Russian/English name; ordinary phrases are not', () => {
+  assert.equal(isAutotargetingPhrase({ id: '11.0', name: 'Автотаргетинг' }), true) // production shape
+  assert.equal(isAutotargetingPhrase({ id: '11.0', name: 'any localised name' }), true) // by id, whatever the name
+  assert.equal(isAutotargetingPhrase({ id: null, name: 'Автотаргетинг' }), true)
+  assert.equal(isAutotargetingPhrase({ id: null, name: ' автотаргетинг ' }), true) // normalised
+  assert.equal(isAutotargetingPhrase({ id: null, name: 'Autotargeting' }), true)
+  assert.equal(isAutotargetingPhrase({ id: '42.0', name: 'AUTOTARGETING' }), true)
+  for (const value of [
+    { id: '123456789.0', name: 'оклейка авто пленкой' },
+    { id: null, name: 'автотаргетинг цена' }, // not a substring rule
+    { id: '111.0', name: 'wb' },
+    { id: '11', name: null },
+    { id: null, name: null },
+  ]) assert.equal(isAutotargetingPhrase(value), false, JSON.stringify(value))
+})
+
+test('breakdowns.autotargeting.metrika is filled from the production-shaped Metrika row', () => {
+  const row = (id: string | null, name: string | null, visits: number) => ({ phraseOrCondition: { id, name }, visits, users: visits, bounceRate: 76.67, avgVisitDurationSeconds: 11.27, leadSubmitVisits: 0, leadSubmitReaches: 0 })
+  const withRows = (rows: ReturnType<typeof row>[]) => {
+    const payload = metrikaPayload()
+    ;(payload.direct as unknown as { phrasesOrConditions: unknown[] }).phrasesOrConditions = rows
+    return build(sources({ metrika: ok<MetrikaBundle>({ payload, extras: extras() }) })).breakdowns.autotargeting
+  }
+  const found = withRows([row('987654321.0', 'оклейка авто пленкой', 19), row('11.0', 'Автотаргетинг', 30)])
+  assert.deepEqual(found.metrika, { visits: 30, bounceRate: 76.67, avgVisitDurationSeconds: 11.27, leadSubmitVisits: 0 })
+  assert.deepEqual(found.direct, { impressions: 500, clicks: 30, spend: 1500, cpc: 50 }) // Direct side unchanged
+  assert.equal(withRows([row(null, 'Autotargeting', 7)]).metrika!.visits, 7)
+  assert.equal(withRows([row('987654321.0', 'оклейка авто пленкой', 19)]).metrika, null) // no autotargeting row → null, as before
 })
