@@ -1,9 +1,14 @@
 import { SectionHeader, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
-import { metrics, projects, clusters } from '@/lib/data'
+import { metrics, clusters } from '@/lib/data'
+import { useProjects } from '@/components/sections/seo-project-picker'
 
 export function Overview() {
   const { t } = useI18n()
+  // The project list and its totals come from the shared registry (active projects), not from a fixed set.
+  const { projects } = useProjects()
+  const totalPages = projects.reduce((s, p) => s + p.pagesCount, 0)
+  const totalKeywords = projects.reduce((s, p) => s + p.keywordsCount, 0)
   const totalKw = clusters.reduce((s, c) => s + c.items.length, 0)
   const mapped = clusters.reduce(
     (s, c) => s + c.items.filter((i) => i.status === 'Mapped').length,
@@ -20,9 +25,9 @@ export function Overview() {
       />
 
       <section className="grid grid-cols-2 border border-hairline bg-card md:grid-cols-3 lg:grid-cols-5">
-        <Metric label={t.seoOverview.metricProjects} value={metrics.projects} />
-        <Metric label={t.seoOverview.metricPages} value={metrics.pages} />
-        <Metric label={t.seoOverview.metricKeywords} value={metrics.keywords} />
+        <Metric label={t.seoOverview.metricProjects} value={projects.length} />
+        <Metric label={t.seoOverview.metricPages} value={totalPages} />
+        <Metric label={t.seoOverview.metricKeywords} value={totalKeywords} />
         <Metric label={t.seoOverview.metricMappedKeywords} value={metrics.mappedKeywords} accent />
         <Metric label={t.seoOverview.metricMissingPages} value={metrics.missingPages} />
       </section>
@@ -51,8 +56,8 @@ export function Overview() {
                       <span className="font-mono text-xs text-muted-foreground">{p.domain}</span>
                     </div>
                   </Td>
-                  <Td className="font-mono">{p.pages}</Td>
-                  <Td className="font-mono">{p.keywords}</Td>
+                  <Td className="font-mono">{p.pagesCount}</Td>
+                  <Td className="font-mono">{p.keywordsCount}</Td>
                   <Td>
                     <StatusPill status={p.status} />
                   </Td>

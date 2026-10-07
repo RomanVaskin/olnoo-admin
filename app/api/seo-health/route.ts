@@ -1,16 +1,14 @@
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { checkProjectHealth, type ProjectHealth } from '@/lib/seo-health'
+import { listProjects } from '@/lib/projects-registry'
 
 export async function GET(req: Request) {
   const projectId = new URL(req.url).searchParams.get('projectId')
 
-  const { rows } = await pool.query(
-    projectId
-      ? 'SELECT id, name, domain, sitemap_url FROM projects WHERE id = $1 ORDER BY id ASC'
-      : "SELECT id, name, domain, sitemap_url FROM projects WHERE btrim(domain) <> '' ORDER BY id ASC",
-    projectId ? [projectId] : [],
-  )
+  // Active projects with a domain, from the shared registry — archived projects never take part in «Check all».
+  const all = (await listProjects(pool)).filter((p) => p.domain.trim() !== '')
+  const rows = projectId ? all.filter((p) => String(p.id) === projectId) : all
 
   if (projectId && rows.length === 0) {
     return NextResponse.json({ error: 'Project not found' }, { status: 404 })

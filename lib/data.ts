@@ -28,20 +28,6 @@ export const MODULE_STATE: Record<ModuleKey, 'active' | 'soon'> = {
   Analytics: 'soon',
 }
 
-export type Project = {
-  id: string
-  name: string
-  domain: string
-  sitemap: string
-  client: string
-  modules: ModuleKey[]
-  pages: number
-  keywords: number
-  leads: number | null
-  status: 'Synced' | 'Pending'
-  lastSync: string
-}
-
 export type Client = {
   id: string
   name: string
@@ -113,48 +99,6 @@ export type ImportRecord = {
   date: string
   status: 'Imported' | 'Pending'
 }
-
-export const projects: Project[] = [
-  {
-    id: 'olnoo',
-    name: 'OLNOO',
-    domain: 'olnoo.com',
-    sitemap: '/sitemap.xml',
-    client: 'OLNOO',
-    modules: ['SEO', 'CRM'],
-    pages: 42,
-    keywords: 118,
-    leads: 18,
-    status: 'Synced',
-    lastSync: '2026-09-05 14:20',
-  },
-  {
-    id: 'insurance',
-    name: 'OLNOO Insurance',
-    domain: 'insurance.olnoo.com',
-    sitemap: '/sitemap.xml',
-    client: 'OLNOO Insurance',
-    modules: ['SEO'],
-    pages: 28,
-    keywords: 74,
-    leads: null,
-    status: 'Synced',
-    lastSync: '2026-09-05 11:02',
-  },
-  {
-    id: 'aura',
-    name: 'Aura Estate',
-    domain: 'aura.olnoo.com',
-    sitemap: '/sitemap.xml',
-    client: 'Aura Estate',
-    modules: ['SEO', 'CRM'],
-    pages: 19,
-    keywords: 46,
-    leads: 12,
-    status: 'Pending',
-    lastSync: '2026-09-03 09:48',
-  },
-]
 
 export const clients: Client[] = [
   {
@@ -392,9 +336,6 @@ export const previewRows = [
 ]
 
 export const metrics = {
-  projects: projects.length,
-  pages: projects.reduce((s, p) => s + p.pages, 0),
-  keywords: projects.reduce((s, p) => s + p.keywords, 0),
   mappedKeywords: keywords.filter((k) => k.status === 'Mapped').length,
   missingPages: keywords.filter((k) => k.status === 'No page').length,
 }
@@ -609,9 +550,6 @@ export const leadSources: { source: Lead['source']; count: number }[] = (
 }))
 
 export const adminMetrics = {
-  activeProjects: projects.length,
-  seoPages: projects.reduce((s, p) => s + p.pages, 0),
-  keywords: projects.reduce((s, p) => s + p.keywords, 0),
   newLeads: leads.filter((l) => l.status === 'New').length,
   openLeads: leads.filter(
     (l) => l.status !== 'Won' && l.status !== 'Lost',

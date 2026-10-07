@@ -42,6 +42,14 @@ No authentication layer exists on this app yet (no login, no session, no middlew
 - **Conclusion:** production `admin.olnoo.com` sits behind an external access layer that answers before the request reaches Next.js.
 - The configuration and the specific technology of that external layer were not checked in this repository or by these changes; do not document or assume anything beyond the facts above.
 
+## Project registry
+
+`projects` is the single source of truth for the project list in the whole Admin. Migration `db/migrations/0017_project_registry.sql` (applied manually, additive and idempotent; apply it BEFORE deploying the code that reads it) adds `archived_at TIMESTAMPTZ NULL` (NULL = active) and `locale TEXT NULL`, backfills a missing `slug` from the first label of the domain host when that slug is free, and an index for active rows. Existing fields are reused: `name`, `slug` (unique, the key other systems address the project by), `domain`, `sitemap_url`, `status`, `client_id` (required by the schema).
+
+- **One reader:** `listProjects(db, { archived })` in `lib/projects-registry.ts` behind `GET /api/projects` — active projects by default; archived only on an explicit `?archived=include|only`. Technical SEO «Check all» (`/api/seo-health`) calls `listProjects` too (no own SQL, no allowlist). Client side: `useProjects()` (`components/sections/seo-project-picker.tsx`) and the global `ProjectSelector` read the same endpoint. **Screens on the registry:** SEO Overview, Admin Overview, SEO Pages / Keywords / Map / Wordstat / Cleanup / Clusters selectors, Technical SEO, Projects, Clients (project counts), and the global project selector used by Admin Overview, CRM (Overview, Leads), Ads and Social (their `project` slug comes from it). Removed: the hardcoded `projects` array of `lib/data.ts` (it was why DriveSet was missing in SEO Overview / the global selector) and the numbers derived from it. A new active project appears everywhere without a code change.
+- **Writes (Projects screen):** `POST /api/projects` (`name`, `domain` required; `slug` defaults to the name, `sitemapUrl` defaults to `<domain>/sitemap.xml`, optional `locale`, `clientId`), `PATCH /api/projects/[id]` (edit `name`, `domain`, `sitemapUrl`, `locale`; `archived: true|false` archives / restores). 409 on a duplicate domain/slug. **The slug cannot be changed** after creation. Without `clientId` the project gets the client of the same name (found or created) — the existing convention; no users/auth/roles. **No hard delete** (no DELETE route, no UI): archiving only sets `archived_at`; all data is kept; archived projects drop out of selectors, overviews and «Check all», and can be restored.
+- **Not part of the registry:** per-project integration config keyed by slug stays in code (`UNIFIED_PROJECTS` campaign id, `METRIKA_PROJECTS` counter id, `TRAFFIC_CLASS_PROJECTS` env names) — it describes how a project is wired to Direct/Metrika/CRM, not which projects exist. API routes that take a slug (CRM, Ads, Social) still resolve archived projects by slug; they are only hidden from the selectors. The mock `clients`/`pages`/`keywords`/`clusters`/`leads` sample data in `lib/data.ts` (coverage and CRM sample figures on the overviews) is unchanged.
+
 ## CRM
 
 Source of truth: Postgres (same database used by `olnoo-admin`).
@@ -56,7 +64,7 @@ Confirmed API routes (`olnoo-admin`):
 - `GET/POST /api/leads` — list (filtered by `?project=<slug>`) and create; used by the Admin UI itself.
 - `GET /api/crm/observer/leads?project=<slug>&from=YYYY-MM-DD&to=YYYY-MM-DD` — **CRM Observer, read-only** (see "CRM Observer" below).
 - `PATCH/DELETE /api/leads/[id]` — edit and delete.
-- `GET /api/projects`, `GET /api/clients`.
+- `GET /api/projects` (+ `POST`, `PATCH /api/projects/[id]`; see "Project registry"), `GET /api/clients`.
 - `POST /api/leads/inbound` — API-key-authenticated (`OLNOO_CRM_API_KEY`) server-to-server intake. **In use by DriveSet** (`driveset.ru` `/api/lead` proxy, `project=driveset`, phone-only leads). `olnoo.com` itself does not use it — it writes directly to Postgres (above) after the key-based path proved unreliable for it.
 - `POST /api/telegram/business-webhook` — Telegram Business intake (see "Telegram Business intake" below). Code is in place; **not yet connected to Telegram** (no bot token in production env, no webhook registered).
 

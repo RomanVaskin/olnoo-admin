@@ -47,6 +47,10 @@ Project is the main connecting object between modules. One Client can have sever
 
 - **AI reads OLNOO through one read-only MCP tool**, `get_driveset_summary(period)` at `POST /api/mcp` (official SDK, stateless Streamable HTTP). It calls the existing Unified Analytics and returns a small whitelist DTO — no second implementation of Direct/Metrika/CRM, no personal data, no write tools, no project parameter. The endpoint has no application auth; nginx opens exactly this path. Details and the manual nginx step: `OLNOO_PROJECT_MAP.md`.
 
+## Project registry
+
+- **The `projects` table is the only source of the project list.** One reader (`listProjects`: active by default, archived only on explicit request) feeds every project-based screen and check; no screen keeps its own list or allowlist. Archiving hides a project without deleting data (restorable); there is no hard delete in the UI; the slug is immutable. Per-project integration config (Direct campaign, Metrika counter, traffic-class env) is code keyed by slug and is not a project list. Details: `OLNOO_PROJECT_MAP.md`.
+
 ## SEO
 
 Full description, current status and roadmap: [`docs/SEO_AGENT.md`](docs/SEO_AGENT.md) (single source of truth). Principles only:

@@ -5,9 +5,14 @@ import { useEffect, useState } from 'react'
 export type SeoProject = {
   id: number
   name: string
+  slug: string | null
   domain: string
+  pagesCount: number
+  keywordsCount: number
+  status: string
 }
 
+/** Active projects from the shared registry (`GET /api/projects`) — the one list every project-based screen uses. */
 export function useProjects() {
   const [projects, setProjects] = useState<SeoProject[]>([])
   const [loading, setLoading] = useState(true)
@@ -18,7 +23,17 @@ export function useProjects() {
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return
-        setProjects(data.map((p: any) => ({ id: p.id, name: p.name, domain: p.domain })))
+        setProjects(
+          data.map((p: any) => ({
+            id: p.id,
+            name: p.name,
+            slug: p.slug ?? null,
+            domain: p.domain,
+            pagesCount: p.pages_count ?? 0,
+            keywordsCount: p.keywords_count ?? 0,
+            status: p.status,
+          })),
+        )
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
