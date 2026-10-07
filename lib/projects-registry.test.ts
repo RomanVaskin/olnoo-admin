@@ -2,7 +2,7 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { Pool } from 'pg'
-import { createProject, getProject, listProjects, normalizeDomain, slugify, updateProject, validateProjectInput } from './projects-registry.ts'
+import { CLIENTS_WITH_PROJECT_COUNT_SQL, createProject, getProject, listProjects, normalizeDomain, slugify, updateProject, validateProjectInput } from './projects-registry.ts'
 
 // ---- pure validation ----------------------------------------------------------------------------------------------
 
@@ -107,6 +107,20 @@ test('archive hides the project from the active list (data stays); restore bring
   })
 })
 
+test('clients project_count counts only ACTIVE projects: archived is excluded, restore brings it back', async (t) => {
+  await withDb(t, async (pool, tag) => {
+    const a = await createProject(pool, input(tag, 'a'))
+    const clientId = a.ok ? a.project.client_id : 0
+    const b = await createProject(pool, { ...input(tag, 'b'), clientId })
+    const count = async () => (await pool.query(CLIENTS_WITH_PROJECT_COUNT_SQL)).rows.find((r) => r.id === clientId)!.project_count
+    assert.equal(await count(), 2) // active projects are counted
+    assert.ok(b.ok && (await updateProject(pool, b.project.id, { archived: true })).ok)
+    assert.equal(await count(), 1) // the archived one is not
+    assert.ok((await updateProject(pool, b.ok ? b.project.id : 0, { archived: false })).ok)
+    assert.equal(await count(), 2)
+  })
+})
+
 // ---- who reads the project list ------------------------------------------------------------------------------------
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8')
@@ -129,6 +143,12 @@ test('project-based screens use the shared list and carry no hardcoded project n
   assert.match(read('../components/sections/admin-overview.tsx'), /useProjects\(\)/)
   assert.match(read('../components/sections/seo-project-picker.tsx'), /fetch\('\/api\/projects'\)/)
   assert.doesNotMatch(read('./data.ts'), /export const projects\b/)
+})
+
+test('the clients API counts projects through the shared active-only SQL', () => {
+  assert.match(read('../app/api/clients/route.ts'), /CLIENTS_WITH_PROJECT_COUNT_SQL/)
+  assert.doesNotMatch(read('../app/api/clients/route.ts'), /JOIN projects/)
+  assert.match(read('./projects-registry.ts'), /LEFT JOIN projects p ON p\.client_id = c\.id AND p\.archived_at IS NULL/)
 })
 
 test('no hard delete: the projects API has no DELETE and the UI never calls it', () => {

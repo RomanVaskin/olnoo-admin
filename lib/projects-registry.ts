@@ -26,6 +26,20 @@ const BASE_SELECT = `
   LEFT JOIN (SELECT project_id, COUNT(*) AS count FROM pages GROUP BY project_id) pg_count ON pg_count.project_id = pr.id
   LEFT JOIN (SELECT project_id, COUNT(*) AS count FROM keywords GROUP BY project_id) kw_count ON kw_count.project_id = pr.id`
 
+/** Clients with the number of their ACTIVE projects (archived ones are not counted). */
+export const CLIENTS_WITH_PROJECT_COUNT_SQL = `
+  SELECT
+    c.id,
+    c.name,
+    c.contact,
+    c.status,
+    c.created_at,
+    COUNT(p.id)::int AS project_count
+  FROM clients c
+  LEFT JOIN projects p ON p.client_id = c.id AND p.archived_at IS NULL
+  GROUP BY c.id
+  ORDER BY c.created_at ASC, c.id ASC`
+
 export type ProjectRow = {
   id: number
   client_id: number
