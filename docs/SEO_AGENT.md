@@ -4,7 +4,7 @@
 
 - **Решение: вариант C — минимальный SEO-модуль + read-only SEO Observer**, без отдельной агентной архитектуры. Зафиксировано 2026-10-07 по итогам архитектурного ревью.
 - Целевой closed loop, правила решений, минимальная data model и порядок работ уточнены 2026-10-07 по итогам architecture review (раздел 3a и раздел 12); вариант C это не меняет.
-- Раздел «Текущий статус» сверен с кодом ветки `main` на коммите `8758d84` (Project registry MVP, 2026-10-07). Прод и БД при сверке не проверялись.
+- Раздел «Текущий статус» сверен с кодом ветки `main` на коммите `0a3f905` (код после Project registry MVP `8758d84` не менялся) и с изменениями шага A (prompt/language patch, 2026-10-07). Прод и БД при сверке не проверялись.
 - Любое изменение фактов SEO-пайплайна фиксируется здесь в том же коммите (правило «Change rule» из `OLNOO_ARCHITECTURE.md`).
 - Подробный справочник текущей реализации (импорт Wordstat, pages sync, кластеризация, очистка запросов) — в конце файла, раздел «Справочник реализации».
 
@@ -35,7 +35,7 @@ SEO в OLNOO — reusable-модуль для проектов и клиенто
 - **Секции строятся по смысловым sub-intents, а не под каждый синоним** и не под каждый кластер.
 - Primary keyword — основной запрос страницы. Secondary keywords покрываются естественно: Title, Description, H1, H2/H3, текст, FAQ, коммерческие блоки. Без keyword stuffing, без механической вставки каждого long-tail.
 - **Семантика не является источником бизнес-фактов.** Запрос в кластере не делает услугу, город, цену, бренд или аудиторию существующими у бизнеса.
-- **Factual guardrail обязателен для Improve и Create.** Нельзя выдумывать клиентов, кейсы, цифры, результаты, партнёров, сертификаты, награды, опыт; неподтверждённое утверждение переписывается нейтрально или не добавляется. (Сейчас guardrail есть только в Improve — см. «Текущий статус».)
+- **Factual guardrail обязателен для Improve и Create.** Нельзя выдумывать клиентов, кейсы, цифры, результаты, партнёров, сертификаты, награды, опыт; неподтверждённое утверждение переписывается нейтрально или не добавляется. (Один и тот же блок `businessFactsGuardBlock` стоит в задачах Improve и Create — шаг A.)
 - **AI-рекомендация не равна подтверждению человека.** Если AI нашёл страницу: Recommend → Confirm → или Find another. Если AI сказал «страницы нет»: No page → Create page → или Find existing. Выбор страницы — поиск по URL/title/H1, а не огромный dropdown.
 - **CTA и internal links используют существующий flow проекта:** не создавать новую форму, если рабочая уже есть; не отправлять пользователя на главную без причины; не менять рабочую отправку заявок. Для `olnoo.com`: использовать существующий contact / ProjectRequest flow и не менять рабочий Resend/email flow без необходимости.
 - **Coverage Check и Quality Gate остаются частью prompt и PR review**, а не отдельными сущностями БД. Их результат (`SEO COVERAGE`, `QUALITY GATE`) проверяет человек в финальном отчёте Claude и при review PR.
@@ -122,7 +122,7 @@ Project Registry
 
 **Executor.** AI Router — только transport, выбор модели и fallback; Router не является Executor. Будущий Executor получает готовый task, берёт `repository` из Project Registry, читает `AGENTS.md`, `OLNOO_PROJECT_MAP.md`, `OLNOO_ARCHITECTURE.md` и репозиторий, меняет файлы, запускает tests/build, создаёт ветку, commit и PR. Первый scope — только безопасные Technical SEO Fix cases; Executor для всего SEO сразу не делаем. Merge остаётся ручным.
 
-**Create / Improve — ближайший обязательный prompt patch:** Create получает тот же factual guardrail, что Improve; CTA project-agnostic; locale берётся из Project Registry / locale страницы; обязательных hardcoded `/ru` `/en` нет; AI/GEO-пункты добавляются в существующий Quality Gate (раздел 8a); internal links остаются частью задачи и Quality Gate.
+**Create / Improve — prompt patch (шаг A, реализован):** Create получает тот же factual guardrail, что Improve; CTA project-agnostic; locale берётся из Project Registry / locale страницы; обязательных hardcoded `/ru` `/en` нет; AI/GEO-пункты добавляются в существующий Quality Gate (раздел 8a); internal links остаются частью задачи и Quality Gate.
 
 **Расширение Technical SEO.** Цели «50 проверок» нет. Новая проверка добавляется, только если она автоматизируется, даёт понятный ERROR/WARNING и конкретную Fix task. Ближайшие кандидаты: duplicate Title, duplicate H1. Redirects из sitemap уже проверяются (`page_redirect`, WARNING). Later: broken internal links, orphan pages, schema, hreflang. Core Web Vitals в ближайший roadmap не входят.
 
@@ -144,8 +144,8 @@ Project Registry
 - **Отдельный AI review CREATE / IMPROVE / IGNORE объединить с clustering.** Сейчас это второй AI-проход (`lib/seo-cluster-review.ts`, `app/api/seo-clusters/review`, миграция `0014_cluster_ai_review.sql`), который переписывает те же колонки, что уже заполняет clustering (`status`, `recommended_page_id`, `needs_new_page`, `reason`). Clustering уже умеет возвращать рекомендованную страницу и статус `Ignored`.
 - **AI merge кластеров не развивать сверх необходимого:** максимум один проход, после проверки на benchmark (`seo-benchmark-driveset-3providers.mts`, в репозитории на момент написания его нет). Инвариант остаётся: один intent не должен распадаться на несколько кластеров из-за границ батчей.
 - **Sitemap health и pages sync объединены (PR1):** один resolver и один читатель sitemap (см. «Текущий статус»).
-- **CTA rule сделать project-agnostic:** убрать из `ctaRuleBlock` блок «Специально для этого проекта», который описывает контактную форму olnoo.com, но попадает в задачи любого проекта.
-- **Create получает тот же factual guardrail, что Improve.**
+- **CTA rule project-agnostic — сделано (шаг A):** из `ctaRuleBlock` убран блок «Специально для этого проекта» (контактная форма olnoo.com); вместо него общее правило «Для любого проекта».
+- **Create получает тот же factual guardrail, что Improve — сделано (шаг A).**
 
 ## 6. Что не развиваем / планируем удалить
 
@@ -174,12 +174,12 @@ SEO pipeline должен быть language-agnostic. Язык проекта �
 - структура URL определяется существующей структурой проекта;
 - не требовать автоматически `/ru/` или `/en/`.
 
-Что зашито сейчас и подлежит исправлению (шаг A в разделе 12):
+Шаг A (раздел 12) сделан для генератора задач: `TaskLocale` — строка, а не `ru | en`; задача Create больше не требует `/ru/...` или `/en/...` и следует существующей URL-структуре проекта (без языкового префикса, если проект его не использует; с префиксом — если его используют существующие страницы). Язык задачи Improve: язык целевой страницы (URL-префикс, затем `pages.locale`), затем `projects.locale` (поле `locale` проекта передаётся в генератор из реестра), затем язык кластеров, затем `en`; Create: `projects.locale`, затем язык кластера, затем `en`. Язык — только метка задачи, ветвлений по нему нет.
 
-- `lib/seo-task-generator.ts`: тип языка только `ru | en`; задача Create требует URL вида `/ru/...` или `/en/...`. У DriveSet страницы без префикса (например `/polirovka-avto`).
-- `lib/improve-page-task.ts`: язык задачи берётся из URL-префикса страницы, затем из `pages.locale`, и сводится к `ru | en`; `projects.locale` в задачах не используется.
-- `lib/cluster-pages.ts`: фиксированный список префиксов `ru, en, kk, kz`; язык кластера без рекомендованной страницы угадывается по кириллице в primary keyword.
-- `project_seo_context` хранит регион, но не язык; язык проекта — в `projects.locale`.
+Что осталось:
+
+- `lib/cluster-pages.ts`: фиксированный список префиксов `ru, en, kk, kz`; язык кластера без рекомендованной страницы угадывается по кириллице в primary keyword (используется как запасной вариант после `projects.locale`).
+- `project_seo_context` хранит регион, но не язык; язык проекта — в `projects.locale`. Несколько языков у одного проекта пока не поддерживаются (v2).
 
 ## 8. Yandex + Google
 
@@ -270,7 +270,7 @@ SEO pipeline должен быть language-agnostic. Язык проекта �
 - нет выдуманных фактов (factual guardrail, раздел 2);
 - страница индексируема и не закрыта от нужных краулеров (для поиска ChatGPT — OAI-SearchBot в robots.txt); решение о GPTBot принимает владелец проекта.
 
-Сейчас `contentQualityGateBlock` в `lib/seo-task-generator.ts` этих пунктов не содержит; добавление — часть prompt/language patch (шаг A в разделе 12).
+Пункты в `contentQualityGateBlock` — укороченная версия списка выше; добавлено шагом A (пункт 8 «AI / GEO-читаемость» и строка `AI/GEO readiness` в отчёте QUALITY GATE; `lib/seo-task-generator.ts`).
 
 **AI finding → Improve / Create.**
 
@@ -348,13 +348,13 @@ Import
 
 **PARTIAL**
 
-- CTA rules — только инструкция в задаче; содержит блок «Специально для этого проекта», который попадает в задачи любого проекта.
+- CTA rules — только инструкция в задаче (project-agnostic с шага A); не проверяется кодом.
 - internal links — только инструкция в задаче.
-- factual guardrail — только Improve; в Create нет.
+- factual guardrail — инструкция в задаче, одинаковая для Improve и Create (шаг A); не проверяется кодом.
 - Coverage Check — только инструкция в задаче; результат не сохраняется и не проверяется кодом.
-- Quality Gate — то же; AI/GEO-пунктов (раздел 8a) в нём пока нет.
+- Quality Gate — то же; AI/GEO-пункты (раздел 8a) входят в тот же блок с шага A.
 - sitemap: один источник — `resolveSitemapUrl` в `lib/sitemap.ts` (`projects.sitemap_url`, иначе единственный fallback `domain + /sitemap.xml`) и один читатель `readSitemap`; им пользуются и Pages sync (`fetchSitemapUrls`), и Technical SEO. Число URL — страницы (index-файлы разворачиваются на один уровень, до 20 sitemap). Проверка не по расписанию, результат не сохраняется; Core Web Vitals, schema.org, контент, индексация и AI visibility не проверяются.
-- язык — зашит `ru | en`: задача Create требует `/ru/` или `/en/`; язык кластера без рекомендованной страницы определяется по кириллице; `projects.locale` в Create/Improve не используется.
+- язык — с шага A язык задачи берётся из страницы / `projects.locale` и не ограничен `ru | en`, префикс `/ru/` `/en/` не требуется; остаётся запасное определение языка кластера по кириллице (`lib/cluster-pages.ts`) и отсутствие нескольких языков у одного проекта.
 
 **NOT IMPLEMENTED**
 
@@ -379,10 +379,10 @@ Import
 Порядок фиксированный. Каждый шаг — отдельный PR (код, миграции, UI и доки не смешиваются без необходимости).
 
 0. **Закончить DriveSet `/polirovka-avto` Improve E2E** (сейчас IN PROGRESS, раздел 11): prompt → Claude → PR → merge → deploy → recheck → проверка результата.
-A. **Prompt/language patch:**
+A. **Prompt/language patch — реализован** (`lib/seo-task-generator.ts`, `lib/improve-page-task.ts`, тесты `lib/improve-page-task.test.ts`; golden-хэши Create обновлены осознанно):
    - factual guardrail в Create;
    - neutral / project-agnostic CTA;
-   - locale из Project Registry / `pages.locale`;
+   - locale из Project Registry / `pages.locale` (Improve: страница → проект → кластеры → `en`; Create: проект → кластер → `en`);
    - убрать обязательные hardcoded `/ru/` `/en/`;
    - AI/GEO-пункты в `contentQualityGateBlock` (раздел 8a);
    - internal links остаются частью задачи и Quality Gate.
@@ -407,7 +407,7 @@ G. **Cleanup legacy** (отдельным PR, не смешивать с дру�
 
 ## Справочник реализации
 
-Перенесён из `OLNOO_PROJECT_MAP.md` без изменения текста. Правок две: уровень заголовков повышен на один (`##` → `###`), ссылка на раздел AI Router получила имя файла. Описывает код на коммите `4e782a1`. Где справочник расходится с решением C (отдельный AI review, Create без guardrail, язык ru/en, SEO Map), действует решение C из разделов 4–7; справочник обновляется вместе с кодом.
+Перенесён из `OLNOO_PROJECT_MAP.md` без изменения текста. Правок две: уровень заголовков повышен на один (`##` → `###`), ссылка на раздел AI Router получила имя файла. Описывает код на коммите `4e782a1`. Где справочник расходится с решением C (отдельный AI review, Create без guardrail и язык ru/en — исправлено шагом A, SEO Map), действует решение C из разделов 4–7; справочник обновляется вместе с кодом.
 
 ### SEO → Import Wordstat
 

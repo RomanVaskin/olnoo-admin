@@ -7,7 +7,7 @@ import { useI18n } from '@/components/i18n-provider'
 import { useProjects, ProjectPicker } from '@/components/sections/seo-project-picker'
 import { displayStatus, hasHumanDecision, showCreateSuggestion, showNoPagePlaceholder } from '@/lib/cluster-decision'
 import { clusterLocale, getRecommendedPages, pagePath, pagesForLocale, searchPages, type PageOption } from '@/lib/cluster-pages'
-import { buildCreateTask, type TaskLocale } from '@/lib/seo-task-generator'
+import { buildCreateTask, DEFAULT_TASK_LOCALE, normalizeTaskLocale, type TaskLocale } from '@/lib/seo-task-generator'
 import { buildImproveTaskForPage } from '@/lib/improve-page-task'
 
 type ReviewStatus = 'pending' | 'confirmed' | 'no_page' | 'ignored'
@@ -489,16 +489,18 @@ export function SeoClusters() {
       totalFrequency: cluster.totalFrequency,
       keywords: cluster.keywords.map((k) => ({ query: k.query, frequency: k.frequency })),
     }
-    const taskLocale: TaskLocale = clusterLocale(cluster, pages) === 'ru' ? 'ru' : 'en'
+    // Create has no page yet: the project's default language (Project Registry), else the cluster's language, else the default.
+    const taskProject = { name: project.name, domain: project.domain, locale: project.locale }
+    const taskLocale: TaskLocale = normalizeTaskLocale(project.locale) ?? clusterLocale(cluster, pages) ?? DEFAULT_TASK_LOCALE
 
     if (kind === 'improve') {
       if (cluster.confirmedPageId == null) return
       // One task per page: every confirmed cluster of this page, regardless of which row was clicked.
-      const text = buildImproveTaskForPage({ name: project.name, domain: project.domain }, clusters, pages, cluster.confirmedPageId)
+      const text = buildImproveTaskForPage(taskProject, clusters, pages, cluster.confirmedPageId)
       if (!text) return
       setTaskPanel({ title: t.seoClusters.improvePage, text })
     } else {
-      const text = buildCreateTask({ name: project.name, domain: project.domain }, clusterInput, taskLocale)
+      const text = buildCreateTask(taskProject, clusterInput, taskLocale)
       setTaskPanel({ title: t.seoClusters.createPage, text })
     }
   }
