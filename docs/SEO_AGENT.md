@@ -86,7 +86,7 @@ Project Registry
 | sitemap/pages sync | `lib/sitemap.ts`, `lib/html-extract.ts`, `app/api/pages/sync` | работает |
 | Technical recheck | `lib/seo-health.ts`, `lib/technical-seo-fix-task.ts`, экран Technical SEO | работает вручную; последний результат хранится в `projects`, ручной recheck по проекту, сравнение `resolved` / `stillFailing` / `newIssues` (без истории) |
 | SEO Observer v1 | `lib/seo-observer.ts`, `lib/yandex-webmaster.ts`, `lib/yandex-metrika*.ts`, `/api/seo-observer`, `seo_snapshots` | **реализован (шаг C)**: ручной срез |
-| Decision rules | — | не реализованы |
+| Decision rules v1 | `lib/seo-decision-rules.ts`, `lib/seo-decision-input.ts`, `lib/seo-decision-store.ts`, `GET /api/seo-decisions` | **реализованы (шаг D)**: чистая функция, read-only |
 | before/after | — | не реализован |
 
 До подтверждения человеком выполняется два AI-прохода: relevance и clustering. Решение «страница есть / страницы нет» принимается в clustering (см. раздел 5). Сильная модель нужна только для итогового текста Improve/Create в Claude Code.
@@ -115,6 +115,21 @@ Project Registry
 - `projects`: `+ repository TEXT NULL` — **реализовано (шаг B, миграция `0018`)**, вместе с `seo_health_last_result JSONB` и `seo_health_checked_at TIMESTAMPTZ` (последний результат Technical SEO, без истории);
 - `seo_snapshots`: `id`, `project_id`, `provider`, `kind`, `date_from`, `date_to`, `taken_at`, `rows JSONB` — один срез Observer одного проекта; внутри нормализованные строки из раздела 8;
 - `page_changes`: `id`, `project_id`, `page_id`, `kind` (`improve` / `create` / `fix`), `pr_url`, `merged_at`, `cluster_ids`, `issue_codes`, `baseline_snapshot_id`, `after_snapshot_id`, `status`, `notes`.
+
+**Decision rules v1 — реализация (шаг D).** `decideSeoActions(input)` в `lib/seo-decision-rules.ts` — чистая детерминированная функция: без БД, сети, env, часов, AI; все входы передаются явно. Только предлагает: ничего не пишет, не хранит (таблицы opportunities / decisions нет, миграции нет), не запускает Executor. Адаптер `lib/seo-decision-input.ts` (чистый) приводит сохранённые данные к входу; `lib/seo-decision-store.ts` только читает (последний результат Technical SEO, последние срезы Observer, кластеры, страницы, `keywords.relevance_status`); `GET /api/seo-decisions?projectId=` (только GET, 404 для неизвестного/архивного проекта) и блок «Рекомендации» на экране SEO → Observer (без кнопок «Применить»; `NONE` в UI не показывается).
+
+- **Строгий порядок:** FIX → IGNORE → IMPROVE → CREATE_CANDIDATE → NONE.
+- **FIX.** Блокирующие коды — экспортируемые константы. Проект: `site_unavailable`, `robots_disallow_all`, `sitemap_missing`, `sitemap_unreadable`, `check_failed` (`PROJECT_BLOCKING_CODES`) — тогда результат только FIX, решений по кластерам проекта нет. Страница: `page_unreachable`, `page_http_error`, `noindex_in_sitemap` (`PAGE_BLOCKING_CODES`) — FIX только для этой страницы (по точному нормализованному URL), остальные страницы решаются как обычно. Остальные коды (`canonical_*`, `title_missing`, `h1_missing`, `page_redirect`, `robots_missing`, …) не блокируют и решений не порождают — они остаются в экране Technical SEO.
+- **IGNORE.** `review_status = ignored` (решение человека, не зависит от метрик); либо кластер без решения человека (`pending`), у которого **все** ключи явно `irrelevant` / `geo_mismatch` / `uncertain`. Неизвестная (NULL) и смешанная релевантность не игнорируются; решение человека (`confirmed`, `no_page`) выше истории AI; `ai_decision` не используется.
+- **IMPROVE.** Кластер `confirmed` с `confirmed_page_id`, intent не `navigational`, нет блокирующего FIX проекта/страницы, есть значимые показы Webmaster по ключам этих кластеров и взвешенная средняя позиция в диапазоне. **Пороги v1 (`SEO_DECISION_THRESHOLDS`): показы ≥ 10, позиция 8–30 включительно. Это стартовые значения, а не истина: будут калиброваться на реальных срезах.** Не хранятся в БД, Settings UI нет. **Одно действие IMPROVE на страницу:** несколько confirmed-кластеров одной страницы агрегируются (`clusterIds`, суммарные метрики), как и одна Improve-задача на страницу (`buildImproveTaskForPage`).
+- **Сопоставление запросов.** Только точное совпадение после нормализации (trim, lowercase, схлопывание пробелов, ё → е); без стемминга, fuzzy, embeddings, LLM. Один запрос Webmaster считается один раз на страницу.
+- **Агрегация Webmaster.** Показы и клики суммируются; средняя позиция — взвешенная по показам (без показов — `null`); CTR = сумма кликов / сумма показов * 100 (строковые CTR не усредняются).
+- **Запрос → страница.** Строки Webmaster не содержат URL. Связь только «запрос = точный ключ внутри подтверждённого человеком кластера → `confirmed_page_id` кластера» — это семантическое владение страницей человеком, **не атрибуция**: система не утверждает, что запрос привёл на эту страницу.
+- **Metrika.** `organic_pages` — отдельное page-level evidence (`organicVisits`) по точному нормализованному URL; не участвует в сопоставлении запросов и не блокирует IMPROVE (в том числе при 0 визитов).
+- **CREATE_CANDIDATE.** Только кластер с `review_status = no_page` (решение человека), без `confirmed_page_id`, intent не `navigational`, без проектного блокирующего FIX; показы Webmaster не обязательны (если запросы совпали — добавляются как evidence). `pending` (в том числе `ai_decision = create`) кандидатом не становится. Страница никогда не создаётся автоматически.
+- **Guard каннибализации.** Если точный нормализованный ключ `no_page`-кластера есть в confirmed-кластере существующей страницы → `NONE` с причиной `possible_existing_page_overlap` (один intent = одна страница).
+- **Нет Webmaster-среза:** IMPROVE по метрикам не предлагается (`NONE`: `no_webmaster_snapshot`), FIX / IGNORE / CREATE_CANDIDATE работают. Отсутствие среза не ошибка.
+- **Следующий шаг: E — Executor только для безопасного Technical SEO Fix.**
 
 Отдельной таблицы opportunities **не делаем**. Change Tracking не выделяем в отдельную систему: `page_changes` и два среза Observer достаточно для v1; результат before/after вычисляется из срезов. Для `fix` результат — состояние issue после повторной проверки. Миграции создаются только в тех PR, которые вводят эти сущности; точные значения `status` определяются при реализации.
 
@@ -205,7 +220,7 @@ SEO pipeline должен быть language-agnostic. Язык проекта �
 - **Хранение и сбои:** `seo_snapshots` (`project_id`, `provider` = `yandex_webmaster` | `yandex_metrika`, `kind` = `queries` | `organic_pages`, период, `taken_at`, `rows JSONB`). Каждый источник сохраняется независимо: если один недоступен, второй всё равно сохраняется, результат `partial`; ошибка показывается отдельно (`error` + kind, без токена и тела ответа); источник без настройки (`not_configured`: нет токена, нет счётчика, нет хоста) и источник с технической ошибкой **не создают пустой срез**; настоящий ответ с 0 строк сохраняется.
 - **`page_changes`:** создана только схема (миграция `0019`); Observer в неё ничего не пишет, UI/CRUD, связи с GitHub и расчёта before/after нет.
 - **Чего нет по замыслу:** scheduler, queue, Decision Engine, Executor, рекомендации, графики, связка query → URL, OAuth onboarding.
-- **Следующий шаг: D — Decision rules (чистая функция).**
+- **Следующий шаг после Observer:** D — Decision rules (реализован, см. «Decision rules v1 — реализация» в разделе 3a).
 
 Нормализованные данные (различия провайдеров закрываются на уровне connector, не в бизнес-логике SEO):
 
@@ -310,7 +325,7 @@ Import
 
 - Observer **read-only**.
 - Срез («Получить данные» в SEO → Observer) делается вручную, по одному проекту за запуск (детали — раздел 8, «Observer v1»): нормализованные строки записываются с датой и провайдером (`seo_snapshots`, раздел 3a); результат «до/после» вычисляется как разница двух срезов вокруг даты изменения страницы (`page_changes`).
-- Decision rules (раздел 3a) — следующий шаг после Observer v1 (шаг D в разделе 12), а не его часть.
+- Decision rules (раздел 3a, шаг D) — отдельная чистая функция поверх сохранённых срезов, а не часть Observer.
 - Никаких автоматических изменений SEO без подтверждения человека.
 - AI Visibility в v1 ограничивается AI/GEO-пунктами Quality Gate (раздел 8a); измерений AI в v1 нет.
 
@@ -398,7 +413,7 @@ A. **Prompt/language patch — реализован** (`lib/seo-task-generator.t
    - internal links остаются частью задачи и Quality Gate.
 B. **Technical SEO Fix closed loop — реализован** (миграция `0018`, `lib/seo-health-store.ts`, `/api/seo-health?mode=last|projectId`): `projects.repository`, последний результат в `projects`, ручной recheck по проекту, `resolved` / `stillFailing` / `newIssues` по `code + url`. Без scheduler, deploy hooks и истории. **Миграцию `0018` применить в production ДО merge/deploy** (код читает `projects.repository`).
 C. **SEO Observer v1 — реализован** (миграция `0019`, `lib/seo-observer.ts`, `/api/seo-observer`, экран SEO → Observer): Yandex Webmaster (популярные запросы) + Metrika (organic по landing page), `seo_snapshots`, `page_changes` (только схема); ручной срез, один проект за запуск (раздел 8, «Реализация Observer v1»). Следующий шаг — D.
-D. **Decision rules как чистая функция** (раздел 3a).
+D. **Decision rules как чистая функция — реализованы** (`lib/seo-decision-rules.ts`, раздел 3a «Decision rules v1 — реализация»). Следующий шаг — E.
 E. **Executor только для Technical SEO Fix** (раздел 3a); merge вручную.
 F. **Later:** Google Search Console, AI Visibility (раздел 8a), multilingual, scheduler, более широкий Executor; всё из списка «Later / not now» в разделе 6.
 G. **Cleanup legacy** (отдельным PR, не смешивать с другими изменениями). Предварительно проверить production data: `count(*)` в `keyword_pages`; используется ли SEO Map; как часто человек меняет AI review decision. Затем убрать второй source of truth (SEO Map / `keyword_pages` / `keywords.cluster`) и отдельный AI review. Шаг не зависит от A–F и выполняется, когда подтверждены production data.
