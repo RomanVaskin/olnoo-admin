@@ -15,6 +15,7 @@ import { SeoMap } from '@/components/sections/seo-map'
 import { KeywordsCleanup } from '@/components/sections/keywords-cleanup'
 import { SeoClusters } from '@/components/sections/seo-clusters'
 import { SeoHealth } from '@/components/sections/seo-health'
+import { SeoObserver } from '@/components/sections/seo-observer'
 import { WordstatImport } from '@/components/sections/wordstat-import'
 import { CrmOverview } from '@/components/sections/crm-overview'
 import { LeadsView } from '@/components/sections/leads-view'
@@ -68,6 +69,7 @@ const adminGroups: NavGroup[] = [
           { id: 'seo-cleanup' },
           { id: 'seo-clusters' },
           { id: 'seo-health' },
+          { id: 'seo-observer' },
         ],
       },
       {
@@ -317,6 +319,7 @@ export function AppShell() {
           {active === 'seo-cleanup' && <KeywordsCleanup />}
           {active === 'seo-clusters' && <SeoClusters />}
           {active === 'seo-health' && <SeoHealth />}
+          {active === 'seo-observer' && <SeoObserver />}
           {active === 'crm-overview' && (
             <CrmOverview project={project} onProjectChange={setProject} />
           )}

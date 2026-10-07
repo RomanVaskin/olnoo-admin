@@ -17,6 +17,8 @@ import {
   dailyQuery,
   directSegmentQuery,
   emptyTestSegment,
+  organicPagesQuery,
+  parseOrganicPages,
   parseDailyGoals,
   parseDirectSegment,
   parseTestSegment,
@@ -35,6 +37,7 @@ import {
   type GoalSpec,
   type ManagedGoal,
   type MetrikaPayload,
+  type OrganicPathRow,
   type StatQuery,
   type StatResponse,
 } from './yandex-metrika-report.ts'
@@ -265,5 +268,11 @@ export function createMetrikaClient(config: MetrikaConfig, deps: MetrikaDeps = {
     return { dailyGoals, directSegment, testSegment, sampled, warnings }
   }
 
-  return { observe, observeUnifiedExtras, stat }
+  /** SEO Observer: organic landing pages (path + visits), read-only, one request. */
+  async function observeOrganicPages(project: string, period: ResolvedPeriod): Promise<OrganicPathRow[]> {
+    const id = resolveMetrikaProject(project).counterId
+    return parseOrganicPages(await stat(organicPagesQuery(), id, period))
+  }
+
+  return { observe, observeUnifiedExtras, observeOrganicPages, stat }
 }
