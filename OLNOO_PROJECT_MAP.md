@@ -435,11 +435,11 @@ The SEO module (keywords, query cleanup, AI clustering, human review, Improve/Cr
 
 Status (checked against the code on `main` `4e782a1`; production not re-checked):
 
-- Works: Wordstat import, relevance cleanup, AI clustering, human cluster review (`confirmed_page_id`), Improve/Create task generation, pages sync, on-demand site/sitemap check.
+- Works: Wordstat import, relevance cleanup, AI clustering, human cluster review (`confirmed_page_id`), Improve/Create task generation, pages sync, on-demand Technical SEO preflight (site, robots.txt, sitemap, per-URL status/canonical/index/Title/H1; see `docs/SEO_AGENT.md`).
 - Not implemented: Yandex Webmaster / Google Search Console integration, SEO Observer, indexing tracking, before/after tracking, PR tracking.
 
 Production facts that stay here:
 
 - Admin screens (`?screen=<id>&project=<slug>`): `seo-pages`, `seo-keywords`, `seo-map`, `seo-wordstat`, `seo-cleanup`, `seo-clusters`, `seo-health` («Technical SEO»).
-- API routes (`olnoo-admin`): `/api/keywords` (+ `/import`, `/import/delete`, `/relevance`), `/api/seo-clusters` (+ `/generate`, `/review`), `/api/pages` (+ `/sync`), `/api/projects/seo-context`, `/api/seo-map`, `/api/seo-health`.
+- API routes (`olnoo-admin`): `/api/keywords` (+ `/import`, `/import/delete`, `/relevance`), `/api/seo-clusters` (+ `/generate`, `/review`), `/api/pages` (+ `/sync`), `/api/projects/seo-context`, `/api/seo-map`, `/api/seo-health` (all projects with a domain; no per-project allow-list; sitemap source = `resolveSitemapUrl` in `lib/sitemap.ts`, shared with `/api/pages/sync`).
 - Tables: `keywords`, `imports`, `import_batches`, `import_batch_keywords`, `pages`, `keyword_pages` (legacy), `seo_clusters`, `seo_cluster_keywords`, `project_seo_context`. SEO migrations (`0002`, `0003`, `0011`–`0014`) are applied manually, not by the deploy workflow; verify their production state before relying on it (last recorded status: `docs/SEO_AGENT.md` → «Справочник реализации»).

@@ -7,8 +7,8 @@ export async function GET(req: Request) {
 
   const { rows } = await pool.query(
     projectId
-      ? 'SELECT id, name, domain FROM projects WHERE id = $1 ORDER BY id ASC'
-      : 'SELECT id, name, domain FROM projects ORDER BY id ASC',
+      ? 'SELECT id, name, domain, sitemap_url FROM projects WHERE id = $1 ORDER BY id ASC'
+      : "SELECT id, name, domain, sitemap_url FROM projects WHERE btrim(domain) <> '' ORDER BY id ASC",
     projectId ? [projectId] : [],
   )
 
@@ -28,8 +28,16 @@ export async function GET(req: Request) {
           projectId: p.id,
           projectName: p.name,
           domain: p.domain,
+          sitemapUrl: null,
           site: { status: 'Error', httpStatus: null },
+          robots: { status: 'Warning', httpStatus: null, disallowAll: false },
           sitemap: { status: 'Error', httpStatus: null, urlCount: null },
+          pages: [],
+          pagesTruncated: false,
+          issues: [{ severity: 'ERROR', code: 'check_failed', message: 'The check itself failed' }],
+          errors: 1,
+          warnings: 0,
+          overall: 'Error',
           checkedAt: new Date().toISOString(),
         }
       }
