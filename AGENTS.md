@@ -209,7 +209,7 @@ Rules for every public site, in every project:
 - **AI recommendation is not human confirmation.** A person confirms which page a cluster belongs to.
 - **Do not invent facts:** no invented clients, case studies, numbers, results, partners, certificates, awards or experience. Keywords describe search demand, not business facts; an unsupported claim is rewritten neutrally or left out.
 - CTA and internal links reuse the project's existing contact/conversion flow and pages; do not create a new form when a working one exists. For `olnoo.com`, reuse the existing contact / ProjectRequest flow and do not change the working Resend/email flow unless needed.
-- Every public site has `sitemap.xml`. For Next.js App Router prefer `app/sitemap.ts` generated from routes; do not maintain static XML by hand. Include public indexable pages; exclude admin, dashboard, API, private/auth and noindex pages. `robots.txt` is not currently mandatory for the OLNOO SEO workflow unless needed.
+- Every public site has `sitemap.xml`. For Next.js App Router prefer `app/sitemap.ts` generated from routes; do not maintain static XML by hand. Include public indexable pages; exclude admin, dashboard, API, private/auth and noindex pages. A new public site also must have `robots.txt` — a mandatory technical SEO minimum; for Next.js the standard path is `app/robots.ts`, and a simple valid file is enough (no complex manual configuration required). Sitemap stays mandatory too.
 - Minimum search-engine setup for a public site: Google Search Console, Yandex Webmaster, Bing Webmaster Tools, and `sitemap.xml`. IndexNow may be added later if it reduces manual work. Which of these OLNOO Admin reads data from is tracked in `docs/SEO_AGENT.md`.
 
 # OLNOO Admin
