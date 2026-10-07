@@ -95,7 +95,7 @@ Wordstat / semantic source
 
 - **Отдельный AI review CREATE / IMPROVE / IGNORE объединить с clustering.** Сейчас это второй AI-проход (`lib/seo-cluster-review.ts`, `app/api/seo-clusters/review`, миграция `0014_cluster_ai_review.sql`), который переписывает те же колонки, что уже заполняет clustering (`status`, `recommended_page_id`, `needs_new_page`, `reason`). Clustering уже умеет возвращать рекомендованную страницу и статус `Ignored`.
 - **AI merge кластеров не развивать сверх необходимого:** максимум один проход, после проверки на benchmark (`seo-benchmark-driveset-3providers.mts`, в репозитории на момент написания его нет). Инвариант остаётся: один intent не должен распадаться на несколько кластеров из-за границ батчей.
-- **Sitemap health объединить с pages sync.** Сейчас два независимых пути чтения sitemap (см. «Текущий статус»).
+- **Sitemap health и pages sync объединены (PR1):** один resolver и один читатель sitemap (см. «Текущий статус»).
 - **CTA rule сделать project-agnostic:** убрать из `ctaRuleBlock` блок «Специально для этого проекта», который описывает контактную форму olnoo.com, но попадает в задачи любого проекта.
 - **Create получает тот же factual guardrail, что Improve.**
 
@@ -275,7 +275,7 @@ Import
 - aggregation всех confirmed clusters одной страницы (тесты `lib/improve-page-task.test.ts`, `lib/cluster-decision.test.ts`, `lib/cluster-pages.test.ts` — 23 теста — проходят);
 - Create/Improve prompt generation (генерируется текст задачи; страница автоматически не создаётся);
 - pages sync;
-- basic sitemap/health checks: экран Technical SEO (`seo-health`, `GET /api/seo-health`) проверяет доступность сайта и наличие sitemap при открытии экрана и по кнопке «Check all».
+- Technical SEO preflight (PR1): экран Technical SEO (`seo-health`, `GET /api/seo-health`, логика `lib/seo-health.ts`) для каждого проекта из таблицы `projects` с domain проверяет сайт (HTTP), `robots.txt` (есть/нет, `Disallow: /` для `User-agent: *`), sitemap (статус, число URL) и каждый URL из sitemap (до 100 за проверку; HTTP, canonical, index/noindex, Title, H1). Severity: ERROR — сайт недоступен, sitemap отсутствует/нечитаем, URL 4xx/5xx/недоступен, noindex при URL в sitemap, `Disallow: /`; WARNING — нет robots.txt (или не читается), нет/чужой canonical, нет Title/H1, редирект. Проверка по открытию экрана и кнопке «Проверить все», не по расписанию, результат не хранится.
 - AI review CREATE/IMPROVE/IGNORE — работает как отдельный проход (подлежит объединению с clustering, раздел 5).
 - SEO Map / `keyword_pages` — работает как legacy (не развивать, раздел 6).
 
@@ -286,7 +286,7 @@ Import
 - factual guardrail — только Improve; в Create нет.
 - Coverage Check — только инструкция в задаче; результат не сохраняется и не проверяется кодом.
 - Quality Gate — то же; AI/GEO-пунктов (раздел 8a) в нём пока нет.
-- sitemap health — два независимых пути: `seo-health` строит `domain + /sitemap.xml`, pages sync читает `projects.sitemap_url`; число URL для sitemap index считает дочерние sitemap, а не страницы; проверка не по расписанию, результат не сохраняется.
+- sitemap: один источник — `resolveSitemapUrl` в `lib/sitemap.ts` (`projects.sitemap_url`, иначе единственный fallback `domain + /sitemap.xml`) и один читатель `readSitemap`; им пользуются и Pages sync (`fetchSitemapUrls`), и Technical SEO. Число URL — страницы (index-файлы разворачиваются на один уровень, до 20 sitemap). Проверка не по расписанию, результат не сохраняется; Core Web Vitals, schema.org, контент, индексация и AI visibility не проверяются.
 - язык — зашит `ru | en`: задача Create требует `/ru/` или `/en/`; язык кластера без рекомендованной страницы определяется по кириллице.
 
 **NOT IMPLEMENTED**

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
-import { fetchSitemapUrls } from '@/lib/sitemap'
+import { fetchSitemapUrls, resolveSitemapUrl } from '@/lib/sitemap'
 import { fetchPageMeta } from '@/lib/html-extract'
 
 const CONCURRENCY = 5
@@ -13,7 +13,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'projectId is required' }, { status: 400 })
   }
 
-  const projectRes = await pool.query('SELECT id, sitemap_url FROM projects WHERE id = $1', [
+  const projectRes = await pool.query('SELECT id, domain, sitemap_url FROM projects WHERE id = $1', [
     projectId,
   ])
   const project = projectRes.rows[0]
@@ -21,9 +21,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Project not found' }, { status: 404 })
   }
 
+  const sitemapUrl = resolveSitemapUrl(project)
+  if (!sitemapUrl) {
+    return NextResponse.json({ error: 'Project has no valid sitemap URL' }, { status: 400 })
+  }
+
   let urls: string[]
   try {
-    urls = await fetchSitemapUrls(project.sitemap_url)
+    urls = await fetchSitemapUrls(sitemapUrl)
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
     console.error('pages/sync: sitemap fetch failed', detail)
