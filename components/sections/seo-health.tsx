@@ -3,6 +3,8 @@
 import { Fragment, useCallback, useState } from 'react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
+import { TaskPanel, type TaskPanelState } from '@/components/sections/seo-clusters'
+import { buildTechnicalSeoFixTask } from '@/lib/technical-seo-fix-task'
 
 type CheckStatus = 'OK' | 'Warning' | 'Missing' | 'Error'
 
@@ -45,6 +47,7 @@ export function SeoHealth() {
   const [open, setOpen] = useState<number | null>(null)
   // The preflight is expensive (up to 100 URLs per project): it runs only when the user presses the button, never on mount.
   const [checked, setChecked] = useState(false)
+  const [fixPanel, setFixPanel] = useState<TaskPanelState | null>(null)
 
   const runCheck = useCallback(() => {
     setLoading(true)
@@ -62,6 +65,11 @@ export function SeoHealth() {
 
   const issuesLabel = (r: ProjectHealth) =>
     r.errors + r.warnings === 0 ? '0' : `${r.errors} ${t.seoHealth.errorsWord} · ${r.warnings} ${t.seoHealth.warningsWord}`
+  // One prompt per click: a single issue, or all issues of this project (no duplicates, nothing from other projects).
+  const openFix = (r: ProjectHealth, issues: Issue[]) => {
+    const text = buildTechnicalSeoFixTask(r, issues)
+    if (text) setFixPanel({ title: `${t.seoHealth.fixTaskTitle} — ${r.projectName}`, text })
+  }
   const dash = (v: string | number | null) => (v === null || v === '' ? t.seoHealth.missing : v)
 
   return (
@@ -151,15 +159,31 @@ export function SeoHealth() {
                         {r.issues.length === 0 ? (
                           <p className="label-mono text-muted-foreground">{t.seoHealth.noIssues}</p>
                         ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => openFix(r, r.issues)}
+                              className="label-mono w-fit border border-foreground bg-foreground px-4 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground"
+                            >
+                              {t.seoHealth.fixAll}
+                            </button>
                           <ul className="flex flex-col gap-1.5">
                             {r.issues.map((i, n) => (
                               <li key={n} className="flex flex-wrap items-baseline gap-x-3 text-sm">
                                 <span className={`label-mono ${i.severity === 'ERROR' ? 'text-destructive' : 'text-muted-foreground'}`}>{i.severity}</span>
                                 <span>{i.message}</span>
                                 {i.url && <span className="font-mono text-xs text-muted-foreground">{i.url}</span>}
+                                <button
+                                  type="button"
+                                  onClick={() => openFix(r, [i])}
+                                  className="label-mono text-foreground/80 underline underline-offset-4 hover:text-foreground"
+                                >
+                                  {t.seoHealth.fix}
+                                </button>
                               </li>
                             ))}
                           </ul>
+                          </>
                         )}
                         {r.pages.length > 0 && (
                           <div className="flex flex-col gap-2">
@@ -204,6 +228,7 @@ export function SeoHealth() {
           </tbody>
         </TableShell>
       )}
+      {fixPanel && <TaskPanel panel={fixPanel} onClose={() => setFixPanel(null)} />}
     </div>
   )
 }

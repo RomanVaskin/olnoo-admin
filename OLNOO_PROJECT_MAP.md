@@ -435,7 +435,7 @@ The SEO module (keywords, query cleanup, AI clustering, human review, Improve/Cr
 
 Status (checked against the code on `main` `4e782a1`; production not re-checked):
 
-- Works: Wordstat import, relevance cleanup, AI clustering, human cluster review (`confirmed_page_id`), Improve/Create task generation, pages sync, on-demand Technical SEO preflight (site, robots.txt, sitemap, per-URL status/canonical/index/Title/H1; see `docs/SEO_AGENT.md`).
+- Works: Wordstat import, relevance cleanup, AI clustering, human cluster review (`confirmed_page_id`), Improve/Create task generation, pages sync, on-demand Technical SEO preflight (site, robots.txt, sitemap, per-URL status/canonical/index/Title/H1; see `docs/SEO_AGENT.md`); per-issue / «Fix all» Technical SEO Fix task prompt (`lib/technical-seo-fix-task.ts`, no persistence, no writes to other repositories).
 - Not implemented: Yandex Webmaster / Google Search Console integration, SEO Observer, indexing tracking, before/after tracking, PR tracking.
 
 Production facts that stay here:
