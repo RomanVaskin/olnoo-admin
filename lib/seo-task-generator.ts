@@ -3,11 +3,23 @@
 // already loaded by the SEO Clusters view. See AGENTS.md task spec for the rules
 // this template encodes.
 
-export type TaskLocale = 'ru' | 'en'
+/** Language code of the page/project ('ru', 'en', 'kk', 'de', …). Not limited to ru|en: the task never branches on it. */
+export type TaskLocale = string
+
+/** Fallback only when neither the page, the project nor the cluster gives a language. */
+export const DEFAULT_TASK_LOCALE: TaskLocale = 'en'
+
+/** Trimmed, lower-cased language code, or null when empty/missing. */
+export function normalizeTaskLocale(value: string | null | undefined): TaskLocale | null {
+  const v = value?.trim().toLowerCase()
+  return v ? v : null
+}
 
 export type TaskProject = {
   name: string
   domain: string
+  /** Default language of the project (`projects.locale` of the Project Registry), when set. */
+  locale?: string | null
 }
 
 export type TaskKeyword = {
@@ -163,11 +175,12 @@ function ctaRuleBlock(kind: 'improve' | 'create', intent: string): string {
   }
 
   lines.push(
-    'Специально для этого проекта:',
-    '- использовать существующую contact form / contact flow;',
-    '- не создавать новую форму;',
-    '- не менять существующий email/уведомляющий flow;',
-    '- не менять работу contact form.',
+    'Для любого проекта:',
+    '- использовать существующий CTA / contact / conversion flow этого проекта;',
+    '- сначала посмотреть CTA ближайших service pages и повторить их pattern;',
+    '- не создавать новую форму без необходимости;',
+    '- не менять существующую логику отправки заявок и уведомлений;',
+    '- сохранять существующий design pattern CTA.',
   )
 
   return lines.join('\n')
@@ -332,6 +345,19 @@ function contentQualityGateBlock(): string {
     'Не делать полный редизайн.',
     'Не добавлять новые визуальные паттерны без необходимости.',
     '',
+    '8. AI / GEO-читаемость (часть обычной Search SEO, не отдельный текст).',
+    '',
+    'Проверить:',
+    '- ответ на основной intent страницы ясен сразу, без keyword stuffing;',
+    '- структура страницы однозначна для поисковых и AI-систем: понятные H1/H2/H3 по смысловым',
+    '  sub-intents, один основной intent;',
+    '- важные business facts (кто, что, где, условия) сформулированы явно и непротиворечиво —',
+    '  только подтверждённые данными проекта;',
+    '- FAQ используется только там, где он действительно полезен для читателя;',
+    '- не создан отдельный GEO/AEO-текст: обычная Search SEO остаётся основой;',
+    '- не добавлены llms.txt, новая schema.org-разметка и другие специальные AI-файлы;',
+    '- factual guardrail (BUSINESS FACTS / SEMANTIC SAFETY RULE) соблюдён.',
+    '',
     'ОБЯЗАТЕЛЬНОЕ ПРАВИЛО:',
     '',
     'Любое утверждение о факте, которого нет в исходном проекте или в предоставленных',
@@ -361,6 +387,9 @@ function contentQualityGateBlock(): string {
     '',
     'Design preserved:',
     'PASS / FAIL',
+    '',
+    'AI/GEO readiness:',
+    'PASS / FIXED / FAIL',
     '',
     'Если обнаружена проблема — сначала исправь её и только потом завершай задачу.',
     'Не завершать задачу со статусом FAIL.',
@@ -414,8 +443,8 @@ function businessFactsGuardBlock(): string {
     '- наличие оборудования, партнёрство, сертификат;',
     '- любую другую возможность бизнеса.',
     '',
-    'Перед добавлением такого факта найди подтверждение в существующем проекте, текущей странице',
-    'или предоставленных project facts. Если подтверждения нет:',
+    'Перед добавлением такого факта найди подтверждение в существующем проекте (включая ближайшие',
+    'страницы и текущую страницу, если она есть) или предоставленных project facts. Если подтверждения нет:',
     '1. НЕ добавлять утверждение на страницу.',
     '2. НЕ пытаться механически покрыть keyword.',
     '3. Считать такой keyword/sub-intent intentionally not covered.',
@@ -435,7 +464,7 @@ function businessFactsGuardBlock(): string {
     'C. Самостоятельный search intent: группа запросов с отдельным commercial intent,',
     'отдельным сценарием/аудиторией/услугой, потенциально требующая другого оффера, цены, CTA',
     'или содержания и логичнее раскрываемая отдельной посадочной. НЕ покрывай её искусственно на',
-    'этой странице и НЕ создавай новую страницу. Вынеси в блок CANDIDATE SEPARATE PAGES финального',
+    'этой странице и НЕ создавай для неё новую страницу в рамках этой задачи. Вынеси в блок CANDIDATE SEPARATE PAGES финального',
     'SEO COVERAGE (тема, основные запросы, суммарная/доступная частотность, почему это отдельный',
     'intent, recommended action: review for separate page). Это не Missing significant topic и не',
     'FAIL. Кандидатом может быть только самостоятельная группа запросов, а не каждый long-tail',
@@ -547,7 +576,6 @@ export function buildImproveTask(
 }
 
 export function buildCreateTask(project: TaskProject, cluster: TaskCluster, locale: TaskLocale): string {
-  const localePrefix = locale === 'ru' ? '/ru/...' : '/en/...'
   return [
     `Работай только в проекте сайта ${project.name} (${projectUrl(project.domain)}).`,
     '',
@@ -577,17 +605,20 @@ export function buildCreateTask(project: TaskProject, cluster: TaskCluster, loca
     '- короткий;',
     '- понятный;',
     '- соответствует intent;',
-    `- соответствует locale (${locale});`,
-    `- RU → /ru/..., EN → /en/... (для этого кластера: ${localePrefix});`,
+    '- следует существующей URL-структуре проекта (изучи URL существующих страниц);',
+    '- без языкового префикса (/ru/, /en/ и т. п.), если проект его не использует;',
+    '- если существующие страницы проекта используют префикс языка — сохрани его для языка этой страницы;',
     '- не создавать несколько URL под синонимы.',
     '',
-    seoRuleBlock(),
+    businessFactsGuardBlock(),
+    '',
+    seoRuleBlock(false, true),
     '',
     ctaRuleBlock('create', cluster.intent),
     '',
     internalLinksRuleBlock('create'),
     '',
-    coverageCheckBlock(),
+    coverageCheckBlock(false, true),
     '',
     contentQualityGateBlock(),
     '',

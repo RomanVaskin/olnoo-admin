@@ -2,7 +2,16 @@
 // human-confirmed (review_status = confirmed) for that page (confirmed_page_id = page.id).
 // Pure — no DB/network — so every "Улучшить страницу" button yields the same prompt for a page.
 
-import { buildImproveTask, type TaskAnalyticsCluster, type TaskCluster, type TaskLocale, type TaskPage, type TaskProject } from './seo-task-generator.ts'
+import {
+  buildImproveTask,
+  DEFAULT_TASK_LOCALE,
+  normalizeTaskLocale,
+  type TaskAnalyticsCluster,
+  type TaskCluster,
+  type TaskLocale,
+  type TaskPage,
+  type TaskProject,
+} from './seo-task-generator.ts'
 import { clusterLocale, pageLocale, type ClusterPageInput, type PageOption } from './cluster-pages.ts'
 
 export type ImproveClusterInput = ClusterPageInput &
@@ -53,11 +62,14 @@ export function buildImproveTaskForPage(
     ? { url: matched.url, title: matched.title, h1: matched.h1, description: matched.description, locale: matched.locale }
     : { url: group[0].confirmedPageUrl ?? '', title: null, h1: null, description: null, locale: null }
 
-  // The task targets one page, so its own language wins (URL prefix, then stored locale); only a
-  // language-neutral page falls back to the clusters' language (first cluster that has one).
-  const loc =
-    (matched ? pageLocale(matched) : null) ?? group.map((c) => clusterLocale(c, pages)).find((l) => l != null) ?? null
-  const locale: TaskLocale = loc === 'ru' ? 'ru' : 'en'
+  // Language of the task, in order: the target page's own language (URL prefix, then stored locale); the project's default
+  // language (`projects.locale`, passed in `project.locale`); the clusters' language (first cluster that has one); then the
+  // safe default. The language is only a label of the task: nothing here branches on it and no URL prefix is required.
+  const locale: TaskLocale =
+    (matched ? pageLocale(matched) : null) ??
+    normalizeTaskLocale(project.locale) ??
+    normalizeTaskLocale(group.map((c) => clusterLocale(c, pages)).find((l) => l != null)) ??
+    DEFAULT_TASK_LOCALE
   const taskClusters: TaskCluster[] = group.map((c) => ({
     name: c.name,
     primaryKeyword: c.primaryKeyword,

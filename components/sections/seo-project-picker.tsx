@@ -7,6 +7,8 @@ export type SeoProject = {
   name: string
   slug: string | null
   domain: string
+  /** Default language of the project (Project Registry `projects.locale`), null = not set. */
+  locale: string | null
   pagesCount: number
   keywordsCount: number
   status: string
@@ -29,6 +31,7 @@ export function useProjects() {
             name: p.name,
             slug: p.slug ?? null,
             domain: p.domain,
+            locale: p.locale ?? null,
             pagesCount: p.pages_count ?? 0,
             keywordsCount: p.keywords_count ?? 0,
             status: p.status,
