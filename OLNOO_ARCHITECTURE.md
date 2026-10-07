@@ -52,7 +52,7 @@ Project is the main connecting object between modules. One Client can have sever
 Full description, current status and roadmap: [`docs/SEO_AGENT.md`](docs/SEO_AGENT.md) (single source of truth). Principles only:
 
 - **Minimal SEO module + read-only SEO Observer.** No separate SEO Agent / Content Agent / Developer Agent / Orchestrator until a real need appears. The page change is made by Claude Code from a generated task, with a manual PR; nothing in SEO changes without human confirmation.
-- One search intent = one page; no thin pages for synonyms. Public sites must have a sitemap.
+- One search intent = one page; no thin pages for synonyms. Public sites must have a sitemap and a `robots.txt` (Next.js: `app/robots.ts`).
 - AI recommendation is not human confirmation. `seo_clusters.confirmed_page_id` (with `review_status`) is the only source of truth for cluster → page; a keyword's page is derived from its cluster, not stored separately.
 - Improve uses all confirmed clusters of the page in one task. Improve and Create must carry the factual guardrail, CTA and internal-link rules and the Coverage/Quality Gate review — as part of the prompt and PR review, not as DB entities (current gaps: status in `docs/SEO_AGENT.md`).
 - Language, market and region are properties of the project's SEO context; no per-language branches of business logic.

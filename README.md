@@ -29,7 +29,7 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 Every new public OLNOO Next.js site must ship with:
 
 - `app/sitemap.ts`
-- `app/robots.ts` (or an equivalent `robots.txt`)
+- `app/robots.ts` (the standard Next.js path; a plain `robots.txt` is equivalent) — `robots.txt` is a mandatory technical SEO minimum, a simple valid file is enough (no complex manual configuration required)
 - a production origin
 - public, indexable routes listed in the sitemap
 - private/admin/API/noindex routes excluded from it
