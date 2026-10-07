@@ -6,6 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
 import type { UnifiedPayload } from './unified-analytics.ts'
+import { QUERIES_TOOL_DESCRIPTION, QUERIES_TOOL_NAME, type DirectQueriesDto } from './mcp-direct-queries.ts'
 
 export const SUMMARY_PERIODS = ['today', 'yesterday', 'last7'] as const
 export type SummaryPeriod = (typeof SUMMARY_PERIODS)[number]
@@ -68,7 +69,9 @@ export function toSummaryDto(payload: Pick<UnifiedPayload, 'period' | 'direct' |
 
 const JSON_HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', Pragma: 'no-cache' }
 
-function createServer(getSummary: (period: SummaryPeriod) => Promise<SummaryDto>): McpServer {
+export type QueriesLoader = (period: SummaryPeriod) => Promise<DirectQueriesDto>
+
+function createServer(getSummary: (period: SummaryPeriod) => Promise<SummaryDto>, getQueries?: QueriesLoader): McpServer {
   const server = new McpServer({ name: 'olnoo', version: '1.0.0' })
   server.registerTool(
     SUMMARY_TOOL_NAME,
@@ -82,15 +85,30 @@ function createServer(getSummary: (period: SummaryPeriod) => Promise<SummaryDto>
       }
     },
   )
+  // Registered ONLY for a request that carries the server key (see hasMcpKey); otherwise the tool does not exist for that caller.
+  if (getQueries) {
+    server.registerTool(
+      QUERIES_TOOL_NAME,
+      { description: QUERIES_TOOL_DESCRIPTION, inputSchema: SUMMARY_INPUT_SHAPE, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+      async ({ period }) => {
+        try {
+          return { content: [{ type: 'text' as const, text: JSON.stringify(await getQueries(period)) }] }
+        } catch {
+          return { isError: true, content: [{ type: 'text' as const, text: 'Direct search queries are temporarily unavailable.' }] }
+        }
+      },
+    )
+  }
   return server
 }
 
 /** POST only (405 for everything else). A fresh server + transport per request: nothing is shared between calls. */
-export async function handleMcpRequest(req: Request, getSummary: (period: SummaryPeriod) => Promise<SummaryDto>): Promise<Response> {
+/** `getQueries` is passed by the caller only when the request is authorised for the (non-public) search-query tool. */
+export async function handleMcpRequest(req: Request, getSummary: (period: SummaryPeriod) => Promise<SummaryDto>, getQueries?: QueriesLoader): Promise<Response> {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'method not allowed' }), { status: 405, headers: { ...JSON_HEADERS, Allow: 'POST' } })
   }
-  const server = createServer(getSummary)
+  const server = createServer(getSummary, getQueries)
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
   await server.connect(transport)
   const res = await transport.handleRequest(req)
