@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useState } from 'react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
 
@@ -43,9 +43,12 @@ export function SeoHealth() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<number | null>(null)
+  // The preflight is expensive (up to 100 URLs per project): it runs only when the user presses the button, never on mount.
+  const [checked, setChecked] = useState(false)
 
   const runCheck = useCallback(() => {
     setLoading(true)
+    setChecked(true)
     setError(null)
     fetch('/api/seo-health')
       .then((res) => {
@@ -56,12 +59,6 @@ export function SeoHealth() {
       .catch(() => setError(t.seoHealth.checkError))
       .finally(() => setLoading(false))
   }, [t.seoHealth.checkError])
-
-  useEffect(() => {
-    runCheck()
-    // Runs once on mount — re-checks are triggered explicitly via the Check all button.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const issuesLabel = (r: ProjectHealth) =>
     r.errors + r.warnings === 0 ? '0' : `${r.errors} ${t.seoHealth.errorsWord} · ${r.warnings} ${t.seoHealth.warningsWord}`
@@ -86,7 +83,8 @@ export function SeoHealth() {
 
       {loading && <p className="label-mono text-muted-foreground">{t.seoHealth.checking}</p>}
       {!loading && error && <p className="label-mono text-destructive">{error}</p>}
-      {!loading && !error && rows.length === 0 && (
+      {!checked && <p className="label-mono text-muted-foreground">{t.seoHealth.notRun}</p>}
+      {checked && !loading && !error && rows.length === 0 && (
         <p className="label-mono text-muted-foreground">{t.seoHealth.empty}</p>
       )}
 

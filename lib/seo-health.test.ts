@@ -187,3 +187,10 @@ test('route: all projects with a domain, no allow-list, sitemap_url is selected,
   assert.doesNotMatch(route, /driveset/i)
   assert.match(route, /check_failed/)
 })
+
+test('screen: no automatic preflight on mount — the check starts only from the button', () => {
+  const ui = readFileSync(new URL('../components/sections/seo-health.tsx', import.meta.url), 'utf8')
+  assert.doesNotMatch(ui, /useEffect/)
+  assert.equal([...ui.matchAll(/fetch\('\/api\/seo-health'\)/g)].length, 1)
+  assert.match(ui, /onClick=\{runCheck\}/)
+})

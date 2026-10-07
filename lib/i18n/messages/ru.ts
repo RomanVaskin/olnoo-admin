@@ -448,6 +448,7 @@ export const ru: Messages = {
     checking: 'Проверка…',
     checkError: 'Не удалось выполнить проверку. Попробуйте ещё раз.',
     empty: 'Проектов пока нет.',
+    notRun: 'Нажмите «Проверить все», чтобы запустить проверку. Автоматически она не запускается.',
     siteStatus: 'Сайт',
     sitemapStatus: 'Sitemap',
     sitemapUrlCount: 'URL в sitemap',

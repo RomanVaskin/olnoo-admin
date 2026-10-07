@@ -438,6 +438,7 @@ export const en = {
     checking: 'Checking…',
     checkError: 'Health check failed. Please try again.',
     empty: 'No projects yet.',
+    notRun: 'Press “Check all” to run the check. It is not started automatically.',
     siteStatus: 'Site',
     sitemapStatus: 'Sitemap',
     sitemapUrlCount: 'Sitemap URLs',
