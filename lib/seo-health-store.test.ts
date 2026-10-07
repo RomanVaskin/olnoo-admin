@@ -40,7 +40,7 @@ test('storage: the result is saved as JSON + checkedAt and the saved result read
       queries.push(text)
       if (text.startsWith('UPDATE projects SET seo_health_last_result')) { store.set(params[2] as number, { json: params[0] as string, at: params[1] as string }); return { rows: [] } }
       if (text.startsWith('SELECT seo_health_last_result')) return { rows: [{ seo_health_last_result: JSON.parse(store.get(params[0] as number)?.json ?? 'null') }] }
-      return { rows: [{ repository: 'RomanVaskin/driveset', seo_health_last_result: JSON.parse(store.get(7)!.json) }] }
+      return { rows: [{ id: 7, name: 'DriveSet', domain: 'https://driveset.ru', repository: 'RomanVaskin/driveset', seo_health_last_result: JSON.parse(store.get(7)!.json) }] }
     },
   }
   const down = health({ site: { status: 'Error', httpStatus: null }, sitemap: { status: 'Error', httpStatus: null, urlCount: null }, issues: [issue('site_unavailable', undefined, 'down', 'ERROR')], errors: 1, warnings: 0, overall: 'Error' })
@@ -62,4 +62,34 @@ test('a database failure propagates (it is not turned into an SEO issue)', async
 test('the synthetic check_failed result is a plain serializable ProjectHealth', () => {
   const synthetic = health({ sitemapUrl: null, issues: [issue('check_failed', undefined, 'The check itself failed', 'ERROR')], errors: 1, warnings: 0, overall: 'Error' })
   assert.deepEqual(JSON.parse(JSON.stringify(synthetic)), synthetic)
+})
+
+test('mode=last: active project A with a saved result and B never checked → both returned; B is notChecked with no fake health', async () => {
+  const a = health({ projectId: 1, projectName: 'A' })
+  const db = {
+    query: async (text: string) => {
+      assert.match(text, /archived_at IS NULL/)
+      assert.doesNotMatch(text, /seo_health_last_result IS NOT NULL/) // not-yet-checked projects must not be filtered out
+      return { rows: [
+        { id: 1, name: 'A', domain: 'https://a.example', repository: null, seo_health_last_result: a },
+        { id: 2, name: 'B', domain: 'https://b.example', repository: 'o/b', seo_health_last_result: null },
+      ] }
+    },
+  }
+  const rows = await readLastResults(db)
+  assert.equal(rows.length, 2)
+  assert.deepEqual(rows[0], { ...a, repository: null })
+  assert.deepEqual(rows[1], { notChecked: true, projectId: 2, projectName: 'B', domain: 'https://b.example', repository: 'o/b' })
+  for (const k of ['overall', 'site', 'robots', 'sitemap', 'issues', 'checkedAt']) assert.ok(!(k in rows[1]), k) // no fake SEO status
+})
+
+test('per-project recheck of a never-checked project: the first result replaces its notChecked row (no recheck block: nothing to compare)', async () => {
+  const db = { query: async () => ({ rows: [{ seo_health_last_result: null }] }) }
+  assert.equal(await readLastResult(db, 2), null) // route: previous = null → no `recheck`, saved result returned as a full ProjectHealth
+  // the screen's replace-by-projectId step (components/sections/seo-health.tsx `recheck`):
+  const rows: ({ projectId: number } & Record<string, unknown>)[] = [{ projectId: 2, notChecked: true }]
+  const fresh = { ...health({ projectId: 2 }), repository: 'o/b' }
+  const next = rows.map((x) => (x.projectId === 2 ? fresh : x))
+  assert.equal(next[0], fresh)
+  assert.equal((next[0] as { notChecked?: boolean }).notChecked, undefined)
 })

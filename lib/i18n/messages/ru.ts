@@ -475,6 +475,7 @@ export const ru: Messages = {
     recheckResolved: 'Исправлено',
     recheckStill: 'Осталось',
     recheckNew: 'Новых',
+    neverChecked: 'Проверка ещё не выполнялась',
     lastChecked: 'Последняя проверка',
     robotsStatus: 'Robots',
     issuesCount: 'Проблемы',

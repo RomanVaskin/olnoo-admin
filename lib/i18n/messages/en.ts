@@ -465,6 +465,7 @@ export const en = {
     recheckResolved: 'Fixed',
     recheckStill: 'Remaining',
     recheckNew: 'New',
+    neverChecked: 'Not checked yet',
     lastChecked: 'Last checked',
     robotsStatus: 'Robots',
     issuesCount: 'Issues',

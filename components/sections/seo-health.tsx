@@ -22,6 +22,9 @@ type PageCheck = {
   inSitemap: true
 }
 
+/** An active project that was never checked (from `mode=last`): no SEO result, only enough for a row and «Recheck». */
+type NotChecked = { notChecked: true; projectId: number; projectName: string; domain: string; repository: string | null }
+
 type ProjectHealth = {
   projectId: number
   projectName: string
@@ -39,12 +42,13 @@ type ProjectHealth = {
   checkedAt: string
   repository?: string | null
   recheck?: Recheck
+  notChecked?: false
 }
 
 export function SeoHealth() {
   const { t, locale } = useI18n()
   const dateLocale = locale === 'ru' ? 'ru-RU' : 'en-US'
-  const [rows, setRows] = useState<ProjectHealth[]>([])
+  const [rows, setRows] = useState<(ProjectHealth | NotChecked)[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<number | null>(null)
@@ -58,7 +62,7 @@ export function SeoHealth() {
   useEffect(() => {
     fetch('/api/seo-health?mode=last')
       .then((res) => (res.ok ? res.json() : []))
-      .then((saved: ProjectHealth[]) => setRows((cur) => (cur.length ? cur : saved)))
+      .then((saved: (ProjectHealth | NotChecked)[]) => setRows((cur) => (cur.length ? cur : saved)))
       .catch(() => {})
   }, [])
 
@@ -141,7 +145,29 @@ export function SeoHealth() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {rows.map((r) =>
+              r.notChecked ? (
+                <tr key={r.projectId} className="transition-colors hover:bg-muted/60">
+                  <Td className="font-medium text-foreground">{r.projectName}</Td>
+                  <Td className="font-mono text-xs">
+                    {r.domain}
+                    {r.repository && <span className="ml-2 text-muted-foreground">{r.repository}</span>}
+                  </Td>
+                  <td colSpan={6} className="label-mono border-b border-hairline px-4 py-3.5 align-middle text-muted-foreground">
+                    {t.seoHealth.neverChecked}
+                    {recheckError === r.projectId && <span className="ml-3 text-destructive">{t.seoHealth.checkError}</span>}
+                  </td>
+                  <Td>
+                    <button
+                      onClick={() => recheck(r.projectId)}
+                      disabled={rechecking !== null || loading}
+                      className="label-mono whitespace-nowrap text-foreground/80 underline underline-offset-4 hover:text-foreground disabled:opacity-50"
+                    >
+                      {rechecking === r.projectId ? t.seoHealth.checking : t.seoHealth.recheck}
+                    </button>
+                  </Td>
+                </tr>
+              ) : (
               <Fragment key={r.projectId}>
                 <tr className="transition-colors hover:bg-muted/60">
                   <Td className="font-medium text-foreground">{r.projectName}</Td>
@@ -285,7 +311,8 @@ export function SeoHealth() {
                   </tr>
                 )}
               </Fragment>
-            ))}
+              ),
+            )}
           </tbody>
         </TableShell>
       )}

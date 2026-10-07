@@ -42,17 +42,20 @@ export async function readLastResult(db: Queryable, projectId: number): Promise<
   return asHealth(rows[0]?.seo_health_last_result)
 }
 
-/** Saved results of ACTIVE projects (archived never take part). No network. Projects never checked are simply absent. */
-export async function readLastResults(db: Queryable): Promise<(ProjectHealth & { repository: string | null })[]> {
+/** An active project that has never been checked: no result at all (never a fake OK/Warning/Error). */
+export type NotChecked = { notChecked: true; projectId: number; projectName: string; domain: string; repository: string | null }
+export type LastRow = (ProjectHealth & { repository: string | null; notChecked?: false }) | NotChecked
+
+/** ALL active projects with a domain (archived never take part), no network: the saved result, or `notChecked` when there is none. */
+export async function readLastResults(db: Queryable): Promise<LastRow[]> {
   const { rows } = await db.query(
-    `SELECT pr.repository, pr.seo_health_last_result FROM projects pr
-      WHERE ${ACTIVE_PROJECT_SQL} AND pr.domain <> '' AND pr.seo_health_last_result IS NOT NULL
+    `SELECT pr.id, pr.name, pr.domain, pr.repository, pr.seo_health_last_result FROM projects pr
+      WHERE ${ACTIVE_PROJECT_SQL} AND pr.domain <> ''
       ORDER BY pr.created_at ASC, pr.id ASC`,
   )
-  const out: (ProjectHealth & { repository: string | null })[] = []
-  for (const r of rows) {
+  return rows.map((r): LastRow => {
+    const repository = (r.repository as string | null) ?? null
     const h = asHealth(r.seo_health_last_result)
-    if (h) out.push({ ...h, repository: (r.repository as string | null) ?? null })
-  }
-  return out
+    return h ? { ...h, repository } : { notChecked: true, projectId: r.id as number, projectName: r.name as string, domain: r.domain as string, repository }
+  })
 }

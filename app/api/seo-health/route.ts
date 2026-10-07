@@ -10,7 +10,7 @@ type Row = ProjectHealth & { repository: string | null; recheck?: Recheck }
  * GET /api/seo-health            live check of every active project → saved as the project's last result → returned.
  * GET /api/seo-health?projectId= live check (recheck) of ONE project; the response also carries a transient `recheck`
  *                                (resolved / stillFailing / newIssues vs the previously saved result; not stored).
- * GET /api/seo-health?mode=last  the saved last results of active projects, no network fetches (projects never checked are absent).
+ * GET /api/seo-health?mode=last  the saved last results of active projects, no network fetches (all active projects; a never-checked one comes as { notChecked: true, projectId, projectName, domain, repository }).
  * Failure policy: a site that is down / a missing sitemap is a valid SEO result (saved, 200). A database failure (reading the
  * registry, reading or saving the result) is NOT an SEO issue: it answers 500 { error, code: 'storage_failed' }.
  */
