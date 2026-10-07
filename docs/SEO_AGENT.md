@@ -3,7 +3,8 @@
 Единственный source of truth по SEO в OLNOO: цель, принципы, архитектура, фактический статус и roadmap. `AGENTS.md`, `OLNOO_ARCHITECTURE.md` и `OLNOO_PROJECT_MAP.md` ссылаются сюда и не дублируют это содержание.
 
 - **Решение: вариант C — минимальный SEO-модуль + read-only SEO Observer**, без отдельной агентной архитектуры. Зафиксировано 2026-10-07 по итогам архитектурного ревью.
-- Раздел «Текущий статус» сверен с кодом ветки `main` на коммите `4e782a1` (2026-10-07). Прод и БД при сверке не проверялись.
+- Целевой closed loop, правила решений, минимальная data model и порядок работ уточнены 2026-10-07 по итогам architecture review (раздел 3a и раздел 12); вариант C это не меняет.
+- Раздел «Текущий статус» сверен с кодом ветки `main` на коммите `8758d84` (Project registry MVP, 2026-10-07). Прод и БД при сверке не проверялись.
 - Любое изменение фактов SEO-пайплайна фиксируется здесь в том же коммите (правило «Change rule» из `OLNOO_ARCHITECTURE.md`).
 - Подробный справочник текущей реализации (импорт Wordstat, pages sync, кластеризация, очистка запросов) — в конце файла, раздел «Справочник реализации».
 
@@ -38,7 +39,7 @@ SEO в OLNOO — reusable-модуль для проектов и клиенто
 - **AI-рекомендация не равна подтверждению человека.** Если AI нашёл страницу: Recommend → Confirm → или Find another. Если AI сказал «страницы нет»: No page → Create page → или Find existing. Выбор страницы — поиск по URL/title/H1, а не огромный dropdown.
 - **CTA и internal links используют существующий flow проекта:** не создавать новую форму, если рабочая уже есть; не отправлять пользователя на главную без причины; не менять рабочую отправку заявок. Для `olnoo.com`: использовать существующий contact / ProjectRequest flow и не менять рабочий Resend/email flow без необходимости.
 - **Coverage Check и Quality Gate остаются частью prompt и PR review**, а не отдельными сущностями БД. Их результат (`SEO COVERAGE`, `QUALITY GATE`) проверяет человек в финальном отчёте Claude и при review PR.
-- **GitHub — source of truth для изменений сайта.** Claude Code **вручную** создаёт PR; PR-автоматизацию пока не строим.
+- **GitHub — source of truth для изменений сайта.** Сейчас Claude Code **вручную** создаёт PR; PR-автоматизацию в общем случае не строим. Единственное планируемое исключение — будущий Executor для безопасных Technical SEO Fix (раздел 3a, шаг E в разделе 12): он доводит задачу до PR, merge всегда делает человек.
 - Новая страница создаётся только когда нужен отдельный intent и среди существующих страниц нет подходящей.
 - Ничего в SEO не меняется автоматически без подтверждения человека. SEO Observer только читает.
 
@@ -46,25 +47,35 @@ SEO в OLNOO — reusable-модуль для проектов и клиенто
 
 ## 3. Минимальная архитектура
 
+Целевой минимальный closed loop (orchestrator и агентной архитектуры не добавляем; шаги связывают существующие модули и человек):
+
 ```
-Wordstat / semantic source
-→ relevance
-→ clustering
-→ human review
-→ confirmed cluster → page
-→ Improve / Create
-→ Claude
+Project Registry
+→ Semantics (Wordstat / semantic source)
+→ Relevance
+→ Clustering
+→ Human confirmation
+→ confirmed_page_id
+→ CREATE / IMPROVE
+→ Claude / later Executor
 → PR
-→ sitemap/pages sync
+→ Deploy
+→ Technical recheck (+ sitemap/pages sync)
 → SEO Observer
-→ indexing + search performance
-→ before/after comparison
+→ Decision rules
+→ FIX / IMPROVE / CREATE-candidate / IGNORE
+→ PR
+→ before/after
+→ repeat
 ```
+
+Правила решений, минимальная data model и Executor — в разделе 3a; порядок реализации — в разделе 12. Merge всегда делает человек.
 
 Где это находится сейчас:
 
 | Шаг | Где | Статус |
 |---|---|---|
+| Project Registry | `projects` (`lib/projects-registry.ts`, миграция `0017`), экран Projects | работает; единый список проектов для всех экранов |
 | Wordstat / semantic source | `lib/keywords-import.ts`, `app/api/keywords/import`, экран `seo-wordstat` | работает, ручная загрузка CSV/XLSX |
 | relevance | `lib/keywords-relevance.ts`, `lib/keywords-relevance-rules.ts`, `app/api/keywords/relevance` | работает, заморожен |
 | clustering | `lib/seo-clustering.ts`, `lib/seo-clustering-batch.ts`, `lib/seo-pipeline.ts` | работает |
@@ -73,10 +84,47 @@ Wordstat / semantic source
 | Improve / Create | `lib/improve-page-task.ts`, `lib/seo-task-generator.ts`, панель задачи в `components/sections/seo-clusters.tsx` | работает как генерация текста задачи; страница автоматически не создаётся |
 | Claude → PR | вне Admin, вручную | ручной шаг |
 | sitemap/pages sync | `lib/sitemap.ts`, `lib/html-extract.ts`, `app/api/pages/sync` | работает |
+| Technical recheck | `lib/seo-health.ts`, `lib/technical-seo-fix-task.ts`, экран Technical SEO | работает вручную; результат не хранится, `resolved` / `still_failing` нет |
 | SEO Observer | — | не реализован |
+| Decision rules | — | не реализованы |
 | before/after | — | не реализован |
 
 До подтверждения человеком выполняется два AI-прохода: relevance и clustering. Решение «страница есть / страницы нет» принимается в clustering (см. раздел 5). Сильная модель нужна только для итогового текста Improve/Create в Claude Code.
+
+## 3a. Closed loop: решения, данные, Executor
+
+Целевой минимум по итогам architecture review (2026-10-07). Ничего из этого раздела, кроме перечисленного в «Текущем статусе» как работающее, пока не реализовано; порядок работ — раздел 12.
+
+**Decision rules — чистая функция**, а не сервис и не таблица. Вход: последний срез Observer, кластеры (`review_status`, `confirmed_page_id`), результат Technical SEO. Выход: действие FIX / IGNORE / IMPROVE / CREATE-candidate для страницы или кластера. Opportunity вычисляется из этих входов по запросу и нигде не хранится. Порядок проверки строгий:
+
+1. **FIX** — technical SEO issue мешает странице или проекту (страница недоступна или с ошибкой, noindex при URL в sitemap, сайт закрыт в robots.txt, нет sitemap и т. п. — то, что находит Technical SEO). Улучшать контент страницы, которую нельзя проиндексировать, бессмысленно.
+2. **IGNORE** — кластер или запрос уже `ignored`, нерелевантен или `uncertain`.
+3. **IMPROVE** — есть подтверждённая существующая страница (`confirmed_page_id`), по ней есть значимые показы, позиция условно 8–30, а связанные confirmed clusters относятся к той же странице. Одна задача на страницу, а не на запрос. Порог «значимых показов» и границы позиции — константы, подбираются по первым реальным срезам; 8–30 — стартовое условие, а не доказанное значение.
+4. **CREATE-candidate** — только отдельный confirmed intent с `review_status = no_page` и без подходящей существующей страницы. CREATE всегда остаётся кандидатом до подтверждения человеком.
+
+Обязательные ограничения:
+
+- новый keyword сам по себе страницу не создаёт;
+- один intent = одна страница;
+- если существующая страница уже ранжируется по похожему intent — действие по умолчанию IMPROVE;
+- thin pages не создаём; при возможной каннибализации новую страницу не создаём (сначала IMPROVE существующей или решение человека, какая страница отвечает за intent);
+- решения принимает человек; Decision rules только предлагают.
+
+**Минимальная data model (ближайшие PR; сейчас этих сущностей в схеме нет):**
+
+- `projects`: `+ repository TEXT NULL` (репозиторий проекта; нужен Fix task и будущему Executor);
+- `seo_snapshots`: `id`, `project_id`, `provider`, `kind`, `date_from`, `date_to`, `taken_at`, `rows JSONB` — один срез Observer одного проекта; внутри нормализованные строки из раздела 8;
+- `page_changes`: `id`, `project_id`, `page_id`, `kind` (`improve` / `create` / `fix`), `pr_url`, `merged_at`, `cluster_ids`, `issue_codes`, `baseline_snapshot_id`, `after_snapshot_id`, `status`, `notes`.
+
+Отдельной таблицы opportunities **не делаем**. Change Tracking не выделяем в отдельную систему: `page_changes` и два среза Observer достаточно для v1; результат before/after вычисляется из срезов. Для `fix` результат — состояние issue после повторной проверки. Миграции создаются только в тех PR, которые вводят эти сущности; точные значения `status` определяются при реализации.
+
+**Technical SEO closed loop.** Уже работает: Detect → Fix task → Claude → PR → merge → deploy → ручная перепроверка. Реальный E2E пройден на DriveSet (`robots_missing`; в `driveset` `main` есть `app/robots.ts`). Следующий минимальный шаг: `projects.repository`, хранение последнего результата Technical SEO, ручной recheck, статусы `resolved` / `still_failing`. Scheduler и deploy hooks пока не делаем.
+
+**Executor.** AI Router — только transport, выбор модели и fallback; Router не является Executor. Будущий Executor получает готовый task, берёт `repository` из Project Registry, читает `AGENTS.md`, `OLNOO_PROJECT_MAP.md`, `OLNOO_ARCHITECTURE.md` и репозиторий, меняет файлы, запускает tests/build, создаёт ветку, commit и PR. Первый scope — только безопасные Technical SEO Fix cases; Executor для всего SEO сразу не делаем. Merge остаётся ручным.
+
+**Create / Improve — ближайший обязательный prompt patch:** Create получает тот же factual guardrail, что Improve; CTA project-agnostic; locale берётся из Project Registry / locale страницы; обязательных hardcoded `/ru` `/en` нет; AI/GEO-пункты добавляются в существующий Quality Gate (раздел 8a); internal links остаются частью задачи и Quality Gate.
+
+**Расширение Technical SEO.** Цели «50 проверок» нет. Новая проверка добавляется, только если она автоматизируется, даёт понятный ERROR/WARNING и конкретную Fix task. Ближайшие кандидаты: duplicate Title, duplicate H1. Redirects из sitemap уже проверяются (`page_redirect`, WARNING). Later: broken internal links, orphan pages, schema, hreflang. Core Web Vitals в ближайший roadmap не входят.
 
 ## 4. Что остаётся (KEEP)
 
@@ -106,29 +154,32 @@ Wordstat / semantic source
 - **Отдельные `ai_decision` / `suggested_slug` / `suggested_h1` / `suggested_title`** (миграция `0014`), если после проверки production они не нужны. Предложение slug/H1/Title лишнее: задача Create и так просит Claude предложить URL.
 - Отдельные **Content Agent / Developer Agent**.
 - **Orchestrator.**
-- **Finding / Recommendation / Action / Result** как отдельная архитектура. Достаточно кластера со статусами и одной таблицы изменений страниц (шаг 6 в разделе 12); Result вычисляется из двух срезов Observer и не хранится.
-- **PR automation.**
+- **Finding / Recommendation / Action / Result** как отдельная архитектура. Достаточно кластера со статусами и одной таблицы изменений страниц (`page_changes`, раздел 3a; шаг C в разделе 12); Result вычисляется из двух срезов Observer и не хранится.
+- **PR automation** в общем виде (исключение — Executor для Technical SEO Fix, раздел 3a).
 - **Хранение Coverage / Quality Gate в БД.**
+
+**Later / not now (явно не делаем в ближайшем roadmap):** отдельная таблица opportunities; отдельный SEO Monitor как сервис; scheduler; queue; event sourcing; полностью автономное SEO; auto merge; Core Web Vitals; «50 технических проверок»; отдельный GEO/AEO Agent; provider abstraction до второго реального провайдера.
 
 **ВАЖНО: удаление legacy-сущностей выполняется только после проверки production data. Ни одна из перечисленных сущностей на момент написания документа не удалена и продолжает существовать в коде и схеме.**
 
 ## 7. RU + EN
 
-SEO pipeline должен быть language-agnostic. Язык, рынок и регион — свойства **Project SEO Context** (`project_seo_context`), а не отдельные ветки бизнес-логики. Веток вида `if ru … / if en …` не создавать.
+SEO pipeline должен быть language-agnostic. Язык проекта — свойство Project Registry (`projects.locale`, миграция `0017`), рынок и регион — **Project SEO Context** (`project_seo_context`); это свойства проекта, а не отдельные ветки бизнес-логики. Веток вида `if ru … / if en …` не создавать.
 
 План:
 
-- `languages` хранится в Project SEO Context;
-- если страница существует — используется её locale (`pages.locale`, его заполняет pages sync);
+- locale проекта хранится в Project Registry (`projects.locale`), регион и рынок — в Project SEO Context; если у проекта несколько языков, способ их хранения определяется при реализации multilingual (v2);
+- если страница существует — используется её locale (`pages.locale`, его заполняет pages sync), иначе locale проекта;
 - если создаётся новая страница и у проекта несколько языков — clustering возвращает `language`;
 - структура URL определяется существующей структурой проекта;
 - не требовать автоматически `/ru/` или `/en/`.
 
-Что зашито сейчас и подлежит исправлению (шаг 4 в разделе 12):
+Что зашито сейчас и подлежит исправлению (шаг A в разделе 12):
 
 - `lib/seo-task-generator.ts`: тип языка только `ru | en`; задача Create требует URL вида `/ru/...` или `/en/...`. У DriveSet страницы без префикса (например `/polirovka-avto`).
+- `lib/improve-page-task.ts`: язык задачи берётся из URL-префикса страницы, затем из `pages.locale`, и сводится к `ru | en`; `projects.locale` в задачах не используется.
 - `lib/cluster-pages.ts`: фиксированный список префиксов `ru, en, kk, kz`; язык кластера без рекомендованной страницы угадывается по кириллице в primary keyword.
-- `project_seo_context` хранит регион, но не язык.
+- `project_seo_context` хранит регион, но не язык; язык проекта — в `projects.locale`.
 
 ## 8. Yandex + Google
 
@@ -136,6 +187,15 @@ SEO pipeline должен быть language-agnostic. Язык, рынок и р
 
 - v1: Yandex Webmaster; Yandex Metrica — органический трафик по страницам.
 - v2: Google Search Console.
+
+**Observer v1 (ближайший).** Yandex Webmaster + Yandex Metrika. MVP: ручной срез («Снять срез»), один проект за запуск, без scheduler, queue и background monitor. Срез хранится в `seo_snapshots` (раздел 3a).
+
+- **Query:** `query`, `impressions`, `clicks`, `ctr`, `position` (CTR считается как `clicks / impressions`).
+- **Page:** `url`, `organic visits`, `period`.
+- **Query → page.** Вебмастер (популярные запросы) не отдаёт связку запрос → URL (см. ограничения ниже). В v1 она строится через существующие confirmed clusters и `confirmed_page_id`; органический трафик по landing page берётся из Метрики.
+- **Что не собираем:** visitor-level данные (ClientID, yclid и т. п.), device breakdown и лишние dimensions.
+- **Metrika.** Клиент Метрики в репозитории (`lib/yandex-metrika*.ts`) сейчас обслуживает Ads: в списке разрешённых dimensions нет landing-страницы, а привязка проекта к счётчику — константа по slug (`METRIKA_PROJECTS`). Для Observer нужно одно измерение (landing page) и фильтр по органическому источнику; имя измерения сверяется с официальной документацией Метрики при реализации.
+- **Webmaster API.** Параметры авторизации (токен, `user_id`, `host_id`) и лимиты в этой проверке не сверялись; перед реализацией сверить с документацией.
 
 Нормализованные данные (различия провайдеров закрываются на уровне connector, не в бизнес-логике SEO):
 
@@ -157,7 +217,7 @@ SEO pipeline должен быть language-agnostic. Язык, рынок и р
 
 ## 8a. Search + AI Visibility
 
-**Одна система, не две.** AI Visibility — это (1) несколько пунктов в существующем Quality Gate и (2) ещё источники данных в том же SEO Observer. Отдельный GEO / AEO / AI-Search Agent, отдельный orchestrator, новые таблицы, сервисы и provider abstraction не создаются. Правило «один intent = одна страница» действует без изменений. Язык, рынок и регион берутся из Project SEO Context (раздел 7); отдельной архитектуры для RU и EN нет.
+**Одна система, не две.** AI Visibility — это (1) несколько пунктов в существующем Quality Gate и (2) ещё источники данных в том же SEO Observer. Отдельный GEO / AEO / AI-Search Agent, отдельный orchestrator, новые таблицы, сервисы и provider abstraction не создаются. Правило «один intent = одна страница» действует без изменений. Язык, рынок и регион берутся из Project Registry и Project SEO Context (раздел 7); отдельной архитектуры для RU и EN нет.
 
 **Что подтверждено официальной документацией (проверено 2026-10-07):**
 
@@ -197,7 +257,7 @@ SEO pipeline должен быть language-agnostic. Язык, рынок и р
 | AI-клики и трафик из AI | LATER | надёжной атрибуции в проверенных источниках нет |
 | Позиция в ответе, score, тональность | REMOVE | нестабильно, псевдоаналитика |
 
-**Набор вопросов (ручной MVP).** 10–30 вопросов проекта, сформированных из подтверждённых intents и Project SEO Context (язык, рынок, регион). Каждый вопрос прогоняется не менее 5 раз через доступный API (предпочтительно) или вручную; записываются дата, система / модель, регион и язык, результат (упомянут / не упомянут, цитируемые URL, конкуренты). До/после сравнивается только на том же наборе вопросов. Browser automation не используется; ограничения и условия использования систем не обходятся. Отдельную таблицу под это не вводим: до реализации Observer результат хранится как обычный ручной срез; где он хранится в v2 — решается при реализации Observer.
+**Набор вопросов (ручной MVP).** 10–30 вопросов проекта, сформированных из подтверждённых intents, locale проекта и Project SEO Context (рынок, регион). Каждый вопрос прогоняется не менее 5 раз через доступный API (предпочтительно) или вручную; записываются дата, система / модель, регион и язык, результат (упомянут / не упомянут, цитируемые URL, конкуренты). До/после сравнивается только на том же наборе вопросов. Browser automation не используется; ограничения и условия использования систем не обходятся. Отдельную таблицу под это не вводим: до реализации Observer результат хранится как обычный ручной срез; где он хранится в v2 — решается при реализации Observer.
 
 **AI/GEO Quality Gate.** Это пункты внутри существующего Quality Gate (проверка в prompt и при review PR), а не отдельный процесс и не сущность БД:
 
@@ -210,7 +270,7 @@ SEO pipeline должен быть language-agnostic. Язык, рынок и р
 - нет выдуманных фактов (factual guardrail, раздел 2);
 - страница индексируема и не закрыта от нужных краулеров (для поиска ChatGPT — OAI-SearchBot в robots.txt); решение о GPTBot принимает владелец проекта.
 
-Сейчас `contentQualityGateBlock` в `lib/seo-task-generator.ts` этих пунктов не содержит; добавление — часть prompt/language patch (шаг 4 в разделе 12).
+Сейчас `contentQualityGateBlock` в `lib/seo-task-generator.ts` этих пунктов не содержит; добавление — часть prompt/language patch (шаг A в разделе 12).
 
 **AI finding → Improve / Create.**
 
@@ -239,7 +299,8 @@ Import
 ```
 
 - Observer **read-only**.
-- Срез («Снять срез») делается вручную: нормализованные строки записываются с датой и провайдером; результат «до/после» вычисляется как разница двух срезов вокруг даты изменения страницы.
+- Срез («Снять срез») делается вручную, по одному проекту за запуск (детали — раздел 8, «Observer v1»): нормализованные строки записываются с датой и провайдером (`seo_snapshots`, раздел 3a); результат «до/после» вычисляется как разница двух срезов вокруг даты изменения страницы (`page_changes`).
+- Decision rules (раздел 3a) — следующий шаг после Observer v1 (шаг D в разделе 12), а не его часть.
 - Никаких автоматических изменений SEO без подтверждения человека.
 - AI Visibility в v1 ограничивается AI/GEO-пунктами Quality Gate (раздел 8a); измерений AI в v1 нет.
 
@@ -258,14 +319,19 @@ Import
 - рекомендации «какую страницу улучшать следующей»;
 - широкая multi-provider аналитика AI visibility, автоматический ingest, если появится подтверждённый API;
 - автономный Improve/Create — только после доказанной стабильности;
-- автоматизация PR — только при реальном повторяющемся объёме.
+- Executor шире Technical SEO Fix (bounded Improve до PR) — после доказанных циклов;
+- автоматизация PR сверх первого scope Executor — только при реальном повторяющемся объёме;
+- всё из списка «Later / not now» в разделе 6.
 
 ## 11. Текущий статус
 
-Сверено с кодом `main` на коммите `4e782a1`.
+Сверено с кодом `main` на коммите `8758d84` (Project registry MVP). Справочник реализации в конце файла описывает код на коммите `4e782a1` и при сверке не перепроверялся.
+
+**Reference-case.** DriveSet `/polirovka-avto` — текущий Content Improve E2E reference-case, **IN PROGRESS, а не completed**: Improve этой страницы ещё не смержен в `main` репозитория `driveset`. После merge, deploy и recheck он станет reference implementation для будущего SEO Content Agent. Завершённый E2E на сегодня — Technical SEO Fix (DriveSet `robots_missing`: в `driveset` `main` есть `app/robots.ts`).
 
 **WORKS**
 
+- Project Registry: `projects` — единый список проектов для SEO, CRM, Ads, Social, Analytics и Technical SEO (`listProjects`, поля `archived_at` и `locale`, архивирование и восстановление вместо удаления); проект создаётся один раз;
 - semantic import (Wordstat CSV/XLSX, batch, удаление импорта);
 - relevance;
 - clustering (батчи + merge по intent);
@@ -276,7 +342,7 @@ Import
 - Create/Improve prompt generation (генерируется текст задачи; страница автоматически не создаётся);
 - pages sync;
 - Technical SEO preflight (PR1): экран Technical SEO (`seo-health`, `GET /api/seo-health`, логика `lib/seo-health.ts`) для каждого активного проекта реестра (`listProjects`, `projects.archived_at IS NULL`; архивные в «Проверить все» не участвуют) с domain проверяет сайт (HTTP), `robots.txt` (есть/нет, `Disallow: /` для `User-agent: *`), sitemap (статус, число URL) и каждый URL из sitemap (до 100 за проверку; HTTP, canonical, index/noindex, Title, H1). Severity: ERROR — сайт недоступен, sitemap отсутствует/нечитаем, URL 4xx/5xx/недоступен, noindex при URL в sitemap, `Disallow: /`; WARNING — нет robots.txt (или не читается), нет/чужой canonical, нет Title/H1, редирект. Проверка запускается только вручную кнопкой «Проверить все»; при открытии экрана автоматически не запускается (она дорогая: до 100 URL на проект); не по расписанию, результат не хранится.
-- Technical SEO Fix task (PR2): в раскрытом проекте экрана Technical SEO у каждой issue — «Исправить», у проекта — «Исправить всё». `buildTechnicalSeoFixTask(project, issues)` (`lib/technical-seo-fix-task.ts`, чистая функция) собирает ОДИН prompt для Claude/Codex (issues без дублей, ERROR раньше WARNING; domain, sitemap URL, robots/sitemap HTTP, фактические HTTP/canonical/index/Title/H1 проблемного URL; repository только если есть в метаданных проекта; правила исправления по кодам issues; бизнес-факты не придумывать; отдельная ветка, commit, PR в main, без merge) и показывает его в существующей панели задач (`TaskPanel` из `seo-clusters.tsx`) с кнопкой копирования. Ничего не пишет в чужие репозитории, не хранится, перепроверки нет: после merge исправления владелец вручную жмёт «Проверить все».
+- Technical SEO Fix task (PR2): в раскрытом проекте экрана Technical SEO у каждой issue — «Исправить», у проекта — «Исправить всё». `buildTechnicalSeoFixTask(project, issues)` (`lib/technical-seo-fix-task.ts`, чистая функция) собирает ОДИН prompt для Claude/Codex (issues без дублей, ERROR раньше WARNING; domain, sitemap URL, robots/sitemap HTTP, фактические HTTP/canonical/index/Title/H1 проблемного URL; repository только если есть в метаданных проекта — сейчас поля `projects.repository` нет, поэтому prompt всегда сообщает, что repository не передан; правила исправления по кодам issues; бизнес-факты не придумывать; отдельная ветка, commit, PR в main, без merge) и показывает его в существующей панели задач (`TaskPanel` из `seo-clusters.tsx`) с кнопкой копирования. Ничего не пишет в чужие репозитории, не хранится, перепроверки нет: после merge исправления владелец вручную жмёт «Проверить все».
 - AI review CREATE/IMPROVE/IGNORE — работает как отдельный проход (подлежит объединению с clustering, раздел 5).
 - SEO Map / `keyword_pages` — работает как legacy (не развивать, раздел 6).
 
@@ -288,7 +354,7 @@ Import
 - Coverage Check — только инструкция в задаче; результат не сохраняется и не проверяется кодом.
 - Quality Gate — то же; AI/GEO-пунктов (раздел 8a) в нём пока нет.
 - sitemap: один источник — `resolveSitemapUrl` в `lib/sitemap.ts` (`projects.sitemap_url`, иначе единственный fallback `domain + /sitemap.xml`) и один читатель `readSitemap`; им пользуются и Pages sync (`fetchSitemapUrls`), и Technical SEO. Число URL — страницы (index-файлы разворачиваются на один уровень, до 20 sitemap). Проверка не по расписанию, результат не сохраняется; Core Web Vitals, schema.org, контент, индексация и AI visibility не проверяются.
-- язык — зашит `ru | en`: задача Create требует `/ru/` или `/en/`; язык кластера без рекомендованной страницы определяется по кириллице.
+- язык — зашит `ru | en`: задача Create требует `/ru/` или `/en/`; язык кластера без рекомендованной страницы определяется по кириллице; `projects.locale` в Create/Improve не используется.
 
 **NOT IMPLEMENTED**
 
@@ -298,37 +364,34 @@ Import
 - AI Visibility (отчёт GSC по AI-фичам, Алиса AI в Вебмастере, набор AI-вопросов);
 - indexing tracking;
 - before/after tracking;
-- PR tracking.
+- PR tracking;
+- Decision rules (FIX / IGNORE / IMPROVE / CREATE-candidate);
+- `projects.repository`, `seo_snapshots`, `page_changes`;
+- хранение результата Technical SEO, recheck и статусы `resolved` / `still_failing`;
+- Executor.
 
-Интеграций с Yandex Webmaster и Google Search Console в коде нет. Yandex Metrika в репозитории подключена только как read-only Observer агрегатов для Ads (`/api/metrika/observer`), к SEO она не привязана.
+Интеграций с Yandex Webmaster и Google Search Console в коде нет. Yandex Metrika в репозитории подключена только как read-only Observer агрегатов для Ads (`/api/metrika/observer`), к SEO она не привязана; привязка проекта к счётчику — константа по slug (`METRIKA_PROJECTS`), а не поле реестра.
 
 Статус миграций SEO в production (`0012`, `0013`, `0014`) записан в «Справочнике реализации» и перед использованием должен быть перепроверен.
 
 ## 12. Следующие шаги
 
-Порядок фиксированный.
+Порядок фиксированный. Каждый шаг — отдельный PR (код, миграции, UI и доки не смешиваются без необходимости).
 
-1. **Реальный end-to-end Improve DriveSet:** `/polirovka-avto` или `/okleyka-avto` → prompt → Claude → PR → проверка результата.
-2. **Проверить production data перед удалением legacy:**
-   - `count(*)` в `keyword_pages`;
-   - используется ли SEO Map;
-   - как часто человек меняет AI review decision.
-3. **Cleanup:**
-   - убрать второй source of truth (SEO Map / `keyword_pages` / `keywords.cluster`);
-   - убрать отдельный AI review;
-   - не смешивать с другими изменениями.
-4. **Prompt/language patch:**
+0. **Закончить DriveSet `/polirovka-avto` Improve E2E** (сейчас IN PROGRESS, раздел 11): prompt → Claude → PR → merge → deploy → recheck → проверка результата.
+A. **Prompt/language patch:**
    - factual guardrail в Create;
-   - neutral CTA;
-   - язык из Project SEO Context;
-   - убрать hardcoded `/ru/` `/en/`;
-   - AI/GEO-пункты в `contentQualityGateBlock` (раздел 8a).
-5. **SEO Observer v1:**
-   - Yandex Webmaster;
-   - organic page traffic из Metrika;
-   - manual snapshot.
-6. **Минимальный tracking изменений:** `page_id` + дата + PR URL + cluster ids/notes.
-7. **После стабилизации:** Google Search Console + multilingual support + ручной AI Visibility Observer (раздел 8a); scheduled snapshots — позже.
+   - neutral / project-agnostic CTA;
+   - locale из Project Registry / `pages.locale`;
+   - убрать обязательные hardcoded `/ru/` `/en/`;
+   - AI/GEO-пункты в `contentQualityGateBlock` (раздел 8a);
+   - internal links остаются частью задачи и Quality Gate.
+B. **Technical SEO Fix closed loop:** `projects.repository` + хранение последнего результата Technical SEO + ручной recheck + `resolved` / `still_failing`. Без scheduler и deploy hooks.
+C. **SEO Observer v1:** Yandex Webmaster + Metrika (organic по landing page), `seo_snapshots`, `page_changes`; ручной срез, один проект за запуск (раздел 8).
+D. **Decision rules как чистая функция** (раздел 3a).
+E. **Executor только для Technical SEO Fix** (раздел 3a); merge вручную.
+F. **Later:** Google Search Console, AI Visibility (раздел 8a), multilingual, scheduler, более широкий Executor; всё из списка «Later / not now» в разделе 6.
+G. **Cleanup legacy** (отдельным PR, не смешивать с другими изменениями). Предварительно проверить production data: `count(*)` в `keyword_pages`; используется ли SEO Map; как часто человек меняет AI review decision. Затем убрать второй source of truth (SEO Map / `keyword_pages` / `keywords.cluster`) и отдельный AI review. Шаг не зависит от A–F и выполняется, когда подтверждены production data.
 
 ## 13. Владение документацией
 
