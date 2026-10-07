@@ -57,14 +57,15 @@ test('DTO: empty and missing cases are honest (no queries; no structure ⇒ comp
   assert.equal(cut.negativeKeywords.complete, false)
 })
 
-test('access: the queries tool needs OLNOO_MCP_KEY (Bearer or ?key=); unset or short env disables it for everyone', () => {
+test('access: the queries tool needs OLNOO_MCP_KEY in the Authorization header ONLY; the URL never counts; unset or short env disables it', () => {
   const KEY = 'k'.repeat(32)
   const req = (url: string, headers: Record<string, string> = {}) => new Request(url, { method: 'POST', headers })
   assert.equal(hasMcpKey(req('http://x/api/mcp', { authorization: `Bearer ${KEY}` }), KEY), true)
-  assert.equal(hasMcpKey(req(`http://x/api/mcp?key=${KEY}`), KEY), true)
+  assert.equal(hasMcpKey(req(`http://x/api/mcp?key=${KEY}`), KEY), false) // no query-string auth
+  assert.equal(hasMcpKey(req(`http://x/api/mcp?key=${KEY}`, { authorization: `Basic ${KEY}` }), KEY), false)
   assert.equal(hasMcpKey(req('http://x/api/mcp'), KEY), false)
   assert.equal(hasMcpKey(req('http://x/api/mcp', { authorization: 'Bearer wrong' }), KEY), false)
-  assert.equal(hasMcpKey(req(`http://x/api/mcp?key=${KEY}x`), KEY), false)
+  assert.equal(hasMcpKey(req('http://x/api/mcp', { authorization: `Bearer ${KEY}x` }), KEY), false)
   for (const env of [undefined, '', 'short']) assert.equal(hasMcpKey(req('http://x/api/mcp', { authorization: `Bearer ${env}` }), env), false)
 })
 

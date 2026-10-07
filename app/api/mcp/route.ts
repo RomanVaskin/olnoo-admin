@@ -12,8 +12,8 @@ export const dynamic = 'force-dynamic'
  * OLNOO Agent v1 — remote MCP endpoint (Streamable HTTP, stateless, JSON), always project `driveset`, read-only.
  *  - `get_driveset_summary(period)`: the existing Unified Analytics as a whitelist DTO (public, no search queries).
  *  - `get_direct_queries(period)` (Direct MCP Eyes v1): top search queries + current negative keywords from the existing Direct
- *    client. NOT public: it exists only for a request that carries OLNOO_MCP_KEY (Bearer header or `?key=`); without the env value
- *    it is off for everyone. nginx still opens exactly this path (`location = /api/mcp`, POST only) — see OLNOO_PROJECT_MAP.md.
+ *    client. NOT public: it exists only for a request that carries OLNOO_MCP_KEY as a Bearer header (never in the URL); without the env value
+ *    it is off for everyone. ChatGPT cannot send it (OAuth / no-auth only) — OAuth is a separate step. nginx still opens exactly this path (`location = /api/mcp`, POST only) — see OLNOO_PROJECT_MAP.md.
  */
 async function loadSummary(period: string): Promise<SummaryDto> {
   const res = await unifiedGet(new Request(`http://internal/api/ads/unified?project=driveset&period=${period}`))

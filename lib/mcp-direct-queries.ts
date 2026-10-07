@@ -87,16 +87,17 @@ export function toQueriesDto(
 // ---- access: the search queries are not public ------------------------------------------------------------------
 
 /**
- * `OLNOO_MCP_KEY` (server env, set by hand) unlocks the queries tool. The key is read from `Authorization: Bearer <key>` or the `key`
- * query parameter (ChatGPT connectors cannot send a header; nginx's `location = /api/mcp` matches regardless of the query).
- * No env value → false for everyone (the tool stays off). Constant-time comparison; the key is never logged or echoed.
+ * `OLNOO_MCP_KEY` (server env, set by hand) unlocks the queries tool for clients that can send `Authorization: Bearer <key>`
+ * (Claude Code, curl, scripts). The key is accepted ONLY from that header — never from the URL, so it cannot reach access logs, browser
+ * history or a connector URL. ChatGPT connectors cannot send it (they offer OAuth / no authentication only), so for ChatGPT this tool
+ * stays off until OAuth is wired. No env value → false for everyone. Constant-time comparison; the key is never logged or echoed.
  */
 export function hasMcpKey(req: Request, expected: string | undefined): boolean {
   const want = (expected ?? '').trim()
   if (want.length < 16) return false // unset or too short to be a secret → disabled
   const auth = req.headers.get('authorization') ?? ''
-  const provided = auth.startsWith('Bearer ') ? auth.slice(7).trim() : (new URL(req.url).searchParams.get('key') ?? '')
-  const a = Buffer.from(provided)
+  if (!auth.startsWith('Bearer ')) return false
+  const a = Buffer.from(auth.slice(7).trim())
   const b = Buffer.from(want)
   return a.length === b.length && timingSafeEqual(a, b)
 }
