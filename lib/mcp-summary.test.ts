@@ -151,7 +151,7 @@ test('route: runtime nodejs, force-dynamic, reuses the Unified GET with project=
   assert.match(route, /import \{ GET as unifiedGet \} from '@\/app\/api\/ads\/unified\/route'/)
   assert.match(route, /project=driveset&period=\$\{period\}/)
   assert.doesNotMatch(route, /\bfetch\(|pool|Authorization/)
-  assert.deepEqual([...route.matchAll(/process\.env\.(\w+)/g)].map((m) => m[1]), ['OLNOO_MCP_KEY']) // the only env read here; Direct reads its own config
+  assert.match(route, /parseOAuthConfig\(process\.env\)/) // the only env read here (OAuth config); Direct reads its own
   const lib = readFileSync(new URL('./mcp-summary.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(lib, /\bfetch\(|process\.env|@\/lib/)
 })

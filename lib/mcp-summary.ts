@@ -71,11 +71,23 @@ const JSON_HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-
 
 export type QueriesLoader = (period: SummaryPeriod) => Promise<DirectQueriesDto>
 
-function createServer(getSummary: (period: SummaryPeriod) => Promise<SummaryDto>, getQueries?: QueriesLoader): McpServer {
+/**
+ * The OAuth-protected tool. `authorize` answers for THIS request ('ok' | 'denied' | 'unconfigured'); `challenge` is the
+ * `WWW-Authenticate` value that makes ChatGPT start the sign-in flow (null when OAuth is not configured). The tool is always
+ * listed (ChatGPT needs to see its `oauth2` scheme); it only runs after `authorize` says 'ok'.
+ */
+export type QueriesAccess = { load: QueriesLoader; authorize: () => Promise<'ok' | 'denied' | 'unconfigured'>; challenge: (() => string) | null; scope: string }
+
+function createServer(getSummary: (period: SummaryPeriod) => Promise<SummaryDto>, queries?: QueriesAccess): McpServer {
   const server = new McpServer({ name: 'olnoo', version: '1.0.0' })
   server.registerTool(
     SUMMARY_TOOL_NAME,
-    { description: SUMMARY_TOOL_DESCRIPTION, inputSchema: SUMMARY_INPUT_SHAPE, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+    {
+      description: SUMMARY_TOOL_DESCRIPTION,
+      inputSchema: SUMMARY_INPUT_SHAPE,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: { securitySchemes: [{ type: 'noauth' }] },
+    },
     async ({ period }) => {
       try {
         return { content: [{ type: 'text' as const, text: JSON.stringify(await getSummary(period)) }] }
@@ -85,14 +97,28 @@ function createServer(getSummary: (period: SummaryPeriod) => Promise<SummaryDto>
       }
     },
   )
-  // Registered ONLY for a request that carries the server key (see hasMcpKey); otherwise the tool does not exist for that caller.
-  if (getQueries) {
+  if (queries) {
     server.registerTool(
       QUERIES_TOOL_NAME,
-      { description: QUERIES_TOOL_DESCRIPTION, inputSchema: SUMMARY_INPUT_SHAPE, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+      {
+        description: QUERIES_TOOL_DESCRIPTION,
+        inputSchema: SUMMARY_INPUT_SHAPE,
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        _meta: { securitySchemes: [{ type: 'oauth2', scopes: [queries.scope] }] },
+      },
       async ({ period }) => {
+        const access = await queries.authorize()
+        if (access !== 'ok') {
+          // OAuth challenge: with `_meta["mcp/www_authenticate"]` ChatGPT opens the account-linking (Auth0 login + consent) flow.
+          const challenge = access === 'denied' && queries.challenge ? queries.challenge() : null
+          return {
+            isError: true,
+            content: [{ type: 'text' as const, text: challenge ? 'Authentication required to read Direct search queries.' : 'Direct search queries are not available (OAuth is not configured).' }],
+            ...(challenge ? { _meta: { 'mcp/www_authenticate': [challenge] } } : {}),
+          }
+        }
         try {
-          return { content: [{ type: 'text' as const, text: JSON.stringify(await getQueries(period)) }] }
+          return { content: [{ type: 'text' as const, text: JSON.stringify(await queries.load(period)) }] }
         } catch {
           return { isError: true, content: [{ type: 'text' as const, text: 'Direct search queries are temporarily unavailable.' }] }
         }
@@ -102,16 +128,30 @@ function createServer(getSummary: (period: SummaryPeriod) => Promise<SummaryDto>
   return server
 }
 
+/** ChatGPT reads `securitySchemes` at the tool's top level; the SDK only emits `_meta`, so tools/list answers get a top-level mirror. */
+async function withTopLevelSecuritySchemes(res: Response): Promise<Response> {
+  try {
+    const body = (await res.clone().json()) as { result?: { tools?: { _meta?: { securitySchemes?: unknown }; securitySchemes?: unknown }[] } }
+    for (const tool of body.result?.tools ?? []) if (tool._meta?.securitySchemes) tool.securitySchemes = tool._meta.securitySchemes
+    const headers = new Headers(res.headers)
+    headers.delete('content-length')
+    return new Response(JSON.stringify(body), { status: res.status, headers })
+  } catch {
+    return res
+  }
+}
+
 /** POST only (405 for everything else). A fresh server + transport per request: nothing is shared between calls. */
-/** `getQueries` is passed by the caller only when the request is authorised for the (non-public) search-query tool. */
-export async function handleMcpRequest(req: Request, getSummary: (period: SummaryPeriod) => Promise<SummaryDto>, getQueries?: QueriesLoader): Promise<Response> {
+export async function handleMcpRequest(req: Request, getSummary: (period: SummaryPeriod) => Promise<SummaryDto>, queries?: QueriesAccess): Promise<Response> {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'method not allowed' }), { status: 405, headers: { ...JSON_HEADERS, Allow: 'POST' } })
   }
-  const server = createServer(getSummary, getQueries)
+  const isToolsList = ((await req.clone().json().catch(() => null)) as { method?: string } | null)?.method === 'tools/list'
+  const server = createServer(getSummary, queries)
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
   await server.connect(transport)
-  const res = await transport.handleRequest(req)
+  let res = await transport.handleRequest(req)
+  if (isToolsList) res = await withTopLevelSecuritySchemes(res)
   const headers = new Headers(res.headers)
   for (const [k, v] of Object.entries(JSON_HEADERS)) headers.set(k, v)
   return new Response(res.body, { status: res.status, headers })

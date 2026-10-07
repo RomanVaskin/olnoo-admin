@@ -1,8 +1,7 @@
 // Direct MCP Eyes v1: whitelist DTO for the read-only MCP tool `get_direct_queries` — the top DriveSet search queries by spend
 // plus the CURRENT negative keywords, built from the existing Direct Observer payload (no new Direct client, no new API).
-// Pure module (no `@/` imports): runs under `node --test`. The route fetches the payload; this file only maps and guards access.
+// Pure module (no `@/` imports): runs under `node --test`. The route fetches the payload; this file only maps it (access is OAuth, see lib/mcp-oauth.ts).
 
-import { timingSafeEqual } from 'node:crypto'
 import { AUTOTARGETING_KEYWORD, type ObserverPayload } from './yandex-direct-report.ts'
 
 export const QUERIES_TOOL_NAME = 'get_direct_queries'
@@ -82,22 +81,4 @@ export function toQueriesDto(
     },
     generatedAt: now.toISOString(),
   }
-}
-
-// ---- access: the search queries are not public ------------------------------------------------------------------
-
-/**
- * `OLNOO_MCP_KEY` (server env, set by hand) unlocks the queries tool for clients that can send `Authorization: Bearer <key>`
- * (Claude Code, curl, scripts). The key is accepted ONLY from that header — never from the URL, so it cannot reach access logs, browser
- * history or a connector URL. ChatGPT connectors cannot send it (they offer OAuth / no authentication only), so for ChatGPT this tool
- * stays off until OAuth is wired. No env value → false for everyone. Constant-time comparison; the key is never logged or echoed.
- */
-export function hasMcpKey(req: Request, expected: string | undefined): boolean {
-  const want = (expected ?? '').trim()
-  if (want.length < 16) return false // unset or too short to be a secret → disabled
-  const auth = req.headers.get('authorization') ?? ''
-  if (!auth.startsWith('Bearer ')) return false
-  const a = Buffer.from(auth.slice(7).trim())
-  const b = Buffer.from(want)
-  return a.length === b.length && timingSafeEqual(a, b)
 }
