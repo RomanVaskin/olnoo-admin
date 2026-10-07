@@ -57,6 +57,7 @@ Full description, current status and roadmap: [`docs/SEO_AGENT.md`](docs/SEO_AGE
 - Improve uses all confirmed clusters of the page in one task. Improve and Create must carry the factual guardrail, CTA and internal-link rules and the Coverage/Quality Gate review — as part of the prompt and PR review, not as DB entities (current gaps: status in `docs/SEO_AGENT.md`).
 - Language, market and region are properties of the project's SEO context; no per-language branches of business logic.
 - SEO Observer is read-only with one normalised data shape and a connector per provider (Yandex first, Google later). No adapter abstraction before a second real integration — the same rule as the Ads Agent.
+- Search and AI visibility (Alice AI, Google AI Overviews / AI Mode, ChatGPT) are one system: AI/GEO checks live in the existing Quality Gate, AI data is another source in the same Observer. No separate GEO/AEO agent, no new tables or provider abstraction; AI findings lead to IMPROVE / CREATE recommendations confirmed by a human, never to automatic page creation, and AI metrics are signals, not hard KPIs (`docs/SEO_AGENT.md` §8a).
 - A change to the SEO pipeline's facts is recorded in `docs/SEO_AGENT.md` in the same commit.
 
 ## Change rule
