@@ -3,7 +3,7 @@ import { pool } from '@/lib/db'
 import { updateProject } from '@/lib/projects-registry'
 
 /**
- * Edit a project and/or archive / restore it: { name?, domain?, sitemapUrl?, locale?, archived?: boolean }.
+ * Edit a project and/or archive / restore it: { name?, domain?, sitemapUrl?, locale?, repository?, archived?: boolean }.
  * The slug cannot be changed. There is deliberately no DELETE: archiving hides the project, its data stays.
  */
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {

@@ -188,9 +188,11 @@ test('route: all projects with a domain, no allow-list, sitemap_url is selected,
   assert.match(route, /check_failed/)
 })
 
-test('screen: no automatic preflight on mount — the check starts only from the button', () => {
+test('screen: no automatic preflight on mount — only the saved last result is read (mode=last); the check starts from buttons', () => {
   const ui = readFileSync(new URL('../components/sections/seo-health.tsx', import.meta.url), 'utf8')
-  assert.doesNotMatch(ui, /useEffect/)
-  assert.equal([...ui.matchAll(/fetch\('\/api\/seo-health'\)/g)].length, 1)
+  assert.equal([...ui.matchAll(/useEffect\(/g)].length, 1) // the single mount effect…
+  assert.match(ui, /useEffect\(\(\) => \{\s*fetch\('\/api\/seo-health\?mode=last'\)/) // …reads the saved results only (cheap DB read)
+  assert.equal([...ui.matchAll(/fetch\('\/api\/seo-health'\)/g)].length, 1) // live «Check all» only inside runCheck
+  assert.equal([...ui.matchAll(/api\/seo-health\?projectId=/g)].length, 1) // per-project «Recheck»
   assert.match(ui, /onClick=\{runCheck\}/)
 })

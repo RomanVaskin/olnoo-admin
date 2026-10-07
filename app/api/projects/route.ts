@@ -12,7 +12,7 @@ export async function GET(req: Request) {
   return NextResponse.json(await listProjects(pool, { archived }))
 }
 
-/** Create a project (active immediately). Body: { name, domain, slug?, sitemapUrl?, locale?, clientId? }. */
+/** Create a project (active immediately). Body: { name, domain, slug?, sitemapUrl?, locale?, repository?, clientId? }. */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null)
   if (!body || typeof body !== 'object') return NextResponse.json({ error: 'JSON body is required' }, { status: 400 })
