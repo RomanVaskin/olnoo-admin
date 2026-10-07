@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { projects } from '@/lib/data'
+import { useProjects } from '@/components/sections/seo-project-picker'
 import { useI18n } from '@/components/i18n-provider'
 import { pluralizeProperties } from '@/lib/i18n'
 
@@ -14,10 +14,13 @@ export function ProjectSelector({
 }) {
   const { t, locale } = useI18n()
   const [open, setOpen] = useState(false)
+  // Active projects from the registry; the selector value is the project slug (what CRM / Ads / Social screens address by).
+  const { projects } = useProjects()
+  const withSlug = projects.filter((p) => p.slug)
 
   const options = [
-    { id: 'all', name: t.projectSelector.allProjects, domain: pluralizeProperties(projects.length, locale) },
-    ...projects.map((p) => ({ id: p.id, name: p.name, domain: p.domain })),
+    { id: 'all', name: t.projectSelector.allProjects, domain: pluralizeProperties(withSlug.length, locale) },
+    ...withSlug.map((p) => ({ id: p.slug as string, name: p.name, domain: p.domain })),
   ]
   const selected = options.find((o) => o.id === value) ?? options[0]
 

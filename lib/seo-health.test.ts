@@ -183,7 +183,7 @@ test('a large sitemap is capped: the count is real, only the first URLs are fetc
 
 test('route: all projects with a domain, no allow-list, sitemap_url is selected, a failing project does not break the batch', () => {
   const route = readFileSync(new URL('../app/api/seo-health/route.ts', import.meta.url), 'utf8')
-  assert.match(route, /SELECT id, name, domain, sitemap_url FROM projects/)
+  assert.match(route, /listProjects\(pool\)/) // the shared registry: active projects (with sitemap_url), no own SQL
   assert.doesNotMatch(route, /driveset/i)
   assert.match(route, /check_failed/)
 })

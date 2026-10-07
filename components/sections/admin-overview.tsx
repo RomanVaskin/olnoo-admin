@@ -1,6 +1,7 @@
 import { SectionHeader, Metric } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
 import { useI18n } from '@/components/i18n-provider'
+import { useProjects } from '@/components/sections/seo-project-picker'
 import {
   adminMetrics,
   metrics,
@@ -33,6 +34,10 @@ export function AdminOverview({
   onProjectChange: (id: string) => void
 }) {
   const { t } = useI18n()
+  // Active projects and their SEO totals come from the shared registry.
+  const { projects } = useProjects()
+  const seoPages = projects.reduce((s, p) => s + p.pagesCount, 0)
+  const seoKeywords = projects.reduce((s, p) => s + p.keywordsCount, 0)
 
   return (
     <div className="flex flex-col gap-10">
@@ -44,9 +49,9 @@ export function AdminOverview({
       />
 
       <section className="grid grid-cols-2 border border-hairline bg-card md:grid-cols-3 lg:grid-cols-5">
-        <Metric label={t.adminOverview.metricActiveProjects} value={adminMetrics.activeProjects} />
-        <Metric label={t.adminOverview.metricSeoPages} value={adminMetrics.seoPages} />
-        <Metric label={t.adminOverview.metricKeywords} value={adminMetrics.keywords} />
+        <Metric label={t.adminOverview.metricActiveProjects} value={projects.length} />
+        <Metric label={t.adminOverview.metricSeoPages} value={seoPages} />
+        <Metric label={t.adminOverview.metricKeywords} value={seoKeywords} />
         <Metric label={t.adminOverview.metricNewLeads} value={adminMetrics.newLeads} accent />
         <Metric label={t.adminOverview.metricOpenLeads} value={adminMetrics.openLeads} />
       </section>
@@ -55,8 +60,8 @@ export function AdminOverview({
         <div className="flex flex-col gap-4">
           <span className="label-mono text-muted-foreground">{t.adminOverview.moduleSeo}</span>
           <div className="border border-hairline bg-card">
-            <StatRow label={t.adminOverview.statPages} value={metrics.pages} />
-            <StatRow label={t.adminOverview.statKeywords} value={metrics.keywords} />
+            <StatRow label={t.adminOverview.statPages} value={seoPages} />
+            <StatRow label={t.adminOverview.statKeywords} value={seoKeywords} />
             <StatRow label={t.adminOverview.statMissingPages} value={metrics.missingPages} />
             <StatRow label={t.adminOverview.statCoverage} value={`${coverage}%`} />
           </div>
