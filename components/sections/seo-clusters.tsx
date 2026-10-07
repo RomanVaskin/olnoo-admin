@@ -243,12 +243,12 @@ function IgnoreButton({ saving, onIgnore }: { saving: boolean; onIgnore: () => v
   )
 }
 
-type TaskPanelState = {
+export type TaskPanelState = {
   title: string
   text: string
 }
 
-function TaskPanel({ panel, onClose }: { panel: TaskPanelState; onClose: () => void }) {
+export function TaskPanel({ panel, onClose }: { panel: TaskPanelState; onClose: () => void }) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
 
