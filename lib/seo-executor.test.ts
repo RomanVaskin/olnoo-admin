@@ -50,14 +50,14 @@ beforeEach(() => resetExecutorRunsForTests())
 test('A: allowlist is exactly the five safe codes; robots_missing is accepted', async () => {
   assert.deepEqual([...SAFE_EXECUTOR_CODES], ['robots_missing', 'canonical_missing', 'canonical_mismatch', 'title_missing', 'h1_missing'])
   const s = setup()
-  const r = await start(s, { projectId: 1, issueCodes: ['robots_missing'] })
+  const r = await start(s, { projectId: 1, issues: [{ code: 'robots_missing' }] })
   assert.ok(r.ok)
 })
 
 test('B/C: unsafe and unknown codes are rejected before anything runs', async () => {
   for (const code of ['page_unreachable', 'site_unavailable', 'sitemap_missing', 'noindex_in_sitemap', 'robots_disallow_all', 'check_failed', 'page_redirect', 'page_http_error', 'sitemap_unreadable', 'whatever']) {
     const s = setup({ issues: [issue(code)] })
-    const r = await startExecutorRun(s.deps, { projectId: 1, issueCodes: [code] })
+    const r = await startExecutorRun(s.deps, { projectId: 1, issues: [{ code }] })
     assert.ok(!r.ok && r.http === 400, code)
     assert.equal(s.calls.length, 0)
   }
@@ -74,7 +74,7 @@ test('D: project without repository (or a malformed one) is rejected', async () 
 
 test('E/S: stale issue (no longer in the saved result) → no_changes and the agent is NOT called', async () => {
   const s = setup({ issues: [issue('page_unreachable')] })
-  const r = await start(s, { projectId: 1, issueCodes: ['robots_missing'] })
+  const r = await start(s, { projectId: 1, issues: [{ code: 'robots_missing' }] })
   assert.ok(r.ok)
   assert.equal(getExecutorRun(1)?.status, 'no_changes')
   assert.equal(s.calls.length, 0)
@@ -215,4 +215,44 @@ test('wiring: API route, UI buttons only for safe codes, no auto-start', () => {
   assert.match(ui, /isSafeExecutorCode\(i\.code\)/)
   assert.match(ui, /r\.issues\.some\(\(i\) => isSafeExecutorCode\(i\.code\)\)/)
   assert.doesNotMatch(readFileSync(new URL('./seo-decision-rules.ts', import.meta.url), 'utf8'), /executor/i)
+})
+
+test('per-issue start addresses exactly one issue by code + url; the other page with the same code is not sent to the agent', async () => {
+  const a = 'https://driveset.ru/a', b = 'https://driveset.ru/b'
+  const s = setup({ issues: [issue('canonical_missing', a), issue('canonical_missing', b)] })
+  await start(s, { projectId: 1, issues: [{ code: 'canonical_missing', url: a, message: 'forged', severity: 'ERROR' }] })
+  const input = s.calls.find((c) => c.cmd === 'claude')!.opts.input!
+  assert.match(input, /ISSUES \(1\)/)
+  assert.ok(input.includes(a) && !input.includes(b))
+  assert.doesNotMatch(input, /forged/)
+  assert.equal(getExecutorRun(1)?.status, 'pr_created')
+})
+
+test('project-level start (no issues) takes ALL current safe issues; url=null project-level issue works per-issue', async () => {
+  const a = 'https://driveset.ru/a', b = 'https://driveset.ru/b'
+  const s = setup({ issues: [issue('canonical_missing', a), issue('canonical_missing', b), issue('robots_missing'), issue('page_unreachable', b)] })
+  await start(s)
+  const input = s.calls.find((c) => c.cmd === 'claude')!.opts.input!
+  assert.match(input, /ISSUES \(3\)/)
+  assert.doesNotMatch(input, /page_unreachable/)
+  resetExecutorRunsForTests()
+  const r = setup({ issues: [issue('robots_missing'), issue('canonical_missing', a)] })
+  await start(r, { projectId: 1, issues: [{ code: 'robots_missing', url: null }] })
+  const rin = r.calls.find((c) => c.cmd === 'claude')!.opts.input!
+  assert.match(rin, /ISSUES \(1\)/)
+  assert.doesNotMatch(rin, /canonical_missing/)
+})
+
+test('stale identity: browser asks canonical_missing /a, latest result only has /b → no_changes, Claude not called', async () => {
+  const s = setup({ issues: [issue('canonical_missing', 'https://driveset.ru/b')] })
+  await start(s, { projectId: 1, issues: [{ code: 'canonical_missing', url: 'https://driveset.ru/a' }] })
+  assert.equal(getExecutorRun(1)?.status, 'no_changes')
+  assert.equal(s.calls.length, 0)
+})
+
+test('malformed issues payloads are rejected', async () => {
+  for (const issues of [[], 'x', [{ url: 'u' }], [{ code: 'robots_missing', url: 5 }], [null]]) {
+    const r = await startExecutorRun(setup().deps, { projectId: 1, issues })
+    assert.ok(!r.ok && r.http === 400)
+  }
 })

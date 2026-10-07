@@ -12,9 +12,9 @@ export function useExecutorRuns() {
   const [runs, setRuns] = useState<Record<number, AgentRun>>({})
   const [errors, setErrors] = useState<Record<number, string>>({})
 
-  const start = (projectId: number, codes?: string[]) => {
+  const start = (projectId: number, issues?: { code: string; url?: string }[]) => {
     setErrors((cur) => ({ ...cur, [projectId]: '' }))
-    fetch('/api/seo-executor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, ...(codes ? { issueCodes: codes } : {}) }) })
+    fetch('/api/seo-executor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, ...(issues ? { issues } : {}) }) })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'error')

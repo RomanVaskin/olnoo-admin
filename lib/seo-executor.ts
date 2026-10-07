@@ -76,7 +76,7 @@ export type StartResult =
   | { ok: true; run: ExecutorRun; done: Promise<void> }
   | { ok: false; http: 400 | 404 | 409 | 422; error: string }
 
-export type StartInput = { projectId: unknown; issueCodes?: unknown }
+export type StartInput = { projectId: unknown; issues?: unknown }
 
 /**
  * Validates everything synchronously-ish (project, repository, codes, stale guard) and, if a run is warranted, registers it and
@@ -86,13 +86,21 @@ export async function startExecutorRun(deps: ExecutorDeps, input: StartInput): P
   const projectId = input.projectId
   if (typeof projectId !== 'number' || !Number.isInteger(projectId) || projectId <= 0) return { ok: false, http: 400, error: 'projectId must be a positive integer' }
 
-  let requested: string[] | null = null
-  if (input.issueCodes !== undefined) {
-    if (!Array.isArray(input.issueCodes) || input.issueCodes.some((c) => typeof c !== 'string')) return { ok: false, http: 400, error: 'issueCodes must be an array of strings' }
-    requested = [...new Set(input.issueCodes as string[])]
-    const bad = requested.filter((c) => !isSafeExecutorCode(c))
-    if (requested.length === 0) return { ok: false, http: 400, error: 'issueCodes must not be empty' }
-    if (bad.length) return { ok: false, http: 400, error: `issue code is not safe for the Executor: ${bad.map((c) => sanitize(c, 40)).join(', ')}` }
+  // Per-issue start addresses issues by identity `code + url` (issueKey; url null/absent = project-level issue). Only the identity is
+  // read from the browser; message / severity / facts always come from the latest saved result.
+  let requested: { code: string; url: string | null }[] | null = null
+  if (input.issues !== undefined) {
+    const list = input.issues
+    const valid = (x: unknown) => {
+      if (!x || typeof x !== 'object') return false
+      const { code, url } = x as { code?: unknown; url?: unknown }
+      return typeof code === 'string' && (url === undefined || url === null || typeof url === 'string')
+    }
+    const shapeOk = Array.isArray(list) && list.length > 0 && list.every(valid)
+    if (!shapeOk) return { ok: false, http: 400, error: 'issues must be a non-empty array of { code, url? }' }
+    requested = (list as { code: string; url?: string | null }[]).map((x) => ({ code: x.code, url: x.url ?? null }))
+    const bad = requested.filter((r) => !isSafeExecutorCode(r.code))
+    if (bad.length) return { ok: false, http: 400, error: `issue code is not safe for the Executor: ${[...new Set(bad.map((r) => sanitize(r.code, 40)))].join(', ')}` }
   }
 
   const project = await deps.getProject(projectId)
@@ -103,7 +111,8 @@ export async function startExecutorRun(deps: ExecutorDeps, input: StartInput): P
   if (isActive(runs.get(projectId))) return { ok: false, http: 409, error: 'A run is already active for this project' }
 
   const health = await deps.readLastResult(projectId)
-  const safeIssues: Issue[] = (health?.issues ?? []).filter((i) => isSafeExecutorCode(i.code) && (requested === null || requested.includes(i.code)))
+  const requestedKeys = requested ? new Set(requested.map((r) => issueKey({ code: r.code, url: r.url ?? undefined }))) : null
+  const safeIssues: Issue[] = (health?.issues ?? []).filter((i) => isSafeExecutorCode(i.code) && (requestedKeys === null || requestedKeys.has(issueKey(i))))
   const seen = new Set<string>()
   const issues = safeIssues.filter((i) => (seen.has(issueKey(i)) ? false : (seen.add(issueKey(i)), true)))
 
@@ -116,7 +125,7 @@ export async function startExecutorRun(deps: ExecutorDeps, input: StartInput): P
 
   if (!health || issues.length === 0) {
     // Stale guard: the requested safe issue is no longer in the current saved result → nothing to fix, the agent is never started.
-    run.issueCodes = requested ?? []
+    run.issueCodes = requested ? [...new Set(requested.map((r) => r.code))] : []
     log('Нет актуальных безопасных issues в последнем результате Technical SEO (STALE) — агент не запускался')
     set('no_changes')
     return { ok: true, run, done: Promise.resolve() }

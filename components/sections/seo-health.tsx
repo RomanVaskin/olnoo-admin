@@ -300,7 +300,7 @@ export function SeoHealth() {
                                   <button
                                     type="button"
                                     disabled={agentRuns[r.projectId]?.status === 'running' || agentRuns[r.projectId]?.status === 'queued'}
-                                    onClick={() => startAgent(r.projectId, [i.code])}
+                                    onClick={() => startAgent(r.projectId, [{ code: i.code, ...(i.url ? { url: i.url } : {}) }])}
                                     className="label-mono text-foreground/80 underline underline-offset-4 hover:text-foreground disabled:opacity-50"
                                   >
                                     {t.seoHealth.agentFix}
