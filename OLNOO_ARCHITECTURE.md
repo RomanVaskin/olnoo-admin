@@ -49,12 +49,15 @@ Project is the main connecting object between modules. One Client can have sever
 
 ## SEO
 
-- One search intent = one page. Do not create thin pages for synonyms.
-- Public sites must have a sitemap.
-- Create/Improve use the full keyword cluster, and must include CTA + internal links + pass the Quality Gate.
-- Search queries are cleaned by AI before clustering: every keyword gets a stored relevance status (NULL = not checked, distinct from `uncertain`), low confidence is downgraded to `uncertain` deterministically, manual decisions are never overwritten by AI, and clustering reads the live status. Projects that never ran cleanup keep the old behaviour. The AI is told about the project through an explicit per-project SEO context (business, region, services, planned directions, what is not offered) plus existing pages, never pages alone; an exclusion the AI could not back with known business/region data is not saved. The user does not run cleanup separately: the single clustering action runs it first when keywords are unclassified (`lib/seo-pipeline.ts` only orchestrates — cleanup and clustering keep their own jobs and rules).
-- AI clustering of any size runs in batches and then merges clusters across batches by search intent; one intent must never end up as several clusters because of batch boundaries. Human-reviewed clusters are kept on re-runs.
-- A bulk keyword import is one batch: one operation, one transaction, recorded with the exact keywords it brought. Correcting a mistaken import = «Удалить импорт» (deletes only what is proven to come from that import; anything ambiguous is shown and kept) and importing the files into the right project — no separate transfer feature.
+Full description, current status and roadmap: [`docs/SEO_AGENT.md`](docs/SEO_AGENT.md) (single source of truth). Principles only:
+
+- **Minimal SEO module + read-only SEO Observer.** No separate SEO Agent / Content Agent / Developer Agent / Orchestrator until a real need appears. The page change is made by Claude Code from a generated task, with a manual PR; nothing in SEO changes without human confirmation.
+- One search intent = one page; no thin pages for synonyms. Public sites must have a sitemap.
+- AI recommendation is not human confirmation. `seo_clusters.confirmed_page_id` (with `review_status`) is the only source of truth for cluster → page; a keyword's page is derived from its cluster, not stored separately.
+- Improve uses all confirmed clusters of the page in one task. Improve and Create must carry the factual guardrail, CTA and internal-link rules and the Coverage/Quality Gate review — as part of the prompt and PR review, not as DB entities (current gaps: status in `docs/SEO_AGENT.md`).
+- Language, market and region are properties of the project's SEO context; no per-language branches of business logic.
+- SEO Observer is read-only with one normalised data shape and a connector per provider (Yandex first, Google later). No adapter abstraction before a second real integration — the same rule as the Ads Agent.
+- A change to the SEO pipeline's facts is recorded in `docs/SEO_AGENT.md` in the same commit.
 
 ## Change rule
 

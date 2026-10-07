@@ -34,7 +34,7 @@ Every new public OLNOO Next.js site must ship with:
 - public, indexable routes listed in the sitemap
 - private/admin/API/noindex routes excluded from it
 
-The Technical SEO screen in OLNOO Admin (SEO → Technical SEO) automatically verifies that the site is reachable and its sitemap is valid, with no manual checking.
+The Technical SEO screen in OLNOO Admin (SEO → Technical SEO) checks, when it is opened and via its «Check all» button, that each project's site is reachable and its sitemap is valid. The check is not scheduled and its result is not stored. See [`docs/SEO_AGENT.md`](docs/SEO_AGENT.md) for the SEO module.
 
 ## Learn More
 
