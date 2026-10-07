@@ -4,6 +4,7 @@ Before any OLNOO technical or product task, read:
 
 - `OLNOO_PROJECT_MAP.md` — confirmed production facts (domains, repos, paths, services, ports, DB, routes).
 - `OLNOO_ARCHITECTURE.md` — design/development rules for new and existing modules.
+- `docs/SEO_AGENT.md` — **for any SEO-related task** (semantics, keywords, clusters, Improve/Create, sitemap, indexing, SEO Observer): the single source of truth for the SEO pipeline, its current status and roadmap.
 
 Do not re-discover repo/path/service/port/database if it is already recorded there.
 
@@ -197,149 +198,19 @@ Avoid:
 
 Do not change the OLNOO logo/brand geometry without explicit instruction.
 
-# SEO principles
+# SEO
 
-Main rule:
+Source of truth for the SEO module (pipeline, current status, roadmap, SEO Observer): `docs/SEO_AGENT.md`. Read it before any SEO task.
 
-**One real search intent = one page.**
+Rules for every public site, in every project:
 
-Do not create:
-- one page per keyword;
-- thin pages for synonyms;
-- thin city pages without a distinct local intent/value.
-
-Primary keyword = main query for the page.
-
-Secondary keywords = naturally covered through:
-- Title;
-- Description;
-- H1;
-- H2/H3;
-- body content;
-- FAQ;
-- commercial blocks.
-
-Do not keyword-stuff.
-
-All significant topics in a cluster should be meaningfully covered.
-
-# SEO workflow
-
-**Semantics/Wordstat → Keywords → AI clustering → Existing page / No page / Ignored → Human review → Improve/Create → SEO Coverage → Quality Gate → CTA → Internal links → Publish → Sitemap → Indexing → Search data → Improve again**
-
-AI recommendation is not the same as human confirmation.
-
-If AI finds a page:
-
-**Recommend → Confirm → or Find another**
-
-If AI says no page:
-
-**No page → Create page → or Find existing**
-
-Do not force users to browse huge dropdowns; use search over URL/title/H1.
-
-# SEO Create / Improve
-
-Improve:
-- use the confirmed existing page;
-- keep design/components;
-- change only what is needed.
-
-Create:
-- create one page for one cluster/search intent;
-- first check for an existing page with the same intent;
-- if one exists, do not create a duplicate.
-
-Always pass the whole cluster as a semantic map.
-
-Do not mechanically insert every long-tail phrase.
-
-# SEO CTA / conversion
-
-SEO pages should lead to a meaningful next action.
-
-Commercial intent:
-- CTA in the main body;
-- CTA near the end;
-- reuse existing contact flow;
-- do not create a new form when a working one already exists;
-- do not send users to the homepage without reason.
-
-Informational intent:
-- softer relevant CTA.
-
-For `olnoo.com`, reuse the existing contact / ProjectRequest flow and do not change the working Resend/email flow unless needed.
-
-# SEO Quality Gate
-
-After Create/Improve, perform a critical review for:
-- unsupported claims;
-- overpromising;
-- invented facts;
-- keyword stuffing;
-- unnatural language;
-- scope creep;
-- design regressions.
-
-Do not invent:
-- clients;
-- case studies;
-- numbers;
-- results;
-- partners;
-- certificates;
-- awards;
-- experience.
-
-If a factual claim is not supported by project data, rewrite it in a neutral form.
-
-# Sitemap
-
-Every public site should have `sitemap.xml`.
-
-For Next.js App Router, prefer:
-
-`app/sitemap.ts`
-
-Do not maintain a static XML manually if routes can be generated in code.
-
-Include public indexable pages.
-
-Exclude:
-- admin;
-- dashboard;
-- API;
-- private/auth;
-- noindex pages.
-
-New public pages should enter the sitemap automatically whenever practical.
-
-# Technical SEO
-
-OLNOO Admin should automatically check Projects for at least:
-- Site status;
-- Sitemap status;
-- number of URLs in sitemap;
-- Last checked.
-
-Do not hardcode site lists.
-
-A new Project should automatically enter common checks.
-
-`robots.txt` is not currently mandatory for the OLNOO SEO workflow unless needed.
-
-# Search engines
-
-Minimum for public sites:
-- Google Search Console;
-- Yandex Webmaster;
-- Bing Webmaster Tools;
-- sitemap.xml.
-
-Do not add many extra search engines without a practical reason.
-
-IndexNow may be added later if it reduces manual work.
+- **One real search intent = one page.** Do not create a page per keyword, thin pages for synonyms, or thin city pages without a distinct local intent/value.
+- Primary keyword = main query of the page; secondary keywords are covered naturally (Title, Description, H1, H2/H3, body, FAQ, commercial blocks). No keyword stuffing; do not mechanically insert every long-tail phrase.
+- **AI recommendation is not human confirmation.** A person confirms which page a cluster belongs to.
+- **Do not invent facts:** no invented clients, case studies, numbers, results, partners, certificates, awards or experience. Keywords describe search demand, not business facts; an unsupported claim is rewritten neutrally or left out.
+- CTA and internal links reuse the project's existing contact/conversion flow and pages; do not create a new form when a working one exists. For `olnoo.com`, reuse the existing contact / ProjectRequest flow and do not change the working Resend/email flow unless needed.
+- Every public site has `sitemap.xml`. For Next.js App Router prefer `app/sitemap.ts` generated from routes; do not maintain static XML by hand. Include public indexable pages; exclude admin, dashboard, API, private/auth and noindex pages. `robots.txt` is not currently mandatory for the OLNOO SEO workflow unless needed.
+- Minimum search-engine setup for a public site: Google Search Console, Yandex Webmaster, Bing Webmaster Tools, and `sitemap.xml`. IndexNow may be added later if it reduces manual work. Which of these OLNOO Admin reads data from is tracked in `docs/SEO_AGENT.md`.
 
 # OLNOO Admin
 
@@ -485,10 +356,10 @@ Do not choose by price alone.
 
 Examples:
 
-Simple classification → cheap suitable model  
-SEO clustering → strong reasoning model  
-Document OCR → local OCR first, vision fallback  
-Code → strong coding model
+- Simple classification → cheap suitable model
+- SEO bulk steps (relevance, clustering) → cheap suitable model; final Improve/Create text → strong model
+- Document OCR → local OCR first, vision fallback
+- Code → strong coding model
 
 Fallback belongs in the Router, not each app.
 
