@@ -19,6 +19,7 @@ type ProjectRow = {
   domain: string
   sitemap_url: string
   locale: string | null
+  repository: string | null
   client_name: string
   status: string
   pages_count: number
@@ -26,8 +27,8 @@ type ProjectRow = {
   archived_at: string | null
 }
 
-type Form = { id: number | null; name: string; slug: string; domain: string; sitemapUrl: string; locale: string }
-const EMPTY_FORM: Form = { id: null, name: '', slug: '', domain: '', sitemapUrl: '', locale: '' }
+type Form = { id: number | null; name: string; slug: string; domain: string; sitemapUrl: string; locale: string; repository: string }
+const EMPTY_FORM: Form = { id: null, name: '', slug: '', domain: '', sitemapUrl: '', locale: '', repository: '' }
 
 // Only the SEO module has a real backend so far — CRM/Social/Ads/PR/Analytics stay out of scope here.
 const PROJECT_MODULES: ModuleKey[] = ['SEO']
@@ -60,8 +61,8 @@ export function ProjectsView() {
     setSaving(true)
     setError(null)
     const body = form.id === null
-      ? { name: form.name, slug: form.slug || undefined, domain: form.domain, sitemapUrl: form.sitemapUrl || undefined, locale: form.locale || undefined }
-      : { name: form.name, domain: form.domain, sitemapUrl: form.sitemapUrl, locale: form.locale }
+      ? { name: form.name, slug: form.slug || undefined, domain: form.domain, sitemapUrl: form.sitemapUrl || undefined, locale: form.locale || undefined, repository: form.repository || undefined }
+      : { name: form.name, domain: form.domain, sitemapUrl: form.sitemapUrl, locale: form.locale, repository: form.repository }
     try {
       const res = await fetch(form.id === null ? '/api/projects' : `/api/projects/${form.id}`, {
         method: form.id === null ? 'POST' : 'PATCH',
@@ -123,6 +124,7 @@ export function ProjectsView() {
             {field(t.projectsView.fieldDomain, 'domain', { placeholder: 'https://example.com' })}
             {field(t.projectsView.fieldSitemap, 'sitemapUrl', { hint: t.projectsView.fieldSitemapHint })}
             {field(t.projectsView.fieldLocale, 'locale', { placeholder: 'ru' })}
+            {field(t.projectsView.fieldRepository, 'repository', { placeholder: 'owner/repo', hint: t.projectsView.fieldRepositoryHint })}
           </div>
           {error && <p className="label-mono text-destructive">{error}</p>}
           <div className="flex gap-3">
@@ -170,7 +172,7 @@ export function ProjectsView() {
               <Td>
                 <span className="flex gap-4">
                   <button
-                    onClick={() => { setError(null); setForm({ id: p.id, name: p.name, slug: p.slug ?? '', domain: p.domain, sitemapUrl: p.sitemap_url, locale: p.locale ?? '' }) }}
+                    onClick={() => { setError(null); setForm({ id: p.id, name: p.name, slug: p.slug ?? '', domain: p.domain, sitemapUrl: p.sitemap_url, locale: p.locale ?? '', repository: p.repository ?? '' }) }}
                     className={linkButtonClass}
                   >
                     {t.projectsView.edit}

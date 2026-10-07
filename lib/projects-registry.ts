@@ -10,13 +10,15 @@ export type ArchivedFilter = 'exclude' | 'include' | 'only'
 
 export const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const LOCALE_RE = /^[a-z]{2}(-[a-z]{2})?$/i
+/** GitHub `owner/repo`: owner up to 39 chars (letters, digits, '-'), repo up to 100 (letters, digits, '.', '_', '-'). */
+export const REPOSITORY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
 
 /** Active projects: THE condition every project-based list/check must use (never a hand-written one). */
 export const ACTIVE_PROJECT_SQL = 'pr.archived_at IS NULL'
 
 const BASE_SELECT = `
   SELECT
-    pr.id, pr.client_id, pr.name, pr.slug, pr.domain, pr.sitemap_url, pr.locale, pr.status,
+    pr.id, pr.client_id, pr.name, pr.slug, pr.domain, pr.sitemap_url, pr.locale, pr.repository, pr.status,
     pr.last_sync_at, pr.created_at, pr.archived_at,
     c.name AS client_name,
     COALESCE(pg_count.count, 0)::int AS pages_count,
@@ -48,6 +50,7 @@ export type ProjectRow = {
   domain: string
   sitemap_url: string
   locale: string | null
+  repository: string | null
   status: string
   last_sync_at: string | null
   created_at: string
@@ -72,8 +75,8 @@ export async function getProject(db: Queryable, id: number): Promise<ProjectRow 
 
 // ---- validation ---------------------------------------------------------------------------------------------------
 
-export type ProjectInput = { name?: unknown; slug?: unknown; domain?: unknown; sitemapUrl?: unknown; locale?: unknown; clientId?: unknown }
-export type ValidProject = { name: string; slug?: string; domain: string; sitemapUrl: string; locale: string | null; clientId?: number }
+export type ProjectInput = { name?: unknown; slug?: unknown; domain?: unknown; sitemapUrl?: unknown; locale?: unknown; repository?: unknown; clientId?: unknown }
+export type ValidProject = { name: string; slug?: string; domain: string; sitemapUrl: string; locale: string | null; repository: string | null; clientId?: number }
 
 export function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64)
@@ -116,12 +119,22 @@ export function validateProjectInput(input: ProjectInput): { ok: true; value: Va
     if (typeof input.locale !== 'string' || !LOCALE_RE.test(input.locale.trim())) return { ok: false, error: 'locale must look like "ru" or "en"' }
     locale = input.locale.trim().toLowerCase()
   }
+  // Optional; empty = not set. Never derived from the domain/slug.
+  let repository: string | null = null
+  if (input.repository !== undefined && input.repository !== null && input.repository !== '') {
+    const r = typeof input.repository === 'string' ? input.repository.trim() : null
+    if (r === null) return { ok: false, error: 'repository must look like owner/repo (GitHub)' }
+    if (r !== '') {
+      if (!REPOSITORY_RE.test(r) || r.endsWith('.git') || r.split('/')[1] === '.' || r.split('/')[1] === '..') return { ok: false, error: 'repository must look like owner/repo (GitHub)' }
+      repository = r
+    }
+  }
   let clientId: number | undefined
   if (input.clientId !== undefined && input.clientId !== null && input.clientId !== '') {
     clientId = Number(input.clientId)
     if (!Number.isInteger(clientId) || clientId < 1) return { ok: false, error: 'clientId must be a positive integer' }
   }
-  return { ok: true, value: { name, slug, domain, sitemapUrl, locale, clientId } }
+  return { ok: true, value: { name, slug, domain, sitemapUrl, locale, repository, clientId } }
 }
 
 export type WriteResult = { ok: true; project: ProjectRow } | { ok: false; status: 400 | 404 | 409; error: string }
@@ -148,8 +161,8 @@ export async function createProject(db: Queryable, input: ProjectInput): Promise
       return { ok: false, status: 400, error: 'client not found' }
     }
     const { rows } = await db.query(
-      'INSERT INTO projects (client_id, name, slug, domain, sitemap_url, locale) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-      [clientId, p.name, p.slug, p.domain, p.sitemapUrl, p.locale],
+      'INSERT INTO projects (client_id, name, slug, domain, sitemap_url, locale, repository) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+      [clientId, p.name, p.slug, p.domain, p.sitemapUrl, p.locale, p.repository],
     )
     return { ok: true, project: (await getProject(db, rows[0].id as number))! }
   } catch (err) {
@@ -158,10 +171,10 @@ export async function createProject(db: Queryable, input: ProjectInput): Promise
   }
 }
 
-export type ProjectPatch = { name?: unknown; domain?: unknown; sitemapUrl?: unknown; locale?: unknown; slug?: unknown; archived?: unknown }
+export type ProjectPatch = { name?: unknown; domain?: unknown; sitemapUrl?: unknown; locale?: unknown; repository?: unknown; slug?: unknown; archived?: unknown }
 
 /**
- * Edit (name, domain, sitemapUrl, locale) and/or archive / restore (`archived: true | false`). The slug is NOT editable: other
+ * Edit (name, domain, sitemapUrl, locale, repository) and/or archive / restore (`archived: true | false`). The slug is NOT editable: other
  * systems address the project by it (CRM inbound, observers, Unified). Archiving keeps all data; it only hides the project.
  */
 export async function updateProject(db: Queryable, id: number, patch: ProjectPatch): Promise<WriteResult> {
@@ -176,7 +189,7 @@ export async function updateProject(db: Queryable, id: number, patch: ProjectPat
     params.push(value)
     sets.push(`${column} = $${params.length}`)
   }
-  const touchesFields = ['name', 'domain', 'sitemapUrl', 'locale'].some((k) => (patch as Record<string, unknown>)[k] !== undefined)
+  const touchesFields = ['name', 'domain', 'sitemapUrl', 'locale', 'repository'].some((k) => (patch as Record<string, unknown>)[k] !== undefined)
   if (touchesFields) {
     const v = validateProjectInput({
       name: patch.name ?? current.name,
@@ -184,12 +197,14 @@ export async function updateProject(db: Queryable, id: number, patch: ProjectPat
       domain: patch.domain ?? current.domain,
       sitemapUrl: patch.sitemapUrl !== undefined ? patch.sitemapUrl : patch.domain !== undefined ? '' : current.sitemap_url,
       locale: patch.locale !== undefined ? patch.locale : current.locale,
+      repository: patch.repository !== undefined ? patch.repository : current.repository,
     })
     if (!v.ok) return { ok: false, status: 400, error: v.error }
     if (patch.name !== undefined) set('name', v.value.name)
     if (patch.domain !== undefined) set('domain', v.value.domain)
     if (patch.sitemapUrl !== undefined || patch.domain !== undefined) set('sitemap_url', v.value.sitemapUrl)
     if (patch.locale !== undefined) set('locale', v.value.locale)
+    if (patch.repository !== undefined) set('repository', v.value.repository)
   }
   if (patch.archived !== undefined) sets.push(patch.archived ? 'archived_at = COALESCE(archived_at, now())' : 'archived_at = NULL')
   if (sets.length === 0) return { ok: false, status: 400, error: 'nothing to update' }

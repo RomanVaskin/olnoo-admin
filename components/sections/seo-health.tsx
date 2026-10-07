@@ -1,10 +1,11 @@
 'use client'
 
-import { Fragment, useCallback, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
 import { TaskPanel, type TaskPanelState } from '@/components/sections/seo-clusters'
 import { buildTechnicalSeoFixTask } from '@/lib/technical-seo-fix-task'
+import type { Recheck } from '@/lib/seo-health-store'
 
 type CheckStatus = 'OK' | 'Warning' | 'Missing' | 'Error'
 
@@ -21,6 +22,9 @@ type PageCheck = {
   inSitemap: true
 }
 
+/** An active project that was never checked (from `mode=last`): no SEO result, only enough for a row and «Recheck». */
+type NotChecked = { notChecked: true; projectId: number; projectName: string; domain: string; repository: string | null }
+
 type ProjectHealth = {
   projectId: number
   projectName: string
@@ -36,18 +40,47 @@ type ProjectHealth = {
   warnings: number
   overall: 'OK' | 'Warning' | 'Error'
   checkedAt: string
+  repository?: string | null
+  recheck?: Recheck
+  notChecked?: false
 }
 
 export function SeoHealth() {
   const { t, locale } = useI18n()
   const dateLocale = locale === 'ru' ? 'ru-RU' : 'en-US'
-  const [rows, setRows] = useState<ProjectHealth[]>([])
+  const [rows, setRows] = useState<(ProjectHealth | NotChecked)[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<number | null>(null)
-  // The preflight is expensive (up to 100 URLs per project): it runs only when the user presses the button, never on mount.
+  // The preflight is expensive (up to 100 URLs per project): it runs only when the user presses a button, never on mount.
+  // On mount only the SAVED last results are read (`mode=last`: a cheap DB read, no site fetches).
   const [checked, setChecked] = useState(false)
+  const [rechecking, setRechecking] = useState<number | null>(null)
+  const [recheckError, setRecheckError] = useState<number | null>(null)
   const [fixPanel, setFixPanel] = useState<TaskPanelState | null>(null)
+
+  useEffect(() => {
+    fetch('/api/seo-health?mode=last')
+      .then((res) => (res.ok ? res.json() : []))
+      .then((saved: (ProjectHealth | NotChecked)[]) => setRows((cur) => (cur.length ? cur : saved)))
+      .catch(() => {})
+  }, [])
+
+  // Manual recheck of ONE project: only its row is replaced; the response carries the resolved / still failing / new comparison.
+  const recheck = (projectId: number) => {
+    setRechecking(projectId)
+    setRecheckError(null)
+    fetch(`/api/seo-health?projectId=${projectId}`)
+      .then((res) => {
+        if (!res.ok) throw new Error()
+        return res.json()
+      })
+      .then((data: ProjectHealth[]) => {
+        if (data[0]) setRows((cur) => cur.map((x) => (x.projectId === projectId ? data[0] : x)))
+      })
+      .catch(() => setRecheckError(projectId))
+      .finally(() => setRechecking(null))
+  }
 
   const runCheck = useCallback(() => {
     setLoading(true)
@@ -67,7 +100,7 @@ export function SeoHealth() {
     r.errors + r.warnings === 0 ? '0' : `${r.errors} ${t.seoHealth.errorsWord} · ${r.warnings} ${t.seoHealth.warningsWord}`
   // One prompt per click: a single issue, or all issues of this project (no duplicates, nothing from other projects).
   const openFix = (r: ProjectHealth, issues: Issue[]) => {
-    const text = buildTechnicalSeoFixTask(r, issues)
+    const text = buildTechnicalSeoFixTask({ ...r, repository: r.repository ?? null }, issues)
     if (text) setFixPanel({ title: `${t.seoHealth.fixTaskTitle} — ${r.projectName}`, text })
   }
   const dash = (v: string | number | null) => (v === null || v === '' ? t.seoHealth.missing : v)
@@ -91,7 +124,7 @@ export function SeoHealth() {
 
       {loading && <p className="label-mono text-muted-foreground">{t.seoHealth.checking}</p>}
       {!loading && error && <p className="label-mono text-destructive">{error}</p>}
-      {!checked && <p className="label-mono text-muted-foreground">{t.seoHealth.notRun}</p>}
+      {!checked && rows.length === 0 && <p className="label-mono text-muted-foreground">{t.seoHealth.notRun}</p>}
       {checked && !loading && !error && rows.length === 0 && (
         <p className="label-mono text-muted-foreground">{t.seoHealth.empty}</p>
       )}
@@ -112,7 +145,29 @@ export function SeoHealth() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {rows.map((r) =>
+              r.notChecked ? (
+                <tr key={r.projectId} className="transition-colors hover:bg-muted/60">
+                  <Td className="font-medium text-foreground">{r.projectName}</Td>
+                  <Td className="font-mono text-xs">
+                    {r.domain}
+                    {r.repository && <span className="ml-2 text-muted-foreground">{r.repository}</span>}
+                  </Td>
+                  <td colSpan={6} className="label-mono border-b border-hairline px-4 py-3.5 align-middle text-muted-foreground">
+                    {t.seoHealth.neverChecked}
+                    {recheckError === r.projectId && <span className="ml-3 text-destructive">{t.seoHealth.checkError}</span>}
+                  </td>
+                  <Td>
+                    <button
+                      onClick={() => recheck(r.projectId)}
+                      disabled={rechecking !== null || loading}
+                      className="label-mono whitespace-nowrap text-foreground/80 underline underline-offset-4 hover:text-foreground disabled:opacity-50"
+                    >
+                      {rechecking === r.projectId ? t.seoHealth.checking : t.seoHealth.recheck}
+                    </button>
+                  </Td>
+                </tr>
+              ) : (
               <Fragment key={r.projectId}>
                 <tr className="transition-colors hover:bg-muted/60">
                   <Td className="font-medium text-foreground">{r.projectName}</Td>
@@ -156,6 +211,33 @@ export function SeoHealth() {
                           {r.robots.httpStatus ? ` · robots.txt HTTP ${r.robots.httpStatus}` : ''}
                           {r.robots.disallowAll ? ` · ${t.seoHealth.robotsClosed}` : ''}
                         </p>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                          <button
+                            type="button"
+                            onClick={() => recheck(r.projectId)}
+                            disabled={rechecking !== null || loading}
+                            className="label-mono w-fit border border-foreground px-4 py-2 text-foreground transition-colors hover:bg-foreground hover:text-background disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {rechecking === r.projectId ? t.seoHealth.checking : t.seoHealth.recheck}
+                          </button>
+                          {recheckError === r.projectId && <span className="label-mono text-destructive">{t.seoHealth.checkError}</span>}
+                          {r.recheck && (
+                            <span className="label-mono text-muted-foreground">
+                              {t.seoHealth.recheckResolved}: {r.recheck.resolved.length} · {t.seoHealth.recheckStill}: {r.recheck.stillFailing.length} · {t.seoHealth.recheckNew}: {r.recheck.newIssues.length}
+                            </span>
+                          )}
+                        </div>
+                        {r.recheck && r.recheck.resolved.length > 0 && (
+                          <ul className="flex flex-col gap-1.5">
+                            {r.recheck.resolved.map((i, n) => (
+                              <li key={n} className="flex flex-wrap items-baseline gap-x-3 text-sm">
+                                <span className="label-mono text-foreground">RESOLVED</span>
+                                <span className="line-through">{i.message}</span>
+                                {i.url && <span className="font-mono text-xs text-muted-foreground">{i.url}</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                         {r.issues.length === 0 ? (
                           <p className="label-mono text-muted-foreground">{t.seoHealth.noIssues}</p>
                         ) : (
@@ -171,6 +253,11 @@ export function SeoHealth() {
                             {r.issues.map((i, n) => (
                               <li key={n} className="flex flex-wrap items-baseline gap-x-3 text-sm">
                                 <span className={`label-mono ${i.severity === 'ERROR' ? 'text-destructive' : 'text-muted-foreground'}`}>{i.severity}</span>
+                                {r.recheck && (
+                                  <span className="label-mono text-foreground">
+                                    {r.recheck.newIssues.some((x) => x.code === i.code && (x.url ?? '') === (i.url ?? '')) ? 'NEW' : 'STILL FAILING'}
+                                  </span>
+                                )}
                                 <span>{i.message}</span>
                                 {i.url && <span className="font-mono text-xs text-muted-foreground">{i.url}</span>}
                                 <button
@@ -224,7 +311,8 @@ export function SeoHealth() {
                   </tr>
                 )}
               </Fragment>
-            ))}
+              ),
+            )}
           </tbody>
         </TableShell>
       )}

@@ -4,7 +4,7 @@
 
 - **Решение: вариант C — минимальный SEO-модуль + read-only SEO Observer**, без отдельной агентной архитектуры. Зафиксировано 2026-10-07 по итогам архитектурного ревью.
 - Целевой closed loop, правила решений, минимальная data model и порядок работ уточнены 2026-10-07 по итогам architecture review (раздел 3a и раздел 12); вариант C это не меняет.
-- Раздел «Текущий статус» сверен с кодом ветки `main` на коммите `0a3f905` (код после Project registry MVP `8758d84` не менялся) и с изменениями шага A (prompt/language patch, 2026-10-07). Прод и БД при сверке не проверялись.
+- Раздел «Текущий статус» сверен с кодом ветки `main` на коммите `0a3f905` (код после Project registry MVP `8758d84` не менялся) и с изменениями шагов A (prompt/language patch) и B (Technical SEO closed loop), 2026-10-07. Прод и БД при сверке не проверялись.
 - Любое изменение фактов SEO-пайплайна фиксируется здесь в том же коммите (правило «Change rule» из `OLNOO_ARCHITECTURE.md`).
 - Подробный справочник текущей реализации (импорт Wordstat, pages sync, кластеризация, очистка запросов) — в конце файла, раздел «Справочник реализации».
 
@@ -84,7 +84,7 @@ Project Registry
 | Improve / Create | `lib/improve-page-task.ts`, `lib/seo-task-generator.ts`, панель задачи в `components/sections/seo-clusters.tsx` | работает как генерация текста задачи; страница автоматически не создаётся |
 | Claude → PR | вне Admin, вручную | ручной шаг |
 | sitemap/pages sync | `lib/sitemap.ts`, `lib/html-extract.ts`, `app/api/pages/sync` | работает |
-| Technical recheck | `lib/seo-health.ts`, `lib/technical-seo-fix-task.ts`, экран Technical SEO | работает вручную; результат не хранится, `resolved` / `still_failing` нет |
+| Technical recheck | `lib/seo-health.ts`, `lib/technical-seo-fix-task.ts`, экран Technical SEO | работает вручную; последний результат хранится в `projects`, ручной recheck по проекту, сравнение `resolved` / `stillFailing` / `newIssues` (без истории) |
 | SEO Observer | — | не реализован |
 | Decision rules | — | не реализованы |
 | before/after | — | не реализован |
@@ -112,13 +112,13 @@ Project Registry
 
 **Минимальная data model (ближайшие PR; сейчас этих сущностей в схеме нет):**
 
-- `projects`: `+ repository TEXT NULL` (репозиторий проекта; нужен Fix task и будущему Executor);
+- `projects`: `+ repository TEXT NULL` — **реализовано (шаг B, миграция `0018`)**, вместе с `seo_health_last_result JSONB` и `seo_health_checked_at TIMESTAMPTZ` (последний результат Technical SEO, без истории);
 - `seo_snapshots`: `id`, `project_id`, `provider`, `kind`, `date_from`, `date_to`, `taken_at`, `rows JSONB` — один срез Observer одного проекта; внутри нормализованные строки из раздела 8;
 - `page_changes`: `id`, `project_id`, `page_id`, `kind` (`improve` / `create` / `fix`), `pr_url`, `merged_at`, `cluster_ids`, `issue_codes`, `baseline_snapshot_id`, `after_snapshot_id`, `status`, `notes`.
 
 Отдельной таблицы opportunities **не делаем**. Change Tracking не выделяем в отдельную систему: `page_changes` и два среза Observer достаточно для v1; результат before/after вычисляется из срезов. Для `fix` результат — состояние issue после повторной проверки. Миграции создаются только в тех PR, которые вводят эти сущности; точные значения `status` определяются при реализации.
 
-**Technical SEO closed loop.** Уже работает: Detect → Fix task → Claude → PR → merge → deploy → ручная перепроверка. Реальный E2E пройден на DriveSet (`robots_missing`; в `driveset` `main` есть `app/robots.ts`). Следующий минимальный шаг: `projects.repository`, хранение последнего результата Technical SEO, ручной recheck, статусы `resolved` / `still_failing`. Scheduler и deploy hooks пока не делаем.
+**Technical SEO closed loop.** Уже работает: Detect → Fix task → Claude → PR → merge → deploy → ручная перепроверка. Реальный E2E пройден на DriveSet (`robots_missing`; в `driveset` `main` есть `app/robots.ts`). Шаг B реализован: `projects.repository`, хранение последнего результата, ручной recheck по проекту, сравнение `resolved` / `stillFailing` / `newIssues`. Scheduler и deploy hooks пока не делаем.
 
 **Executor.** AI Router — только transport, выбор модели и fallback; Router не является Executor. Будущий Executor получает готовый task, берёт `repository` из Project Registry, читает `AGENTS.md`, `OLNOO_PROJECT_MAP.md`, `OLNOO_ARCHITECTURE.md` и репозиторий, меняет файлы, запускает tests/build, создаёт ветку, commit и PR. Первый scope — только безопасные Technical SEO Fix cases; Executor для всего SEO сразу не делаем. Merge остаётся ручным.
 
@@ -341,8 +341,9 @@ Import
 - aggregation всех confirmed clusters одной страницы (тесты `lib/improve-page-task.test.ts`, `lib/cluster-decision.test.ts`, `lib/cluster-pages.test.ts` — 23 теста — проходят);
 - Create/Improve prompt generation (генерируется текст задачи; страница автоматически не создаётся);
 - pages sync;
-- Technical SEO preflight (PR1): экран Technical SEO (`seo-health`, `GET /api/seo-health`, логика `lib/seo-health.ts`) для каждого активного проекта реестра (`listProjects`, `projects.archived_at IS NULL`; архивные в «Проверить все» не участвуют) с domain проверяет сайт (HTTP), `robots.txt` (есть/нет, `Disallow: /` для `User-agent: *`), sitemap (статус, число URL) и каждый URL из sitemap (до 100 за проверку; HTTP, canonical, index/noindex, Title, H1). Severity: ERROR — сайт недоступен, sitemap отсутствует/нечитаем, URL 4xx/5xx/недоступен, noindex при URL в sitemap, `Disallow: /`; WARNING — нет robots.txt (или не читается), нет/чужой canonical, нет Title/H1, редирект. Проверка запускается только вручную кнопкой «Проверить все»; при открытии экрана автоматически не запускается (она дорогая: до 100 URL на проект); не по расписанию, результат не хранится.
-- Technical SEO Fix task (PR2): в раскрытом проекте экрана Technical SEO у каждой issue — «Исправить», у проекта — «Исправить всё». `buildTechnicalSeoFixTask(project, issues)` (`lib/technical-seo-fix-task.ts`, чистая функция) собирает ОДИН prompt для Claude/Codex (issues без дублей, ERROR раньше WARNING; domain, sitemap URL, robots/sitemap HTTP, фактические HTTP/canonical/index/Title/H1 проблемного URL; repository только если есть в метаданных проекта — сейчас поля `projects.repository` нет, поэтому prompt всегда сообщает, что repository не передан; правила исправления по кодам issues; бизнес-факты не придумывать; отдельная ветка, commit, PR в main, без merge) и показывает его в существующей панели задач (`TaskPanel` из `seo-clusters.tsx`) с кнопкой копирования. Ничего не пишет в чужие репозитории, не хранится, перепроверки нет: после merge исправления владелец вручную жмёт «Проверить все».
+- Technical SEO preflight (PR1): экран Technical SEO (`seo-health`, `GET /api/seo-health`, логика `lib/seo-health.ts`) для каждого активного проекта реестра (`listProjects`, `projects.archived_at IS NULL`; архивные в «Проверить все» не участвуют) с domain проверяет сайт (HTTP), `robots.txt` (есть/нет, `Disallow: /` для `User-agent: *`), sitemap (статус, число URL) и каждый URL из sitemap (до 100 за проверку; HTTP, canonical, index/noindex, Title, H1). Severity: ERROR — сайт недоступен, sitemap отсутствует/нечитаем, URL 4xx/5xx/недоступен, noindex при URL в sitemap, `Disallow: /`; WARNING — нет robots.txt (или не читается), нет/чужой canonical, нет Title/H1, редирект. Проверка запускается только вручную кнопкой «Проверить все»; при открытии экрана автоматически не запускается (она дорогая: до 100 URL на проект); не по расписанию. Результат каждой проверки сохраняется в `projects.seo_health_last_result` + `seo_health_checked_at` (перезаписывается, истории нет; сохраняется и синтетический результат `check_failed`; «сайт не отвечает» / «нет sitemap» — валидный результат). При открытии экрана читается только сохранённый результат (`GET /api/seo-health?mode=last`, без запросов к сайтам; проект без результата приходит как `notChecked` без поддельного статуса и показывается со строкой «Проверка ещё не выполнялась» и кнопкой «Перепроверить»). Ошибка БД — не SEO-issue: ответ 500 `{ code: 'storage_failed' }`.
+- Technical SEO recheck (шаг B): в раскрытом проекте кнопка «Перепроверить» (`GET /api/seo-health?projectId=<id>`, обновляется только эта строка). Сервер читает предыдущий сохранённый результат до перезаписи и возвращает временный блок `recheck: { resolved, stillFailing, newIssues }`; identity issue = `code` + `url` (project-level: пустой url), текст message не сравнивается; блок нигде не хранится, после перезагрузки экран показывает только текущее состояние. Чистая функция `compareIssues` в `lib/seo-health-store.ts`. Scheduler, Executor и history нет.
+- Technical SEO Fix task (PR2): в раскрытом проекте экрана Technical SEO у каждой issue — «Исправить», у проекта — «Исправить всё». `buildTechnicalSeoFixTask(project, issues)` (`lib/technical-seo-fix-task.ts`, чистая функция) собирает ОДИН prompt для Claude/Codex (issues без дублей, ERROR раньше WARNING; domain, sitemap URL, robots/sitemap HTTP, фактические HTTP/canonical/index/Title/H1 проблемного URL; repository берётся из `projects.repository` (Project Registry; формат GitHub `owner/repo`, задаётся при создании/редактировании проекта, не угадывается); если поле пустое — prompt сообщает, что repository не передан, и не угадывает его; правила исправления по кодам issues; бизнес-факты не придумывать; отдельная ветка, commit, PR в main, без merge) и показывает его в существующей панели задач (`TaskPanel` из `seo-clusters.tsx`) с кнопкой копирования. Ничего не пишет в чужие репозитории и не хранится; после merge исправления владелец вручную жмёт «Перепроверить» (или «Проверить все»).
 - AI review CREATE/IMPROVE/IGNORE — работает как отдельный проход (подлежит объединению с clustering, раздел 5).
 - SEO Map / `keyword_pages` — работает как legacy (не развивать, раздел 6).
 
@@ -366,8 +367,7 @@ Import
 - before/after tracking;
 - PR tracking;
 - Decision rules (FIX / IGNORE / IMPROVE / CREATE-candidate);
-- `projects.repository`, `seo_snapshots`, `page_changes`;
-- хранение результата Technical SEO, recheck и статусы `resolved` / `still_failing`;
+- `seo_snapshots`, `page_changes`;
 - Executor.
 
 Интеграций с Yandex Webmaster и Google Search Console в коде нет. Yandex Metrika в репозитории подключена только как read-only Observer агрегатов для Ads (`/api/metrika/observer`), к SEO она не привязана; привязка проекта к счётчику — константа по slug (`METRIKA_PROJECTS`), а не поле реестра.
@@ -386,7 +386,7 @@ A. **Prompt/language patch — реализован** (`lib/seo-task-generator.t
    - убрать обязательные hardcoded `/ru/` `/en/`;
    - AI/GEO-пункты в `contentQualityGateBlock` (раздел 8a);
    - internal links остаются частью задачи и Quality Gate.
-B. **Technical SEO Fix closed loop:** `projects.repository` + хранение последнего результата Technical SEO + ручной recheck + `resolved` / `still_failing`. Без scheduler и deploy hooks.
+B. **Technical SEO Fix closed loop — реализован** (миграция `0018`, `lib/seo-health-store.ts`, `/api/seo-health?mode=last|projectId`): `projects.repository`, последний результат в `projects`, ручной recheck по проекту, `resolved` / `stillFailing` / `newIssues` по `code + url`. Без scheduler, deploy hooks и истории. **Миграцию `0018` применить в production ДО merge/deploy** (код читает `projects.repository`).
 C. **SEO Observer v1:** Yandex Webmaster + Metrika (organic по landing page), `seo_snapshots`, `page_changes`; ручной срез, один проект за запуск (раздел 8).
 D. **Decision rules как чистая функция** (раздел 3a).
 E. **Executor только для Technical SEO Fix** (раздел 3a); merge вручную.

@@ -9,7 +9,7 @@ import { CLIENTS_WITH_PROJECT_COUNT_SQL, createProject, getProject, listProjects
 test('validation: name + domain required; slug defaults to the name; sitemap defaults to <domain>/sitemap.xml; locale optional', () => {
   const ok = validateProjectInput({ name: ' Drive Set ', domain: 'driveset.ru/' })
   assert.ok(ok.ok)
-  assert.deepEqual(ok.ok && ok.value, { name: 'Drive Set', slug: 'drive-set', domain: 'https://driveset.ru', sitemapUrl: 'https://driveset.ru/sitemap.xml', locale: null, clientId: undefined })
+  assert.deepEqual(ok.ok && ok.value, { name: 'Drive Set', slug: 'drive-set', domain: 'https://driveset.ru', sitemapUrl: 'https://driveset.ru/sitemap.xml', locale: null, repository: null, clientId: undefined })
   const full = validateProjectInput({ name: 'X', slug: 'x_1', domain: 'https://x.io', sitemapUrl: 'https://x.io/map.xml', locale: 'RU' })
   assert.ok(full.ok && full.value.slug === 'x_1' && full.value.sitemapUrl === 'https://x.io/map.xml' && full.value.locale === 'ru')
   for (const bad of [{}, { name: '', domain: 'a.ru' }, { name: 'A' }, { name: 'A', domain: 'not a domain' }, { name: 'A', domain: 'https://a.ru/path' }, { name: 'A', domain: 'a.ru', slug: 'Bad Slug' }, { name: 'A', domain: 'a.ru', sitemapUrl: 'ftp://a.ru/s' }, { name: 'A', domain: 'a.ru', locale: 'russian' }, { name: 'Привет', domain: 'a.ru' }, { name: 'A', domain: 'a.ru', clientId: 0 }]) {
@@ -19,7 +19,36 @@ test('validation: name + domain required; slug defaults to the name; sitemap def
   assert.equal(slugify('OLNOO Insurance!'), 'olnoo-insurance')
 })
 
-// ---- registry against Postgres (skipped without migration 0017) -----------------------------------------------------
+test('repository: nullable, trimmed, GitHub owner/repo only, never guessed from the domain', () => {
+  const v = (repository: unknown) => validateProjectInput({ name: 'X', domain: 'x.io', repository })
+  assert.equal(v(undefined).ok && v(undefined).ok && (v(undefined) as { value: { repository: null } }).value.repository, null) // not guessed from domain/slug
+  for (const empty of [null, '', '   ']) assert.ok(v(empty).ok && (v(empty) as { value: { repository: null } }).value.repository === null)
+  const ok = v('  RomanVaskin/driveset  ')
+  assert.ok(ok.ok && ok.value.repository === 'RomanVaskin/driveset')
+  assert.ok(v('RomanVaskin/olnoo-admin').ok && v('a/b.c_d').ok)
+  for (const bad of ['driveset', 'a/b/c', 'https://github.com/a/b', 'a/', '/b', 'a b/c', 'a/b.git', 'a/..', '-a/b', 'x'.repeat(40) + '/r', 'a/' + 'r'.repeat(101), 5, {}]) {
+    assert.equal(v(bad).ok, false, JSON.stringify(bad))
+  }
+})
+
+test('repository is editable (and clearable) through updateProject; the slug stays immutable', async () => {
+  const row = { id: 7, client_id: 1, name: 'X', slug: 'x', domain: 'https://x.io', sitemap_url: 'https://x.io/sitemap.xml', locale: null, repository: 'a/old', status: 'Active', last_sync_at: null, created_at: '', archived_at: null, client_name: 'X', pages_count: 0, keywords_count: 0 }
+  const calls: { text: string; params?: unknown[] }[] = []
+  const db = { query: async (text: string, params?: unknown[]) => { calls.push({ text, params }); return { rows: text.startsWith('UPDATE') ? [] : [row] } } }
+  assert.ok((await updateProject(db, 7, { repository: ' RomanVaskin/driveset ' })).ok)
+  const upd = calls.find((c) => c.text.startsWith('UPDATE'))!
+  assert.match(upd.text, /repository = \$1/)
+  assert.deepEqual(upd.params, ['RomanVaskin/driveset', 7])
+  calls.length = 0
+  assert.ok((await updateProject(db, 7, { repository: '' })).ok)
+  assert.deepEqual(calls.find((c) => c.text.startsWith('UPDATE'))!.params, [null, 7])
+  const bad = await updateProject(db, 7, { repository: 'not a repo' })
+  assert.deepEqual([bad.ok, !bad.ok && bad.status], [false, 400])
+  const slug = await updateProject(db, 7, { slug: 'y' })
+  assert.deepEqual([slug.ok, !slug.ok && slug.status], [false, 400])
+})
+
+// ---- registry against Postgres (skipped without migration 0017/0018) -----------------------------------------------------
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://olnoo_admin:CHANGE_ME@localhost:5432/olnoo_admin'
 let seq = 0
@@ -27,9 +56,9 @@ let seq = 0
 async function withDb(t: TestContext, fn: (pool: Pool, tag: string) => Promise<void>) {
   const pool = new Pool({ connectionString: DATABASE_URL })
   try {
-    await pool.query('SELECT archived_at, locale, slug FROM projects LIMIT 1')
+    await pool.query('SELECT archived_at, locale, slug, repository FROM projects LIMIT 1')
   } catch (err) {
-    t.skip(`No reachable Postgres with migration 0017 at DATABASE_URL — skipping (${(err as Error).message})`)
+    t.skip(`No reachable Postgres with migration 0017/0018 at DATABASE_URL — skipping (${(err as Error).message})`)
     await pool.end()
     return
   }
@@ -46,12 +75,13 @@ const input = (tag: string, n: string, extra: Record<string, unknown> = {}) => (
 
 test('create project: active at once, visible in the shared active list, defaults filled, client created by name', async (t) => {
   await withDb(t, async (pool, tag) => {
-    const r = await createProject(pool, input(tag, 'a', { locale: 'ru' }))
+    const r = await createProject(pool, input(tag, 'a', { locale: 'ru', repository: ' Owner/repo ' }))
     assert.ok(r.ok)
     const p = r.ok ? r.project : null
     assert.equal(p!.archived_at, null)
     assert.equal(p!.sitemap_url, `https://${tag}-a.example.com/sitemap.xml`)
     assert.equal(p!.locale, 'ru')
+    assert.equal(p!.repository, 'Owner/repo')
     assert.equal(p!.slug, `${tag}-a`)
     assert.equal(p!.client_name, `__${tag}-a`)
     assert.ok((await listProjects(pool)).some((x) => x.id === p!.id)) // no code change needed for a new project to appear
