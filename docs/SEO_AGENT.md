@@ -85,7 +85,7 @@ Project Registry
 | Claude → PR | вне Admin, вручную | ручной шаг |
 | sitemap/pages sync | `lib/sitemap.ts`, `lib/html-extract.ts`, `app/api/pages/sync` | работает |
 | Technical recheck | `lib/seo-health.ts`, `lib/technical-seo-fix-task.ts`, экран Technical SEO | работает вручную; последний результат хранится в `projects`, ручной recheck по проекту, сравнение `resolved` / `stillFailing` / `newIssues` (без истории) |
-| SEO Observer | — | не реализован |
+| SEO Observer v1 | `lib/seo-observer.ts`, `lib/yandex-webmaster.ts`, `lib/yandex-metrika*.ts`, `/api/seo-observer`, `seo_snapshots` | **реализован (шаг C)**: ручной срез |
 | Decision rules | — | не реализованы |
 | before/after | — | не реализован |
 
@@ -192,10 +192,20 @@ SEO pipeline должен быть language-agnostic. Язык проекта �
 
 - **Query:** `query`, `impressions`, `clicks`, `ctr`, `position` (CTR считается как `clicks / impressions`).
 - **Page:** `url`, `organic visits`, `period`.
-- **Query → page.** Вебмастер (популярные запросы) не отдаёт связку запрос → URL (см. ограничения ниже). В v1 она строится через существующие confirmed clusters и `confirmed_page_id`; органический трафик по landing page берётся из Метрики.
+- **Query → page.** Вебмастер (популярные запросы) не отдаёт связку запрос → URL (см. ограничения ниже). **В Observer v1 запросы и страницы — два отдельных набора данных; связка запрос → URL не строится и не утверждается** (ни эвристикой, ни через `confirmed_page_id`). Confirmed clusters понадобятся Decision rules (шаг D) как контекст, а не как атрибуция.
 - **Что не собираем:** visitor-level данные (ClientID, yclid и т. п.), device breakdown и лишние dimensions.
-- **Metrika.** Клиент Метрики в репозитории (`lib/yandex-metrika*.ts`) сейчас обслуживает Ads: в списке разрешённых dimensions нет landing-страницы, а привязка проекта к счётчику — константа по slug (`METRIKA_PROJECTS`). Для Observer нужно одно измерение (landing page) и фильтр по органическому источнику; имя измерения сверяется с официальной документацией Метрики при реализации.
-- **Webmaster API.** Параметры авторизации (токен, `user_id`, `host_id`) и лимиты в этой проверке не сверялись; перед реализацией сверить с документацией.
+- **Metrika.** Используется существующий клиент (`lib/yandex-metrika*.ts`, новый клиент не создавался): в список разрешённых dimensions добавлен `ym:s:startURLPath`, а фильтр органики — единственная новая разрешённая форма `filters`. Привязка проекта к счётчику по-прежнему константа по slug (`METRIKA_PROJECTS`); проект без счётчика получает статус `not_configured`.
+
+**Реализация Observer v1 (шаг C, проверено 2026-10-07).**
+
+- **Что делает:** по кнопке «Получить данные» (SEO → Observer; при открытии экрана внешние API не вызываются) для **одного** проекта читает Webmaster и Metrika, сохраняет каждый успешный источник отдельным срезом в `seo_snapshots` и показывает последние срезы. `GET /api/seo-observer?projectId=` отдаёт только сохранённое (без внешних вызовов), `POST /api/seo-observer {projectId}` — ручной запуск. Неизвестный или архивный проект → 404.
+- **Период:** последние **28 завершённых дней** по Москве (вчера и 27 дней назад; текущий неполный день не включается); в ответе `dateFrom`, `dateTo`, `takenAt`.
+- **Webmaster (стабильный API v4, без beta Enhanced Export):** `GET /v4/user` → `user_id`; `GET /v4/user/{user_id}/hosts` → `host_id` определяется по домену проекта (предпочитается https), `host_id` в БД не хранится; `GET /v4/user/{user_id}/hosts/{host_id}/search-queries/popular` с `order_by=TOTAL_SHOWS`, `query_indicator=TOTAL_SHOWS`, `TOTAL_CLICKS`, `AVG_SHOW_POSITION`, `date_from`, `date_to`, `limit=500`. Строка: `query`, `impressions`, `clicks`, `ctr` (считается кодом: `clicks / impressions * 100`, при нулевых показах `null`), `avgPosition`. Битая строка пропускается, порядок детерминирован. Токен — `YANDEX_WEBMASTER_TOKEN` (серверный env, OAuth `webmaster:hostinfo`); задаётся вручную, `deploy.yml` не менялся. Сайт не добавлен в Webmaster для этого токена → `not_configured` (`host_not_found`). Ограничение источника: популярные запросы — топ запросов за период по показам, без CTR и без разреза по URL.
+- **Metrika (Reports API):** `ym:s:startURLPath` (путь страницы входа) × `ym:s:visits`, фильтр `ym:s:lastsignTrafficSource=='organic'`, сортировка `-ym:s:visits`, `limit=500`; сочетание dimension/metric/filter проверено на счётчике DriveSet. Только органический поисковый трафик (Direct, прямой, реферальный не смешиваются). Строка: `path`, `url` (строится как `origin проекта + path`; путь, уводящий с домена, отбрасывается), `visits`.
+- **Хранение и сбои:** `seo_snapshots` (`project_id`, `provider` = `yandex_webmaster` | `yandex_metrika`, `kind` = `queries` | `organic_pages`, период, `taken_at`, `rows JSONB`). Каждый источник сохраняется независимо: если один недоступен, второй всё равно сохраняется, результат `partial`; ошибка показывается отдельно (`error` + kind, без токена и тела ответа); источник без настройки (`not_configured`: нет токена, нет счётчика, нет хоста) и источник с технической ошибкой **не создают пустой срез**; настоящий ответ с 0 строк сохраняется.
+- **`page_changes`:** создана только схема (миграция `0019`); Observer в неё ничего не пишет, UI/CRUD, связи с GitHub и расчёта before/after нет.
+- **Чего нет по замыслу:** scheduler, queue, Decision Engine, Executor, рекомендации, графики, связка query → URL, OAuth onboarding.
+- **Следующий шаг: D — Decision rules (чистая функция).**
 
 Нормализованные данные (различия провайдеров закрываются на уровне connector, не в бизнес-логике SEO):
 
@@ -299,7 +309,7 @@ Import
 ```
 
 - Observer **read-only**.
-- Срез («Снять срез») делается вручную, по одному проекту за запуск (детали — раздел 8, «Observer v1»): нормализованные строки записываются с датой и провайдером (`seo_snapshots`, раздел 3a); результат «до/после» вычисляется как разница двух срезов вокруг даты изменения страницы (`page_changes`).
+- Срез («Получить данные» в SEO → Observer) делается вручную, по одному проекту за запуск (детали — раздел 8, «Observer v1»): нормализованные строки записываются с датой и провайдером (`seo_snapshots`, раздел 3a); результат «до/после» вычисляется как разница двух срезов вокруг даты изменения страницы (`page_changes`).
 - Decision rules (раздел 3a) — следующий шаг после Observer v1 (шаг D в разделе 12), а не его часть.
 - Никаких автоматических изменений SEO без подтверждения человека.
 - AI Visibility в v1 ограничивается AI/GEO-пунктами Quality Gate (раздел 8a); измерений AI в v1 нет.
@@ -387,7 +397,7 @@ A. **Prompt/language patch — реализован** (`lib/seo-task-generator.t
    - AI/GEO-пункты в `contentQualityGateBlock` (раздел 8a);
    - internal links остаются частью задачи и Quality Gate.
 B. **Technical SEO Fix closed loop — реализован** (миграция `0018`, `lib/seo-health-store.ts`, `/api/seo-health?mode=last|projectId`): `projects.repository`, последний результат в `projects`, ручной recheck по проекту, `resolved` / `stillFailing` / `newIssues` по `code + url`. Без scheduler, deploy hooks и истории. **Миграцию `0018` применить в production ДО merge/deploy** (код читает `projects.repository`).
-C. **SEO Observer v1:** Yandex Webmaster + Metrika (organic по landing page), `seo_snapshots`, `page_changes`; ручной срез, один проект за запуск (раздел 8).
+C. **SEO Observer v1 — реализован** (миграция `0019`, `lib/seo-observer.ts`, `/api/seo-observer`, экран SEO → Observer): Yandex Webmaster (популярные запросы) + Metrika (organic по landing page), `seo_snapshots`, `page_changes` (только схема); ручной срез, один проект за запуск (раздел 8, «Реализация Observer v1»). Следующий шаг — D.
 D. **Decision rules как чистая функция** (раздел 3a).
 E. **Executor только для Technical SEO Fix** (раздел 3a); merge вручную.
 F. **Later:** Google Search Console, AI Visibility (раздел 8a), multilingual, scheduler, более широкий Executor; всё из списка «Later / not now» в разделе 6.

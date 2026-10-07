@@ -41,6 +41,8 @@ export const DIM = {
   directBanner: 'ym:s:lastDirectClickBanner',
   directPhraseOrCond: 'ym:s:lastDirectPhraseOrCond',
   directSearchPhrase: 'ym:s:lastDirectSearchPhrase',
+  /** SEO Observer: the landing page path of the visit (verified on the counter, see ORGANIC_FILTER). */
+  startUrlPath: 'ym:s:startURLPath',
 } as const
 
 export const ALLOWED_DIMENSIONS: readonly string[] = Object.values(DIM)
@@ -428,7 +430,35 @@ export const FILTER_VALUE_RE = /^[A-Za-z0-9_.-]{1,100}$/
 const V = "'[A-Za-z0-9_.-]{1,100}'"
 const FILTER_TERM = `(?:ym:s:lastsignUTM(?:Content|Term)==${V}|\\(ym:s:lastsignUTMSource==${V} AND ym:s:lastsignUTMMedium==${V}\\))`
 /** The only `filters` shape the client accepts: exact UTM equalities — content, term or a (source AND medium) pair — joined by OR. */
-export const ALLOWED_FILTER_RE = new RegExp(`^${FILTER_TERM}(?: OR ${FILTER_TERM})*$`)
+export const ALLOWED_FILTER_RE = new RegExp(`^(?:${FILTER_TERM}(?: OR ${FILTER_TERM})*|ym:s:lastsignTrafficSource=='organic')$`)
+
+// ---- SEO Observer: organic landing pages ---------------------------------------------------------------------------
+
+/**
+ * Organic search traffic only: `ym:s:lastsignTrafficSource=='organic'` (the same last-significant-source dimension the rest of the
+ * client uses; its value `organic` = search engines, so Direct (`ad`), direct, referral, social etc. are NOT included).
+ * Verified on a real counter together with `ym:s:startURLPath` + `ym:s:visits` (2026-10-07).
+ */
+export const ORGANIC_FILTER = `${DIM.trafficSource}=='organic'`
+export const ORGANIC_PAGES_LIMIT = 500
+
+export function organicPagesQuery(limit: number = ORGANIC_PAGES_LIMIT): StatQuery {
+  return { dimensions: [DIM.startUrlPath], metrics: ['ym:s:visits'], filters: ORGANIC_FILTER, sort: '-ym:s:visits', limit }
+}
+
+export type OrganicPathRow = { path: string; visits: number }
+
+/** Rows of `organicPagesQuery`: landing path + visits. A malformed row (no path, no number) is skipped, never fatal. */
+export function parseOrganicPages(r: StatResponse): OrganicPathRow[] {
+  const out: OrganicPathRow[] = []
+  for (const row of r.rows) {
+    const path = row.dimensions[0]?.name
+    const visits = row.metrics[0]
+    if (typeof path !== 'string' || !path.startsWith('/') || visits === null || visits === undefined || visits < 0) continue
+    out.push({ path, visits })
+  }
+  return out.sort((a, b) => b.visits - a.visits || a.path.localeCompare(b.path))
+}
 
 export function dailyGoalsQuery(): StatQuery {
   return { dimensions: [DIM.date], metrics: [visitsMetric('quiz_start'), visitsMetric('lead_submit')], sort: DIM.date, limit: MAX_DAYS + 8 }
