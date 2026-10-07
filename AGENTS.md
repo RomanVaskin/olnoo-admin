@@ -438,7 +438,24 @@ Landing → Campaign → UTM → Leads → CRM
 
 Optimize based on leads/deals, not only clicks.
 
-Integration status: MVP screen shipped — a project-scoped campaign list (`?screen=ads&project=<slug>`) with manual Spend/Impressions/Clicks/Leads/Sales/Revenue entry and CPL/CAC/ROI computed from them (`OLNOO_PROJECT_MAP.md` → "Ads"). No Yandex Direct/Google Ads/VK/Meta/Telegram Ads API is connected yet — every metric is entered by hand for now; the schema anticipates a future sync job without redesign, but no integrations/accounts/queue exists yet.
+Integration status: MVP screen shipped — a project-scoped campaign list (`?screen=ads&project=<slug>`) with manual Spend/Impressions/Clicks/Leads/Sales/Revenue entry and CPL/CAC/ROI computed from them (`OLNOO_PROJECT_MAP.md` → "Ads"). That screen and its `ads_campaigns` table are still fed by hand: nothing syncs into them. Separately, **read-only** Yandex Direct, Metrika, CRM and Unified Analytics observers exist for DriveSet (`OLNOO_PROJECT_MAP.md` → "Yandex Direct observer", "Metrika Observer", "Unified Analytics", "OLNOO Agent v1 (MCP)"); no Google Ads/VK/Meta/Telegram Ads API is connected, and no Direct write exists.
+
+## Direct Agent — MVP HARD MODE
+
+Full approved plan: `OLNOO_PROJECT_MAP.md` → "Direct Agent — MVP HARD MODE". Do not expand this roadmap without need.
+
+First useful scenario: **read search queries → deterministic detector → AI explanation → negative-keyword proposal → human confirmation → manual apply first, Hand v1 later → re-read → verify.**
+
+At most 3 PRs: (1) Direct MCP Eyes v1 — one compact read-only tool over the existing Direct client; (2) Negative Query Detector v1 — pure deterministic function; (3) Hand v1 — only if the Detector gave proposals the owner agrees with.
+
+Rules:
+
+- Reuse the existing observers, Unified Analytics, REAL/TEST/UNKNOWN classification and the read-only Direct client; do not rewrite them without a concrete blocker.
+- `lib/yandex-direct.ts` stays strictly read-only. Any write lives in a separate protected module / admin route and never behind the open `/api/mcp` endpoint.
+- Search query → REAL CRM lead is not provable today. Never claim "0 REAL leads for a query"; use only aggregated Direct + Metrika signals and label them AGGREGATED. Test Traffic must be activated before REAL/TEST/UNKNOWN is used for product conclusions.
+- Code computes numbers and rules; the LLM only explains the detector result and proposes candidate phrases.
+- Do not build before these 3 PRs are done: Google Ads connector, OAuth onboarding, multi-client abstraction, generic agent framework, RBAC, recommendation/approval/action tables, workflow engine, `ads.get`, sitelinks/extensions, bid/budget/pause/start changes, CPC/balance/status detectors, post-change analytics framework, universal audit system, one MCP tool per object.
+- Gate for any extension: "Without this, does the first useful scenario fail to work?" If not — do not build it.
 
 # Analytics
 

@@ -270,7 +270,7 @@ location = /api/mcp {
 - **Project isolation:** `project` is a slug, exactly one value, never `all`; it is resolved through `projects.slug` and the statement filters only on that project's id. Extra query parameters (e.g. `project_id`) are ignored; unknown slug → 404. (The older `GET /api/leads` still returns every project's leads when `project` is missing or `all` — it is the Admin UI's API and was not changed.)
 - **Response:** `{ period{from,to,timezone,fromUtc,toUtcExclusive}, project{id,slug,name}, totals{leads}, truncated, leads[] }`, leads ordered by `created_at` then `id`. Each lead: `id, createdAt (ISO UTC), name, phone, status, source, service, contact, landingPage, pagePath, referrer, utmSource, utmMedium, utmCampaign, utmContent, utmTerm` plus (since A1) `leadTrackingId, metrikaClientId (a STRING), yclid, firstSeenAt (ISO UTC)` — all columns that really exist in `leads` (the A1 four are `null` for leads created before attribution capture or when the client did not send them); `""` means "not provided" (stored as empty string), `phone`/`contact` are `null` when absent (`contact` = `tg:<id>` for Telegram Business leads). Not returned: `email`, `company`, `message`, `locale`, `notes`. At most 2000 leads per response: `totals.leads` is the real count and `truncated=true` when the list was cut.
 - **Honest limits:** `utm_term` is returned as stored; it is **not** established that it links a lead to a particular Direct search query (that is a separate task after Metrika). DriveSet still marks every site lead `source=Ads`, writes `yclid` only as text inside `message`, and sends no `pageUrl`; there is no lead ↔ Direct campaign/query or lead ↔ Metrika visit link in code.
-- **Ads Agent pipeline:** Direct Observer — READY / production confirmed (v0.1 and v0.2) · CRM Observer — READY / production confirmed · Attribution Capture A1 (CRM) and A2 (DriveSet side) — READY / production confirmed · Metrika Observer v0.1 — READY / production confirmed · **Unified Analytics v0.1 — this change (production NOT yet confirmed)** · AI Agent — later · Writes — later.
+- **Ads Agent pipeline:** Direct Observer — READY / production confirmed (v0.1 and v0.2) · CRM Observer — READY / production confirmed · Attribution Capture A1 (CRM) and A2 (DriveSet side) — READY / production confirmed · Metrika Observer v0.1 — READY / production confirmed · **Unified Analytics v0.1 — this change (production NOT yet confirmed)** · AI Agent and Writes — only as planned in "Direct Agent — MVP HARD MODE" below (nothing of it is built yet).
 
 ## Ads
 
@@ -353,6 +353,29 @@ Scope: **read-only**, **allow-listed campaigns only** (`YANDEX_DIRECT_CAMPAIGN_I
 - **Privacy:** aggregates only; no name, phone, contact, email, ClientID, yclid or lead_tracking_id anywhere in the response (a test injects such values into every source fixture and asserts they never appear).
 - **Not in v0.1:** AI, UI, cron, cache, DB, Logs API, ClientID verification, query-level CRM attribution, duplicate detection, `qualifiedLeads`, multi-client onboarding.
 - **NEEDS VERIFICATION after production deploy:** Direct Reports accepting `DateTo = today` and its current-day lag; the Direct-scoped goal metrics for all funnel goals; the test-traffic counts; the filter syntax of the test segment (a rejection shows as warning `extras_unavailable`); CRM `yandex/ya` + campaign mapping on the first real advertising lead (the last 7 days had none, so `cpl = null / no_attributed_leads` is expected); latency through admin.olnoo.com.
+
+### Direct Agent — MVP HARD MODE (approved plan; not built yet)
+
+**Goal of the first working scenario:** read search queries → deterministic detector → AI explanation → negative-keyword proposal → human confirmation → manual apply first, Hand v1 later → re-read → verify. The scenario is "found a bad search query → explained → proposed a negative phrase".
+
+**Already exists and is reused (do not rewrite without a concrete blocker):** Direct Observer (read-only client, search queries, keywords, campaign/group negative keywords, campaign/group structure — `?structure=1`), Metrika Observer, CRM Observer, Unified Analytics, REAL/TEST/UNKNOWN classification, MCP summary (`get_driveset_summary`).
+
+**At most 3 PRs:**
+
+1. **Direct MCP Eyes v1.** One compact read-only MCP tool over the existing Direct client (no new client). Whitelist DTO: top search queries by spend; `query`; `criteria` / `criteriaType`; `adGroupId`; impressions; clicks; spend; CPC computed by code; autotargeting marker; current campaign/group negative keywords; and, only where a safe, cheap join already exists, Metrika `leadSubmitVisits` / target visits (AGGREGATED). No CRM personal data, no write, no UI, no new tables. **Before search queries are published through MCP, access to `/api/mcp` must be checked and closed separately** (today nginx opens that exact path with no application auth; its summary DTO deliberately carries no queries).
+2. **Negative Query Detector v1.** A pure deterministic function, no LLM inside the calculation. Inputs: Direct spend/clicks, aggregated Metrika target visits / `leadSubmitVisits`, and whether the query is already excluded. Thresholds and protected words (terms of the business that must never become negatives) are set by the owner, not guessed in code. The LLM only explains the detector result and proposes candidate negative keywords. Proposals are first checked on live data; no write actions.
+3. **Hand v1** — only if the Detector produced useful proposals the owner agrees with. A separate protected write module / admin route; **no write is added to the read-only Direct client and none goes through the open MCP endpoint.** Campaign-level negative keywords only. Flow: read current negatives → compare with the version used for approval → merge (never replace the list with only the new phrases) → write → re-read → verify → minimal audit log. No generic approval framework. Before building: confirm that the Direct token may write and check Direct's limit on the negative-keyword list size in its API reference.
+
+**Do NOT build before these 3 PRs are done:** Google Ads connector; OAuth onboarding; multi-client abstraction; generic agent framework; RBAC; separate recommendation / approval / action tables; workflow engine; `ads.get`; sitelinks/extensions; bid changes; budget changes; pause/start; CPC, balance or status detectors; post-change analytics framework; universal audit system; separate MCP tools per object when one inspection tool is enough.
+
+**Principle:** any roadmap extension must answer "Without this, does the first useful scenario fail to work?" — if not, do not build it.
+
+**Data limits (do not blur them):**
+
+- Search query → REAL CRM lead is **not provable** today (`utm_term` does not establish the link; Unified has no query-level CPL). Never state "0 REAL leads for this query".
+- Use only the AGGREGATED Metrika join where it really exists (Direct search phrase ↔ Metrika `lastDirectSearchPhrase`); a correlation is not attribution.
+- Test Traffic must be activated on production (`DRIVESET_TEST_CLASSIFICATION_SINCE` set, see "Test Traffic v1") before REAL/TEST/UNKNOWN is used for product conclusions; until then every non-marker lead is UNKNOWN and CPL is `null`.
+- The Direct read client stays strictly read-only.
 
 ## AI Router
 
