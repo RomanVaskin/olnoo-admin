@@ -10,6 +10,15 @@ type PageRow = { path: string; url: string; visits: number }
 type Snapshot = { id: number; provider: string; kind: string; dateFrom: string; dateTo: string; takenAt: string; rows: unknown[] }
 type SourceState = { status: 'ok'; snapshotId: number; rows: number } | { status: 'not_configured'; reason: string } | { status: 'error'; kind: string; message: string }
 type Run = { partial: boolean; webmaster: SourceState; metrika: SourceState }
+type Decision = {
+  action: 'FIX' | 'IGNORE' | 'IMPROVE' | 'CREATE_CANDIDATE' | 'NONE'
+  clusterId?: number
+  pageId?: number
+  pageUrl?: string
+  clusterName?: string
+  reason: string
+  evidence: { impressions?: number; avgPosition?: number | null; issueCodes?: string[]; organicVisits?: number; matchedQueries?: number }
+}
 
 export function SeoObserver() {
   const { t, locale } = useI18n()
@@ -21,6 +30,14 @@ export function SeoObserver() {
   const [run, setRun] = useState<Run | null>(null)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [decisions, setDecisions] = useState<Decision[]>([])
+
+  // Read-only recommendations from the SAVED data (the pure Decision rules); never triggers a provider call.
+  const loadDecisions = (id: number) =>
+    fetch(`/api/seo-decisions?projectId=${id}`)
+      .then((res) => (res.ok ? res.json() : { decisions: [] }))
+      .then((d) => setDecisions((d.decisions ?? []).filter((x: Decision) => x.action !== 'NONE')))
+      .catch(() => setDecisions([]))
 
   useEffect(() => {
     if (projects.length && projectId === null) setProjectId(projects[0].id)
@@ -37,6 +54,8 @@ export function SeoObserver() {
         setSnapshots(d.snapshots ?? [])
         setPeriod(d.dateFrom ? { dateFrom: d.dateFrom, dateTo: d.dateTo } : null)
       })
+    loadDecisions(projectId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
   async function fetchData() {
@@ -50,6 +69,7 @@ export function SeoObserver() {
       setRun({ partial: d.partial, webmaster: d.webmaster, metrika: d.metrika })
       setSnapshots(d.snapshots ?? [])
       setPeriod({ dateFrom: d.dateFrom, dateTo: d.dateTo })
+      loadDecisions(projectId)
     } catch {
       setError(t.seoObserver.runError)
     } finally {
@@ -59,6 +79,18 @@ export function SeoObserver() {
 
   const queries = snapshots.find((s) => s.provider === 'yandex_webmaster' && s.kind === 'queries')
   const pages = snapshots.find((s) => s.provider === 'yandex_metrika' && s.kind === 'organic_pages')
+
+  const reasons = t.seoObserver.reasons as Record<string, string>
+  const evidenceText = (d: Decision) =>
+    [
+      d.evidence.issueCodes?.length ? d.evidence.issueCodes.join(', ') : null,
+      d.evidence.impressions !== undefined ? `${t.seoObserver.recImpressions}: ${d.evidence.impressions}` : null,
+      d.evidence.avgPosition != null ? `${t.seoObserver.recPosition}: ${d.evidence.avgPosition}` : null,
+      d.evidence.matchedQueries ? `${d.evidence.matchedQueries} ${t.seoObserver.recMatched}` : null,
+      d.evidence.organicVisits !== undefined ? `${t.seoObserver.recVisits}: ${d.evidence.organicVisits}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ')
 
   const stateNote = (s: SourceState | undefined) => {
     if (!s || s.status === 'ok') return null
@@ -112,6 +144,35 @@ export function SeoObserver() {
       )}
       {error && <p className="label-mono text-destructive">{error}</p>}
       {run?.partial && <p className="label-mono text-muted-foreground">{t.seoObserver.partial}</p>}
+
+      <section className="flex flex-col gap-3">
+        <span className="label-mono text-foreground/80">{t.seoObserver.recTitle}</span>
+        <p className="text-xs text-muted-foreground">{t.seoObserver.recHint}</p>
+        {decisions.length === 0 ? (
+          <p className="label-mono text-muted-foreground">{t.seoObserver.recEmpty}</p>
+        ) : (
+          <TableShell>
+            <thead>
+              <tr>
+                <Th>{t.seoObserver.recAction}</Th>
+                <Th>{t.seoObserver.recTarget}</Th>
+                <Th>{t.seoObserver.recReason}</Th>
+                <Th>{t.seoObserver.recEvidence}</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {decisions.map((d, i) => (
+                <tr key={i} className="transition-colors hover:bg-muted/60">
+                  <Td className="label-mono text-foreground">{(t.seoObserver.actions as Record<string, string>)[d.action]}</Td>
+                  <Td className="font-mono text-xs">{d.pageUrl ?? d.clusterName ?? '—'}</Td>
+                  <Td className="text-sm">{reasons[d.reason] ?? d.reason}</Td>
+                  <Td className="font-mono text-xs text-muted-foreground">{evidenceText(d) || '—'}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </TableShell>
+        )}
+      </section>
 
       {block(
         t.seoObserver.queriesTitle,
