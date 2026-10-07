@@ -78,8 +78,28 @@ test('only the given issues and this project’s own pages appear — nothing fr
 })
 
 test('repository line only when project metadata has it', () => {
-  assert.doesNotMatch(buildTechnicalSeoFixTask(DRIVESET, [ROBOTS])!, /Repository/)
-  assert.match(buildTechnicalSeoFixTask({ ...DRIVESET, repository: 'RomanVaskin/driveset' }, [ROBOTS])!, /Repository\/path: RomanVaskin\/driveset/)
+  assert.doesNotMatch(buildTechnicalSeoFixTask(DRIVESET, [ROBOTS])!, /^- Repository\/path:/m) // no invented repository in PROJECT
+  assert.match(buildTechnicalSeoFixTask({ ...DRIVESET, repository: 'RomanVaskin/driveset' }, [ROBOTS])!, /^- Repository\/path: RomanVaskin\/driveset/m)
+})
+
+test('the prompt starts with the mandatory read-the-docs block, before the work description', () => {
+  const task = buildTechnicalSeoFixTask(DRIVESET, [ROBOTS])!
+  const block = 'Перед работой прочитай AGENTS.md, OLNOO_PROJECT_MAP.md и OLNOO_ARCHITECTURE.md. Работай по зафиксированной production-карте. Если задача меняет системные факты — обнови документацию в том же commit.'
+  assert.ok(task.includes(block))
+  assert.ok(task.indexOf(block) < task.indexOf('Исправь найденные Technical SEO'))
+  assert.ok(task.indexOf(block) < task.indexOf('PROJECT\n'))
+})
+
+test('repository choice: without Repository/path do not guess and verify the open repo; with it work only there', () => {
+  const without = buildTechnicalSeoFixTask(DRIVESET, [ROBOTS])!
+  assert.match(without, /Repository\/path не передан — НЕ угадывай репозиторий/)
+  assert.match(without, /соответствует проекту «DriveSet» \(domain https:\/\/driveset\.ru\)/)
+  assert.match(without, /остановись и сообщи, что нужен правильный repo\/path/)
+  assert.doesNotMatch(without, /Работай только в репозитории/)
+  const withRepo = buildTechnicalSeoFixTask({ ...DRIVESET, repository: 'RomanVaskin/driveset' }, [ROBOTS])!
+  assert.match(withRepo, /Работай только в репозитории\/пути: RomanVaskin\/driveset\./)
+  assert.doesNotMatch(withRepo, /НЕ угадывай/)
+  assert.match(withRepo, /остановись и сообщи, что нужен правильный repo\/path/)
 })
 
 test('empty issues → no task (the Fix actions are not offered)', () => {

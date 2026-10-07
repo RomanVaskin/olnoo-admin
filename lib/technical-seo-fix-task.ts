@@ -65,6 +65,16 @@ export function buildTechnicalSeoFixTask(project: FixTaskProject, issues: readon
 
   const lines: string[] = []
   lines.push('TECHNICAL SEO FIX TASK', '')
+  lines.push('ПЕРЕД РАБОТОЙ (обязательно)')
+  lines.push('Перед работой прочитай AGENTS.md, OLNOO_PROJECT_MAP.md и OLNOO_ARCHITECTURE.md. Работай по зафиксированной production-карте. Если задача меняет системные факты — обнови документацию в том же commit.', '')
+  lines.push('ВЫБОР ПРОЕКТА / РЕПОЗИТОРИЯ')
+  if (project.repository) lines.push(`- Работай только в репозитории/пути: ${project.repository}.`)
+  else lines.push('- Repository/path не передан — НЕ угадывай репозиторий.')
+  lines.push(
+    `- Сначала проверь, что текущий открытый репозиторий соответствует проекту «${project.projectName}» (domain ${project.domain}).`,
+    '- Если не соответствует — остановись и сообщи, что нужен правильный repo/path. Ничего не меняй.',
+    '',
+  )
   lines.push('Исправь найденные Technical SEO проблемы публичного сайта. Одна задача — один проект.', '')
   lines.push('PROJECT')
   lines.push(`- Название: ${project.projectName}`)
