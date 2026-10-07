@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { exportJWK, generateKeyPair, SignJWT, type JWTVerifyGetKey } from 'jose'
-import { MCP_QUERIES_SCOPE, parseOAuthConfig, protectedResourceMetadata, resourceMetadataUrl, verifyAccessToken, wwwAuthenticateChallenge } from './mcp-oauth.ts'
-import { handleMcpRequest, SUMMARY_TOOL_NAME, type QueriesAccess } from './mcp-summary.ts'
+import { MCP_SCOPE, parseOAuthConfig, protectedResourceMetadata, resourceMetadataUrl, verifyAccessToken, wwwAuthenticateChallenge } from './mcp-oauth.ts'
+import { handleMcpRequest, SUMMARY_TOOL_NAME, type McpAuth } from './mcp-summary.ts'
 import { QUERIES_TOOL_NAME } from './mcp-direct-queries.ts'
 
 const ENV = { OLNOO_MCP_OAUTH_ISSUER: 'https://tenant.eu.auth0.com/', OLNOO_MCP_OAUTH_AUDIENCE: 'https://admin.olnoo.com/api/mcp' }
@@ -12,7 +12,7 @@ const pair = generateKeyPair('RS256')
 const keys: JWTVerifyGetKey = async () => (await pair).publicKey
 
 const sign = async (over: { iss?: string; aud?: string; exp?: string | number; scope?: string | null; key?: CryptoKey; alg?: string; nbf?: number } = {}) => {
-  const jwt = new SignJWT(over.scope === null ? {} : { scope: over.scope ?? `openid ${MCP_QUERIES_SCOPE}` })
+  const jwt = new SignJWT(over.scope === null ? {} : { scope: over.scope ?? `openid ${MCP_SCOPE}` })
     .setProtectedHeader({ alg: over.alg ?? 'RS256' })
     .setIssuer(over.iss ?? CFG.issuer)
     .setAudience(over.aud ?? CFG.audience)
@@ -70,9 +70,9 @@ test('rejected: missing or wrong scope (insufficient_scope), and non-RS256 token
   assert.equal((await reason(await sign({ scope: 'openid profile' }))).reason, 'insufficient_scope')
   assert.equal((await reason(await sign({ scope: null }))).reason, 'insufficient_scope')
   assert.equal((await reason(await sign({ scope: 'direct:readwrite' }))).reason, 'insufficient_scope') // exact match, not a prefix
-  const hs = await new SignJWT({ scope: MCP_QUERIES_SCOPE }).setProtectedHeader({ alg: 'HS256' }).setIssuer(CFG.issuer).setAudience(CFG.audience).setExpirationTime('5m').sign(new TextEncoder().encode('x'.repeat(32)))
+  const hs = await new SignJWT({ scope: MCP_SCOPE }).setProtectedHeader({ alg: 'HS256' }).setIssuer(CFG.issuer).setAudience(CFG.audience).setExpirationTime('5m').sign(new TextEncoder().encode('x'.repeat(32)))
   assert.equal((await reason(hs)).reason, 'invalid')
-  const none = `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(JSON.stringify({ iss: CFG.issuer, aud: CFG.audience, scope: MCP_QUERIES_SCOPE, exp: 9999999999 })).toString('base64url')}.`
+  const none = `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(JSON.stringify({ iss: CFG.issuer, aud: CFG.audience, scope: MCP_SCOPE, exp: 9999999999 })).toString('base64url')}.`
   assert.equal((await reason(none)).reason, 'invalid')
 })
 
@@ -86,60 +86,74 @@ test('the default key source is the issuer JWKS (no keys are configured in env)'
 // ---- MCP protocol: Mixed auth ------------------------------------------------------------------------------------
 
 const HEADERS = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }
-const rpc = (body: unknown, extra: Record<string, string> = {}) => new Request('http://x/api/mcp', { method: 'POST', headers: { ...HEADERS, ...extra }, body: JSON.stringify(body) })
-const summary = async () => ({ summary: true }) as never
+const rpc = (body: unknown) => new Request('http://x/api/mcp', { method: 'POST', headers: HEADERS, body: JSON.stringify(body) })
 
-function access(state: 'ok' | 'denied' | 'unconfigured', loads: string[] = []): QueriesAccess {
-  return {
-    load: async (p) => (loads.push(p), { queries: [] } as never),
-    authorize: async () => state,
-    challenge: state === 'unconfigured' ? null : () => wwwAuthenticateChallenge(CFG),
-    scope: MCP_QUERIES_SCOPE,
+type Loads = { summary: string[]; queries: string[] }
+function setup(state: 'ok' | 'denied' | 'unconfigured') {
+  const loads: Loads = { summary: [], queries: [] }
+  const auth: McpAuth = { authorize: async () => state, challenge: state === 'unconfigured' ? null : () => wwwAuthenticateChallenge(CFG), scope: MCP_SCOPE }
+  const loaders = {
+    getSummary: async (p: string) => (loads.summary.push(p), { summary: true } as never),
+    getQueries: async (p: string) => (loads.queries.push(p), { queries: [{ query: 'q' }] } as never),
   }
+  const call = async (body: unknown) => (await (await handleMcpRequest(rpc(body), loaders, auth)).json()) as any
+  return { loads, call }
 }
-const call = async (body: unknown, q?: QueriesAccess) => (await (await handleMcpRequest(rpc(body), summary, q)).json()) as any
 const callTool = (name: string, args: unknown = {}) => ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } })
+const TOOLS = [SUMMARY_TOOL_NAME, QUERIES_TOOL_NAME]
 
-test('tools/list (no login needed): summary is noauth, queries is oauth2 with direct:read — at the top level and in _meta', async () => {
-  const r = await call({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, access('denied'))
-  const [sum, q] = r.result.tools
-  assert.deepEqual([sum.name, q.name], [SUMMARY_TOOL_NAME, QUERIES_TOOL_NAME])
-  assert.deepEqual(sum.securitySchemes, [{ type: 'noauth' }])
-  assert.deepEqual(q.securitySchemes, [{ type: 'oauth2', scopes: ['direct:read'] }])
-  assert.deepEqual(sum._meta.securitySchemes, [{ type: 'noauth' }])
-  assert.deepEqual(q._meta.securitySchemes, [{ type: 'oauth2', scopes: ['direct:read'] }])
-  assert.equal(q.annotations.readOnlyHint, true)
+test('tools/list: BOTH tools are oauth2 with direct:read (top level and _meta); no noauth anywhere', async () => {
+  const { call } = setup('denied')
+  const r = await call({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+  assert.deepEqual(r.result.tools.map((t: any) => t.name), TOOLS)
+  for (const t of r.result.tools) {
+    assert.deepEqual(t.securitySchemes, [{ type: 'oauth2', scopes: ['direct:read'] }], t.name)
+    assert.deepEqual(t._meta.securitySchemes, [{ type: 'oauth2', scopes: ['direct:read'] }], t.name)
+    assert.equal(t.annotations.readOnlyHint, true)
+  }
+  assert.ok(!JSON.stringify(r).includes('noauth'))
 })
 
-test('get_driveset_summary works without any auth', async () => {
-  const r = await call(callTool(SUMMARY_TOOL_NAME), access('denied'))
-  assert.equal(r.result.isError, undefined)
-  assert.equal(JSON.parse(r.result.content[0].text).summary, true)
+test('without a valid token neither tool returns data: tool error + OAuth challenge in _meta; no loader runs', async () => {
+  const { call, loads } = setup('denied')
+  for (const name of TOOLS) {
+    const r = await call(callTool(name, { period: 'today' }))
+    assert.equal(r.result.isError, true, name)
+    assert.deepEqual(r.result._meta['mcp/www_authenticate'], [wwwAuthenticateChallenge(CFG)], name)
+    assert.ok(!JSON.stringify(r).includes('"summary"') && !JSON.stringify(r).includes('"queries"'), name)
+  }
+  assert.deepEqual(loads, { summary: [], queries: [] })
 })
 
-test('get_direct_queries without a valid token: tool error with the OAuth challenge in _meta; the loader never runs', async () => {
-  const loads: string[] = []
-  const r = await call(callTool(QUERIES_TOOL_NAME, { period: 'today' }), access('denied', loads))
-  assert.equal(r.result.isError, true)
-  assert.deepEqual(r.result._meta['mcp/www_authenticate'], [wwwAuthenticateChallenge(CFG)])
-  assert.deepEqual(loads, [])
-  assert.ok(!JSON.stringify(r).includes('queries":'))
+test('with a valid token both tools return their data (period validated, default today)', async () => {
+  const { call, loads } = setup('ok')
+  for (const name of TOOLS) assert.equal((await call(callTool(name))).result.isError, undefined, name)
+  assert.deepEqual(loads, { summary: ['today'], queries: ['today'] })
+  for (const name of TOOLS) {
+    const bad = await call(callTool(name, { period: 'lastmonth' }))
+    assert.ok(bad.error || bad.result?.isError, name)
+  }
+  assert.deepEqual(loads, { summary: ['today'], queries: ['today'] })
 })
 
-test('get_direct_queries with a valid token returns the data (period validated, default today)', async () => {
-  const loads: string[] = []
-  const r = await call(callTool(QUERIES_TOOL_NAME), access('ok', loads))
-  assert.equal(r.result.isError, undefined)
-  assert.deepEqual(loads, ['today'])
-  const bad = await call(callTool(QUERIES_TOOL_NAME, { period: 'lastmonth' }), access('ok', loads))
-  assert.ok(bad.error || bad.result?.isError)
-  assert.deepEqual(loads, ['today'])
+test('OAuth not configured: both tools answer a plain error without any challenge and without data', async () => {
+  const { call, loads } = setup('unconfigured')
+  for (const name of TOOLS) {
+    const r = await call(callTool(name))
+    assert.equal(r.result.isError, true, name)
+    assert.equal(r.result._meta, undefined, name)
+  }
+  assert.deepEqual(loads, { summary: [], queries: [] })
 })
 
-test('OAuth not configured: the queries tool answers a plain error without any challenge', async () => {
-  const r = await call(callTool(QUERIES_TOOL_NAME), access('unconfigured'))
-  assert.equal(r.result.isError, true)
-  assert.equal(r.result._meta, undefined)
+test('a failing loader gives a generic tool error without any detail (both tools)', async () => {
+  const auth: McpAuth = { authorize: async () => 'ok', challenge: null, scope: MCP_SCOPE }
+  const boom = async () => { throw new Error('token=abc123 https://internal/secret') }
+  for (const name of TOOLS) {
+    const res = await handleMcpRequest(rpc(callTool(name)), { getSummary: boom, getQueries: boom }, auth)
+    const body = JSON.stringify(await res.json())
+    assert.ok(body.includes('isError') && !body.includes('abc123') && !body.includes('internal'), name)
+  }
 })
 
 test('no static auth anywhere: no ?key=, no OLNOO_MCP_KEY, no Basic/query credentials in the MCP code or docs', () => {

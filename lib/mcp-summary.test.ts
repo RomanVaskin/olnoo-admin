@@ -72,8 +72,10 @@ const HEADERS = { 'content-type': 'application/json', accept: 'application/json,
 const rpc = (body: unknown) => new Request('http://x/api/mcp', { method: 'POST', headers: HEADERS, body: JSON.stringify(body) })
 const INIT = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } }
 
+const OK_AUTH = { authorize: async () => 'ok' as const, challenge: () => 'Bearer x', scope: 'direct:read' } // token checks have their own tests (mcp-oauth.test.ts)
+const noQueries = async () => ({}) as never
 async function call(body: unknown, getSummary: (p: SummaryPeriod) => Promise<SummaryDto> = async () => dto()) {
-  const res = await handleMcpRequest(rpc(body), getSummary)
+  const res = await handleMcpRequest(rpc(body), { getSummary, getQueries: noQueries }, OK_AUTH)
   return { res, json: res.status === 202 ? null : ((await res.json()) as any) }
 }
 
@@ -85,18 +87,19 @@ test('initialize works statelessly; every answer is no-store', async () => {
   assert.equal(res.headers.get('mcp-session-id'), null)
 })
 
-test('tools/list: exactly one tool, read-only, input is only `period` (default today), no project parameter', async () => {
+test('tools/list: exactly the two read-only tools, input is only `period` (default today), no project parameter', async () => {
   const { json } = await call({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
   const tools = json.result.tools
-  assert.equal(tools.length, 1)
-  assert.equal(tools[0].name, SUMMARY_TOOL_NAME)
-  assert.equal(tools[0].annotations.readOnlyHint, true)
-  assert.equal(tools[0].annotations.destructiveHint, false)
-  assert.deepEqual(Object.keys(tools[0].inputSchema.properties), ['period'])
-  assert.deepEqual(tools[0].inputSchema.properties.period.enum, [...SUMMARY_PERIODS])
-  assert.equal(tools[0].inputSchema.properties.period.default, 'today')
+  assert.deepEqual(tools.map((t: { name: string }) => t.name), [SUMMARY_TOOL_NAME, 'get_direct_queries'])
+  for (const t of tools) {
+    assert.equal(t.annotations.readOnlyHint, true)
+    assert.equal(t.annotations.destructiveHint, false)
+    assert.deepEqual(Object.keys(t.inputSchema.properties), ['period'])
+    assert.deepEqual(t.inputSchema.properties.period.enum, [...SUMMARY_PERIODS])
+    assert.equal(t.inputSchema.properties.period.default, 'today')
+    assert.ok(!/create|update|delete|write|send|post/i.test(t.name)) // no write-looking tools
+  }
   assert.deepEqual(Object.keys(SUMMARY_INPUT_SHAPE), ['period'])
-  assert.ok(!/create|update|delete|write|send|post/i.test(tools[0].name)) // no write-looking tools
 })
 
 test('tools/call: today / yesterday / last7 pass; the period reaches the loader; default is today', async () => {
@@ -137,7 +140,7 @@ test('tools/call: a failing loader gives a generic tool error without any detail
 
 test('GET, DELETE, PUT and PATCH answer 405 with Allow: POST', async () => {
   for (const method of ['GET', 'DELETE', 'PUT', 'PATCH']) {
-    const res = await handleMcpRequest(new Request('http://x/api/mcp', { method, headers: HEADERS }), async () => dto())
+    const res = await handleMcpRequest(new Request('http://x/api/mcp', { method, headers: HEADERS }), { getSummary: async () => dto(), getQueries: noQueries }, OK_AUTH)
     assert.equal(res.status, 405, method)
     assert.equal(res.headers.get('allow'), 'POST')
     assert.equal(res.headers.get('cache-control'), 'no-store')

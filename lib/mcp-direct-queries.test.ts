@@ -1,8 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { QUERIES_TOOL_NAME, toQueriesDto, TOP_QUERIES_LIMIT } from './mcp-direct-queries.ts'
-import { handleMcpRequest, SUMMARY_PERIODS, SUMMARY_TOOL_NAME } from './mcp-summary.ts'
+import { toQueriesDto, TOP_QUERIES_LIMIT } from './mcp-direct-queries.ts'
 
 const NOW = new Date('2026-10-07T09:00:00Z')
 const PERIOD = { complete: false, preset: 'today' }
@@ -55,4 +53,13 @@ test('DTO: empty and missing cases are honest (no queries; no structure ⇒ comp
   assert.equal(noStruct.queries[0].adGroupId, null)
   const cut = toQueriesDto(payload([row(1)], { ...STRUCT, adGroupsTruncated: true }), PERIOD, NOW)
   assert.equal(cut.negativeKeywords.complete, false)
+})
+
+test('route: queries loader reuses the existing Direct client, campaign allow-list and period resolver; read-only', async () => {
+  const { readFileSync } = await import('node:fs')
+  const route = readFileSync(new URL('../app/api/mcp/route.ts', import.meta.url), 'utf8')
+  assert.match(route, /createDirectClient\(cfg\)\.observePeriod\(campaignId, \{ from: resolved\.from, to: resolved\.to \}, \{ structure: true \}\)/)
+  assert.match(route, /resolveCampaignId\(String\(UNIFIED_PROJECTS\.driveset\.campaignId\), cfg\.campaignIds\)/)
+  assert.match(route, /getQueries: loadQueries/)
+  assert.doesNotMatch(route, /pool|crm|lead/i)
 })

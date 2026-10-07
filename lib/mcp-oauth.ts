@@ -5,8 +5,8 @@
 
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose'
 
-/** The only scope: read DriveSet Direct search queries. */
-export const MCP_QUERIES_SCOPE = 'direct:read'
+/** The only scope: read DriveSet data through the MCP (summary and Direct search queries). */
+export const MCP_SCOPE = 'direct:read'
 
 export type McpOAuthConfig = { issuer: string; audience: string }
 
@@ -38,15 +38,15 @@ export function protectedResourceMetadata(cfg: McpOAuthConfig) {
   return {
     resource: cfg.audience,
     authorization_servers: [cfg.issuer],
-    scopes_supported: [MCP_QUERIES_SCOPE],
+    scopes_supported: [MCP_SCOPE],
     bearer_methods_supported: ['header'],
   }
 }
 
 /** Value for `_meta["mcp/www_authenticate"]` — it makes ChatGPT open the account-linking flow for the tool. */
 export function wwwAuthenticateChallenge(cfg: McpOAuthConfig, error: 'insufficient_scope' | 'invalid_token' = 'insufficient_scope'): string {
-  const description = error === 'invalid_token' ? 'Sign in again to continue' : 'Sign in to read Direct search queries'
-  return `Bearer resource_metadata="${resourceMetadataUrl(cfg)}", scope="${MCP_QUERIES_SCOPE}", error="${error}", error_description="${description}"`
+  const description = error === 'invalid_token' ? 'Sign in again to continue' : 'Sign in to read DriveSet data'
+  return `Bearer resource_metadata="${resourceMetadataUrl(cfg)}", scope="${MCP_SCOPE}", error="${error}", error_description="${description}"`
 }
 
 export type TokenCheck = { ok: true } | { ok: false; reason: 'missing' | 'invalid' | 'insufficient_scope' }
@@ -74,7 +74,7 @@ export async function verifyAccessToken(req: Request, cfg: McpOAuthConfig, keys:
   try {
     const { payload } = await jwtVerify(token, keys, { issuer: cfg.issuer, audience: cfg.audience, algorithms: ['RS256'], clockTolerance: 5 })
     const scopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/) : []
-    return scopes.includes(MCP_QUERIES_SCOPE) ? { ok: true } : { ok: false, reason: 'insufficient_scope' }
+    return scopes.includes(MCP_SCOPE) ? { ok: true } : { ok: false, reason: 'insufficient_scope' }
   } catch {
     return { ok: false, reason: 'invalid' }
   }
