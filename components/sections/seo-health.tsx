@@ -5,6 +5,8 @@ import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/prim
 import { useI18n } from '@/components/i18n-provider'
 import { TaskPanel, type TaskPanelState } from '@/components/sections/seo-clusters'
 import { buildTechnicalSeoFixTask } from '@/lib/technical-seo-fix-task'
+import { isSafeExecutorCode } from '@/lib/seo-executor-codes'
+import { useExecutorRuns, type AgentRun } from '@/components/sections/use-executor-runs'
 import type { Recheck } from '@/lib/seo-health-store'
 
 type CheckStatus = 'OK' | 'Warning' | 'Missing' | 'Error'
@@ -45,6 +47,21 @@ type ProjectHealth = {
   notChecked?: false
 }
 
+function AgentStatus({ run, error, t }: { run?: AgentRun; error?: string; t: Record<string, string> }) {
+  if (error) return <p className="label-mono text-destructive">{t.agentError}: {error}</p>
+  if (!run) return null
+  const last = run.log.slice(-3)
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="label-mono text-foreground/80">
+        {run.status === 'queued' || run.status === 'running' ? t.agentWorking : run.status === 'pr_created' ? t.agentPr : run.status === 'no_changes' ? t.agentNoChanges : `${t.agentError}: ${run.error ?? run.status}`}
+        {run.prUrl && <> <a href={run.prUrl} target="_blank" rel="noreferrer noopener" className="underline underline-offset-4">{run.prUrl}</a></>}
+      </p>
+      {last.length > 0 && <p className="font-mono text-xs text-muted-foreground">{last.join(' · ')}</p>}
+    </div>
+  )
+}
+
 export function SeoHealth() {
   const { t, locale } = useI18n()
   const dateLocale = locale === 'ru' ? 'ru-RU' : 'en-US'
@@ -58,6 +75,7 @@ export function SeoHealth() {
   const [rechecking, setRechecking] = useState<number | null>(null)
   const [recheckError, setRecheckError] = useState<number | null>(null)
   const [fixPanel, setFixPanel] = useState<TaskPanelState | null>(null)
+  const { runs: agentRuns, errors: agentError, start: startAgent } = useExecutorRuns()
 
   useEffect(() => {
     fetch('/api/seo-health?mode=last')
@@ -249,6 +267,17 @@ export function SeoHealth() {
                             >
                               {t.seoHealth.fixAll}
                             </button>
+                            {r.repository && r.issues.some((i) => isSafeExecutorCode(i.code)) && (
+                              <button
+                                type="button"
+                                disabled={agentRuns[r.projectId]?.status === 'running' || agentRuns[r.projectId]?.status === 'queued'}
+                                onClick={() => startAgent(r.projectId)}
+                                className="label-mono w-fit border border-foreground px-4 py-2 transition-colors hover:bg-foreground hover:text-background disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {t.seoHealth.agentFixAll}
+                              </button>
+                            )}
+                            <AgentStatus run={agentRuns[r.projectId]} error={agentError[r.projectId]} t={t.seoHealth} />
                           <ul className="flex flex-col gap-1.5">
                             {r.issues.map((i, n) => (
                               <li key={n} className="flex flex-wrap items-baseline gap-x-3 text-sm">
@@ -267,6 +296,16 @@ export function SeoHealth() {
                                 >
                                   {t.seoHealth.fix}
                                 </button>
+                                {r.repository && isSafeExecutorCode(i.code) && (
+                                  <button
+                                    type="button"
+                                    disabled={agentRuns[r.projectId]?.status === 'running' || agentRuns[r.projectId]?.status === 'queued'}
+                                    onClick={() => startAgent(r.projectId, [{ code: i.code, ...(i.url ? { url: i.url } : {}) }])}
+                                    className="label-mono text-foreground/80 underline underline-offset-4 hover:text-foreground disabled:opacity-50"
+                                  >
+                                    {t.seoHealth.agentFix}
+                                  </button>
+                                )}
                               </li>
                             ))}
                           </ul>
