@@ -3,12 +3,13 @@ import { pool } from '@/lib/db'
 import { getProject } from '@/lib/projects-registry'
 import { readLastResult } from '@/lib/seo-health-store'
 import { getExecutorRun, startExecutorRun } from '@/lib/seo-executor'
+import { recordFixChanges } from '@/lib/seo-page-changes'
 import { realExecutorDeps } from '@/lib/seo-executor-runner'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const deps = () => realExecutorDeps({ getProject: (id) => getProject(pool, id), readLastResult: (id) => readLastResult(pool, id) })
+const deps = () => realExecutorDeps({ getProject: (id) => getProject(pool, id), readLastResult: (id) => readLastResult(pool, id), recordChange: async (info) => { await recordFixChanges(pool, info) } })
 
 /**
  * SEO Executor v1 (human-started, safe Technical SEO codes only; see lib/seo-executor.ts).

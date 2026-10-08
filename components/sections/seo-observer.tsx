@@ -10,6 +10,9 @@ type PageRow = { path: string; url: string; visits: number }
 type Snapshot = { id: number; provider: string; kind: string; dateFrom: string; dateTo: string; takenAt: string; rows: unknown[] }
 type SourceState = { status: 'ok'; snapshotId: number; rows: number } | { status: 'not_configured'; reason: string } | { status: 'error'; kind: string; message: string }
 type Run = { partial: boolean; webmaster: SourceState; metrika: SourceState }
+type Metrics = { impressions: number | null; clicks: number | null; avgPosition: number | null; visits: number | null }
+type Snap = { id: number; provider: string; kind: string; takenAt: string; metrics: Metrics }
+type Change = { id: number; kind: string; pageUrl: string | null; prUrl: string | null; createdAt: string; issueCodes: string[]; clusterIds: number[]; status: string | null; baseline: Snap | null; after: Snap | null }
 type Decision = {
   action: 'FIX' | 'IGNORE' | 'IMPROVE' | 'CREATE_CANDIDATE' | 'NONE'
   clusterId?: number
@@ -31,6 +34,14 @@ export function SeoObserver() {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [decisions, setDecisions] = useState<Decision[]>([])
+  const [changes, setChanges] = useState<Change[]>([])
+
+  // Read-only before/after history from the saved page_changes + snapshots; never calls a provider.
+  const loadChanges = (id: number) =>
+    fetch(`/api/seo-page-changes?projectId=${id}`)
+      .then((res) => (res.ok ? res.json() : { changes: [] }))
+      .then((d) => setChanges(d.changes ?? []))
+      .catch(() => setChanges([]))
 
   // Read-only recommendations from the SAVED data (the pure Decision rules); never triggers a provider call.
   const loadDecisions = (id: number) =>
@@ -55,6 +66,7 @@ export function SeoObserver() {
         setPeriod(d.dateFrom ? { dateFrom: d.dateFrom, dateTo: d.dateTo } : null)
       })
     loadDecisions(projectId)
+    loadChanges(projectId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
@@ -70,11 +82,20 @@ export function SeoObserver() {
       setSnapshots(d.snapshots ?? [])
       setPeriod({ dateFrom: d.dateFrom, dateTo: d.dateTo })
       loadDecisions(projectId)
+      loadChanges(projectId)
     } catch {
       setError(t.seoObserver.runError)
     } finally {
       setRunning(false)
     }
+  }
+
+  const fmt = (v: number | null) => (v === null ? '—' : String(v))
+  // Only the metrics the snapshot really has: Webmaster → impressions / clicks / avg position, Metrika → visits.
+  const metricsText = (s: Snap | null) => {
+    if (!s) return t.seoObserver.histNoBaseline
+    const m = s.metrics
+    return s.provider === 'yandex_metrika' ? `visits ${fmt(m.visits)}` : `impr ${fmt(m.impressions)} · clicks ${fmt(m.clicks)} · pos ${fmt(m.avgPosition)}`
   }
 
   const queries = snapshots.find((s) => s.provider === 'yandex_webmaster' && s.kind === 'queries')
@@ -167,6 +188,41 @@ export function SeoObserver() {
                   <Td className="font-mono text-xs">{d.pageUrl ?? d.clusterName ?? '—'}</Td>
                   <Td className="text-sm">{reasons[d.reason] ?? d.reason}</Td>
                   <Td className="font-mono text-xs text-muted-foreground">{evidenceText(d) || '—'}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </TableShell>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <span className="label-mono text-foreground/80">{t.seoObserver.histTitle}</span>
+        <p className="text-xs text-muted-foreground">{t.seoObserver.histHint}</p>
+        {changes.length === 0 ? (
+          <p className="label-mono text-muted-foreground">{t.seoObserver.histEmpty}</p>
+        ) : (
+          <TableShell>
+            <thead>
+              <tr>
+                <Th>{t.seoObserver.histType}</Th>
+                <Th>{t.seoObserver.histTarget}</Th>
+                <Th>{t.seoObserver.histWhat}</Th>
+                <Th>{t.seoObserver.histPr}</Th>
+                <Th>{t.seoObserver.histBaseline}</Th>
+                <Th>{t.seoObserver.histAfter}</Th>
+                <Th>{t.seoObserver.histStatus}</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {changes.map((c) => (
+                <tr key={c.id} className="transition-colors hover:bg-muted/60">
+                  <Td className="label-mono text-foreground">{c.kind.toUpperCase()}</Td>
+                  <Td className="font-mono text-xs">{c.pageUrl ?? t.seoObserver.histProject}<br />{new Date(c.createdAt).toLocaleDateString(dateLocale)}</Td>
+                  <Td className="font-mono text-xs">{[...c.issueCodes, ...c.clusterIds.map((x) => `cluster ${x}`)].join(', ') || '—'}</Td>
+                  <Td className="font-mono text-xs">{c.prUrl ? <a href={c.prUrl} target="_blank" rel="noreferrer noopener" className="underline underline-offset-4">PR</a> : '—'}</Td>
+                  <Td className="font-mono text-xs text-muted-foreground">{metricsText(c.baseline)}</Td>
+                  <Td className="font-mono text-xs text-muted-foreground">{c.after ? metricsText(c.after) : t.seoObserver.histWaiting}</Td>
+                  <Td className="label-mono">{c.status ?? '—'}</Td>
                 </tr>
               ))}
             </tbody>

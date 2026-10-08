@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { getProject } from '@/lib/projects-registry'
+import { linkAfterSnapshots } from '@/lib/seo-page-changes'
 import { getLatestSeoSnapshots, observerPeriod, runSeoObserver } from '@/lib/seo-observer'
 import { createMetrikaClient, metrikaConfigFromEnv } from '@/lib/yandex-metrika'
 import { createWebmasterClient, webmasterConfigFromEnv } from '@/lib/yandex-webmaster'
@@ -47,5 +48,8 @@ export async function POST(req: Request) {
   for (const [name, s] of [['webmaster', run.webmaster], ['metrika', run.metrika]] as const) {
     if (s.status === 'error') console.error(`[seo-observer] ${name} error kind=${s.kind}`)
   }
+  // Before/after (step F): the snapshots saved by THIS run may close open page_changes. A failure here never fails the run.
+  const savedIds = [run.webmaster, run.metrika].flatMap((s) => (s.status === 'ok' ? [s.snapshotId] : []))
+  await linkAfterSnapshots(pool, project.id, savedIds).catch(() => console.error('[seo-observer] page_changes link failed'))
   return NextResponse.json({ ...run, snapshots: await getLatestSeoSnapshots(pool, project.id) })
 }
