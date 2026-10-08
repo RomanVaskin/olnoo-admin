@@ -14,7 +14,8 @@ const health = (issues: Issue[]): ProjectHealth => ({
 })
 
 type Call = { cmd: string; args: string[]; opts: { cwd?: string; input?: string; env?: Record<string, string> } }
-function setup(opts: { issues?: Issue[]; repository?: string | null; status?: string; checkFails?: string; agentCode?: number; pkg?: object | null } = {}) {
+function setup(opts: { issues?: Issue[]; repository?: string | null; status?: string; checkFails?: string; agentCode?: number; pkg?: object | null; registerFails?: boolean } = {}) {
+  const registered: { projectId: number; prUrl: string; issues: { code: string; url?: string }[] }[] = []
   const calls: Call[] = []
   const pkg = opts.pkg === undefined ? { scripts: { test: 'x', typecheck: 'x', build: 'x' } } : opts.pkg
   const deps: ExecutorDeps = {
@@ -33,11 +34,12 @@ function setup(opts: { issues?: Issue[]; repository?: string | null; status?: st
     makeTempDir: async (id) => `/tmp/olnoo-seo-executor/${id}-x`,
     removeDir: async () => { removed++ },
     readFile: async (p) => (p.endsWith('package.json') ? (pkg ? JSON.stringify(pkg) : null) : p.endsWith('package-lock.json') ? '{}' : null),
+    registerChange: async (info) => { if (opts.registerFails) throw new Error('db down'); registered.push(info) },
     now: () => new Date('2026-02-02T00:00:00Z'),
     newRunId: () => '12345678-1234-1234-1234-123456789abc',
   }
   let removed = 0
-  return { deps, calls, removed: () => removed }
+  return { deps, calls, registered, removed: () => removed }
 }
 const has = (calls: Call[], cmd: string, first: string) => calls.some((c) => c.cmd === cmd && c.args.includes(first))
 const start = async (s: ReturnType<typeof setup>, input: Record<string, unknown> = { projectId: 1 }) => {
@@ -255,4 +257,33 @@ test('malformed issues payloads are rejected', async () => {
     const r = await startExecutorRun(setup().deps, { projectId: 1, issues })
     assert.ok(!r.ok && r.http === 400)
   }
+})
+
+// ---- step F: before/after history registration ----------------------------------------------------------------------------
+
+test('F1: pr_created registers exactly ONE change per PR (all issues of the run, with their urls)', async () => {
+  const s = setup({ issues: [issue('robots_missing'), issue('title_missing', 'https://driveset.ru/a'), issue('h1_missing', 'https://driveset.ru/a')] })
+  const r = await start(s)
+  assert.ok(r.ok && r.run.status === 'pr_created')
+  assert.equal(s.registered.length, 1)
+  assert.deepEqual(s.registered[0].projectId, 1)
+  assert.equal(s.registered[0].prUrl, 'https://github.com/RomanVaskin/driveset/pull/77')
+  assert.deepEqual(s.registered[0].issues.map((i) => i.code).sort(), ['h1_missing', 'robots_missing', 'title_missing'])
+})
+
+test('F2: no_changes / failed / failed_checks / stale register nothing', async () => {
+  const noDiff = setup({ status: '' }); await start(noDiff); assert.equal(noDiff.registered.length, 0)
+  resetExecutorRunsForTests()
+  const failedChecks = setup({ checkFails: 'run build' }); await start(failedChecks); assert.equal(failedChecks.registered.length, 0)
+  resetExecutorRunsForTests()
+  const agentFail = setup({ agentCode: 1 }); await start(agentFail); assert.equal(agentFail.registered.length, 0)
+  resetExecutorRunsForTests()
+  const stale = setup({ issues: [] }); await start(stale); assert.equal(stale.registered.length, 0)
+})
+
+test('F3: a failing history write never fails the run (the PR exists); the project id is the registry one', async () => {
+  const s = setup({ registerFails: true })
+  const r = await start(s)
+  assert.ok(r.ok && r.run.status === 'pr_created' && r.run.prUrl)
+  assert.ok(r.ok && r.run.log.some((l) => l.includes('не сохранена')))
 })

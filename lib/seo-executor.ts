@@ -31,6 +31,8 @@ export type ExecutorProject = { id: number; name: string; slug: string | null; r
 export type ExecutorDeps = {
   getProject: (id: number) => Promise<ExecutorProject | null>
   readLastResult: (projectId: number) => Promise<ProjectHealth | null>
+  /** Optional: records the created PR in the before/after history (step F). A failure here never fails the run. */
+  registerChange?: (info: { projectId: number; prUrl: string; issues: { code: string; url?: string }[] }) => Promise<void>
   /** Server-side only: `cmd` + args array, never a shell string. */
   run: (cmd: string, args: string[], opts: CmdOptions) => Promise<CmdResult>
   makeTempDir: (runId: string) => Promise<string>
@@ -238,6 +240,12 @@ async function pipeline(deps: ExecutorDeps, c: Ctx): Promise<void> {
     if (pr.code !== 0 || !url) return fail('failed', 'gh pr create failed (branch is pushed, open the PR manually)', pr)
     run.prUrl = url
     log('PR создан')
+    // One history record per created PR (never for failed / no_changes / failed_checks). Idempotent by (project, pr_url) in the store.
+    try {
+      await deps.registerChange?.({ projectId: c.project.id, prUrl: url, issues: c.issues.map((i) => ({ code: i.code, ...(i.url ? { url: i.url } : {}) })) })
+    } catch {
+      log('История изменений (before/after) не сохранена')
+    }
     set('pr_created')
   } finally {
     if (dir) await deps.removeDir(dir).catch(() => {})

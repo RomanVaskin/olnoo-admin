@@ -265,13 +265,16 @@ test('not_configured: no token / no counter / site not in Webmaster → status n
   })
 })
 
-test('page_changes exists (schema only) and the Observer writes nothing into it', async (t) => {
+test('page_changes exists and the Observer run itself creates no change (the route only LINKS an after-snapshot, step F)', async (t) => {
   await withDb(t, async (pool, project) => {
     const cols = (await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'page_changes'`)).rows.map((r) => r.column_name)
     for (const c of ['id', 'project_id', 'page_id', 'kind', 'pr_url', 'merged_at', 'cluster_ids', 'issue_codes', 'baseline_snapshot_id', 'after_snapshot_id', 'status', 'notes', 'created_at']) assert.ok(cols.includes(c), c)
     await runSeoObserver(pool, { ...project, slug: 'driveset' }, { webmaster: okWebmaster, metrika: okMetrika, now: () => NOW })
     assert.equal(await count(pool, 'page_changes', project.id), 0)
-    for (const f of ['./seo-observer.ts', '../app/api/seo-observer/route.ts', './yandex-webmaster.ts']) assert.doesNotMatch(readFileSync(new URL(f, import.meta.url), 'utf8'), /page_changes/, f)
+    for (const f of ['./seo-observer.ts', './yandex-webmaster.ts']) assert.doesNotMatch(readFileSync(new URL(f, import.meta.url), 'utf8'), /page_changes/, f)
+    const route = readFileSync(new URL('../app/api/seo-observer/route.ts', import.meta.url), 'utf8')
+    assert.doesNotMatch(route, /INSERT INTO page_changes/) // creation lives only in the Executor registration
+    assert.match(route, /linkAfterSnapshots/)
   })
 })
 

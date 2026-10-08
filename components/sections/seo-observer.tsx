@@ -10,6 +10,13 @@ type PageRow = { path: string; url: string; visits: number }
 type Snapshot = { id: number; provider: string; kind: string; dateFrom: string; dateTo: string; takenAt: string; rows: unknown[] }
 type SourceState = { status: 'ok'; snapshotId: number; rows: number } | { status: 'not_configured'; reason: string } | { status: 'error'; kind: string; message: string }
 type Run = { partial: boolean; webmaster: SourceState; metrika: SourceState }
+type Metrics = { impressions?: number; clicks?: number; avgPosition?: number | null; visits?: number; pageVisits?: number | null }
+type SnapRef = { id: number; provider: string; kind: string; dateFrom: string; dateTo: string; takenAt: string }
+type Change = {
+  id: number; kind: string; status: string | null; pageUrl: string | null; prUrl: string | null; createdAt: string
+  issueCodes: string[]; clusterIds: number[]; baseline: SnapRef | null; after: SnapRef | null
+  comparison: { before: Metrics; after: Metrics; overlap: boolean } | null
+}
 type Decision = {
   action: 'FIX' | 'IGNORE' | 'IMPROVE' | 'CREATE_CANDIDATE' | 'NONE'
   clusterId?: number
@@ -31,6 +38,7 @@ export function SeoObserver() {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [decisions, setDecisions] = useState<Decision[]>([])
+  const [changes, setChanges] = useState<Change[]>([])
 
   // Read-only recommendations from the SAVED data (the pure Decision rules); never triggers a provider call.
   const loadDecisions = (id: number) =>
@@ -38,6 +46,13 @@ export function SeoObserver() {
       .then((res) => (res.ok ? res.json() : { decisions: [] }))
       .then((d) => setDecisions((d.decisions ?? []).filter((x: Decision) => x.action !== 'NONE')))
       .catch(() => setDecisions([]))
+
+  // Before/after history: a plain database read.
+  const loadChanges = (id: number) =>
+    fetch(`/api/seo-page-changes?projectId=${id}`)
+      .then((res) => (res.ok ? res.json() : { changes: [] }))
+      .then((d) => setChanges(d.changes ?? []))
+      .catch(() => setChanges([]))
 
   useEffect(() => {
     if (projects.length && projectId === null) setProjectId(projects[0].id)
@@ -55,6 +70,7 @@ export function SeoObserver() {
         setPeriod(d.dateFrom ? { dateFrom: d.dateFrom, dateTo: d.dateTo } : null)
       })
     loadDecisions(projectId)
+    loadChanges(projectId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
@@ -70,6 +86,7 @@ export function SeoObserver() {
       setSnapshots(d.snapshots ?? [])
       setPeriod({ dateFrom: d.dateFrom, dateTo: d.dateTo })
       loadDecisions(projectId)
+      loadChanges(projectId)
     } catch {
       setError(t.seoObserver.runError)
     } finally {
@@ -91,6 +108,18 @@ export function SeoObserver() {
     ]
       .filter(Boolean)
       .join(' · ')
+
+  const metricsText = (m: Metrics) =>
+    [
+      m.impressions !== undefined ? `${t.seoObserver.colImpressions}: ${m.impressions}` : null,
+      m.clicks !== undefined ? `${t.seoObserver.colClicks}: ${m.clicks}` : null,
+      m.avgPosition !== undefined ? `${t.seoObserver.colPosition}: ${m.avgPosition ?? '—'}` : null,
+      m.visits !== undefined ? `${t.seoObserver.historyVisits}: ${m.visits}` : null,
+      m.pageVisits !== undefined ? `${t.seoObserver.historyPageVisits}: ${m.pageVisits ?? '—'}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  const snapText = (s: SnapRef | null) => (s ? `${s.dateFrom} — ${s.dateTo}` : t.seoObserver.historyNone)
 
   const stateNote = (s: SourceState | undefined) => {
     if (!s || s.status === 'ok') return null
@@ -223,6 +252,61 @@ export function SeoObserver() {
           </tbody>
         </TableShell>,
       )}
+
+      <section className="flex flex-col gap-3">
+        <span className="label-mono text-foreground/80">{t.seoObserver.historyTitle}</span>
+        <p className="text-xs text-muted-foreground">{t.seoObserver.historyHint}</p>
+        {changes.length === 0 ? (
+          <p className="label-mono text-muted-foreground">{t.seoObserver.historyEmpty}</p>
+        ) : (
+          <TableShell>
+            <thead>
+              <tr>
+                <Th>{t.seoObserver.recAction}</Th>
+                <Th>{t.seoObserver.recTarget}</Th>
+                <Th>PR</Th>
+                <Th>{t.seoObserver.historyBaseline}</Th>
+                <Th>{t.seoObserver.historyAfter}</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {changes.map((c) => (
+                <tr key={c.id} className="align-top transition-colors hover:bg-muted/60">
+                  <Td className="text-sm">
+                    <span className="label-mono text-foreground">{c.kind.toUpperCase()}</span>
+                    <span className="block font-mono text-xs text-muted-foreground">{new Date(c.createdAt).toLocaleString(dateLocale)}</span>
+                    {c.status && <span className="block font-mono text-xs text-muted-foreground">{c.status}</span>}
+                  </Td>
+                  <Td className="font-mono text-xs">
+                    {c.pageUrl ?? t.seoObserver.historyProject}
+                    {(c.issueCodes.length > 0 || c.clusterIds.length > 0) && (
+                      <span className="block text-muted-foreground">{[...c.issueCodes, ...c.clusterIds.map((id) => `#${id}`)].join(', ')}</span>
+                    )}
+                  </Td>
+                  <Td className="font-mono text-xs">
+                    {c.prUrl ? <a href={c.prUrl} target="_blank" rel="noreferrer noopener" className="underline underline-offset-4">{c.prUrl.replace('https://github.com/', '')}</a> : '—'}
+                  </Td>
+                  <Td className="font-mono text-xs">
+                    {snapText(c.baseline)}
+                    {c.comparison && <span className="block text-muted-foreground">{metricsText(c.comparison.before)}</span>}
+                  </Td>
+                  <Td className="font-mono text-xs">
+                    {snapText(c.after)}
+                    {c.comparison ? (
+                      <>
+                        <span className="block text-muted-foreground">{metricsText(c.comparison.after)}</span>
+                        {c.comparison.overlap && <span className="block text-muted-foreground">⚠ {t.seoObserver.historyOverlap}</span>}
+                      </>
+                    ) : (
+                      c.baseline && !c.after && <span className="block text-muted-foreground">{t.seoObserver.historyCompareNeeds}</span>
+                    )}
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </TableShell>
+        )}
+      </section>
     </div>
   )
 }
