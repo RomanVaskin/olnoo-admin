@@ -13,7 +13,7 @@ type Run = { partial: boolean; webmaster: SourceState; metrika: SourceState }
 type Metrics = { impressions?: number; clicks?: number; avgPosition?: number | null; visits?: number; pageVisits?: number | null }
 type SnapRef = { id: number; provider: string; kind: string; dateFrom: string; dateTo: string; takenAt: string }
 type Change = {
-  id: number; kind: string; status: string | null; pageUrl: string | null; prUrl: string | null; createdAt: string
+  id: number; kind: string; status: string | null; mergedAt: string | null; pageUrl: string | null; prUrl: string | null; createdAt: string
   issueCodes: string[]; clusterIds: number[]; baseline: SnapRef | null; after: SnapRef | null
   comparison: { before: Metrics; after: Metrics; overlap: boolean } | null
 }
@@ -276,6 +276,7 @@ export function SeoObserver() {
                     <span className="label-mono text-foreground">{c.kind.toUpperCase()}</span>
                     <span className="block font-mono text-xs text-muted-foreground">{new Date(c.createdAt).toLocaleString(dateLocale)}</span>
                     {c.status && <span className="block font-mono text-xs text-muted-foreground">{c.status}</span>}
+                    {c.mergedAt && <span className="block font-mono text-xs text-muted-foreground">merged {new Date(c.mergedAt).toLocaleString(dateLocale)}</span>}
                   </Td>
                   <Td className="font-mono text-xs">
                     {c.pageUrl ?? t.seoObserver.historyProject}
@@ -298,7 +299,7 @@ export function SeoObserver() {
                         {c.comparison.overlap && <span className="block text-muted-foreground">⚠ {t.seoObserver.historyOverlap}</span>}
                       </>
                     ) : (
-                      c.baseline && !c.after && <span className="block text-muted-foreground">{t.seoObserver.historyCompareNeeds}</span>
+                      !c.after && <span className="block text-muted-foreground">{c.mergedAt ? t.seoObserver.historyCompareNeeds : t.seoObserver.historyWaitMerge}</span>
                     )}
                   </Td>
                 </tr>

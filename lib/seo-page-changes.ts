@@ -1,6 +1,7 @@
 // SEO before/after tracking (roadmap step F) on the EXISTING `page_changes` table (migration 0019; no new table, no scheduler).
 //   SEO Executor `pr_created` → ONE page_change per PR (kind 'fix') with the latest EXISTING Observer snapshot as the baseline;
-//   the next manual Observer run → the first later snapshot of the same provider/kind becomes `after_snapshot_id`.
+//   a manual Observer run checks whether the PR is MERGED (GitHub, no polling) and only then does the first snapshot taken after
+//   the merge become `after_snapshot_id`.
 // Nothing here calls an external API or the model; it only reads/writes the database. Webmaster (queries) and Metrika (landing pages)
 // stay separate sources: a query is never attributed to a page. kind 'improve' is supported by the store, but nothing registers it
 // automatically (OLNOO has no Improve PR flow yet). Pure SQL helpers over an injectable `db`, no `@/` imports.
@@ -85,26 +86,57 @@ export async function registerFixChange(db: Queryable, input: RegisterFixInput):
   })
 }
 
+export type PrState = { merged: boolean; mergedAt: string | null }
+/** Reads the state of ONE pull request. Returns null when it cannot be determined (GitHub unavailable, no access, bad URL). */
+export type PrStateReader = (prUrl: string) => Promise<PrState | null>
+
+const MAX_PR_LOOKUPS = 10
+
 /**
- * Called after a successful MANUAL Observer run. For each open change of the project (no after snapshot yet) the FIRST snapshot taken
- * after the change becomes `after_snapshot_id` — same provider/kind as the baseline when there is one. The anchor is `merged_at` if
- * known, else `created_at` (PR creation): v1 does not poll GitHub, so a snapshot taken between PR creation and merge counts as "after".
- * Older snapshots never qualify. Returns how many changes were linked.
+ * Called after a successful MANUAL Observer run. The Before/After boundary is the real MERGE of the change's PR:
+ *  1. for each open change (no after snapshot) whose `merged_at` is still unknown, the PR state is read through `readPr`
+ *     (GitHub, one lookup per open change, no polling); not merged / unknown / any error → nothing is linked for that change;
+ *  2. a merged PR gets `merged_at` saved (status 'merged');
+ *  3. only then the FIRST snapshot with `taken_at` > `merged_at`, same provider/kind as the baseline (no baseline → the usual preference),
+ *     becomes `after_snapshot_id`. Older snapshots never qualify; an already linked change is never rewritten.
+ * A change without a PR URL cannot be placed in time and stays open. Returns how many changes were linked. Never throws for GitHub problems.
  */
-export async function linkAfterSnapshots(db: Queryable, projectId: number): Promise<number> {
+export async function linkAfterSnapshots(db: Queryable, projectId: number, readPr: PrStateReader): Promise<number> {
   const { rows: open } = await db.query(
-    `SELECT pc.id, pc.page_id, COALESCE(pc.merged_at, pc.created_at) AS anchor, bs.provider AS b_provider, bs.kind AS b_kind
+    `SELECT pc.id, pc.page_id, pc.pr_url, pc.merged_at, bs.provider AS b_provider, bs.kind AS b_kind
        FROM page_changes pc LEFT JOIN seo_snapshots bs ON bs.id = pc.baseline_snapshot_id
       WHERE pc.project_id = $1 AND pc.after_snapshot_id IS NULL ORDER BY pc.id`,
     [projectId],
   )
+
+  // Step 1–2: learn (and store) the merge time of changes that do not have it yet.
+  const unknown = open.filter((c) => c.merged_at == null && c.pr_url).slice(0, MAX_PR_LOOKUPS)
+  const found = new Map<number, Date>()
+  await Promise.all(
+    unknown.map(async (c) => {
+      try {
+        const st = await readPr(c.pr_url as string)
+        const at = st?.merged && st.mergedAt ? new Date(st.mergedAt) : null
+        if (at && !Number.isNaN(at.getTime())) found.set(Number(c.id), at)
+      } catch {
+        // GitHub problem: the change simply stays open until the next manual run
+      }
+    }),
+  )
+  for (const [id, at] of found) {
+    await db.query("UPDATE page_changes SET merged_at = $1, status = 'merged' WHERE id = $2 AND merged_at IS NULL AND after_snapshot_id IS NULL", [at.toISOString(), id])
+  }
+
+  // Step 3: after-snapshots, only for changes whose merge time is known.
   let linked = 0
   for (const c of open) {
+    const mergedAt = c.merged_at != null ? new Date(c.merged_at as string | Date) : found.get(Number(c.id))
+    if (!mergedAt) continue
     const pairs: SnapshotPair[] = c.b_provider ? [{ provider: c.b_provider as string, kind: c.b_kind as string }] : snapshotPreference(c.page_id != null)
     for (const p of pairs) {
       const { rows } = await db.query(
         'SELECT id FROM seo_snapshots WHERE project_id = $1 AND provider = $2 AND kind = $3 AND taken_at > $4 ORDER BY taken_at ASC, id ASC LIMIT 1',
-        [projectId, p.provider, p.kind, c.anchor],
+        [projectId, p.provider, p.kind, mergedAt.toISOString()],
       )
       if (!rows[0]) continue
       const res = await db.query("UPDATE page_changes SET after_snapshot_id = $1, status = 'after_linked' WHERE id = $2 AND after_snapshot_id IS NULL RETURNING id", [rows[0].id, c.id])

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { Pool } from 'pg'
 import { createProject } from './projects-registry.ts'
-import { saveSeoSnapshot } from './seo-observer.ts'
+import { runSeoObserver, saveSeoSnapshot } from './seo-observer.ts'
+import { parsePrState } from './seo-pr-state.ts'
 import { createPageChange, linkAfterSnapshots, listPageChanges, registerFixChange, snapshotPreference, summarizeRows } from './seo-page-changes.ts'
 
 // ---- pure: metrics, preference, no query→URL attribution ------------------------------------------------------------------
@@ -120,52 +121,103 @@ test('baseline = the latest EXISTING suitable snapshot (never created); no snaps
   })
 })
 
-test('after: a snapshot taken AFTER the change (same provider/kind as the baseline) is linked; the next one does not replace it', async (t) => {
+const MERGED = '2026-10-05T00:00:00.000Z'
+const merged = (mergedAt = MERGED) => async () => ({ merged: true, mergedAt })
+const open_ = async () => ({ merged: false, mergedAt: null })
+const PR = 'https://github.com/o/r/pull/1'
+
+test('PR still OPEN: a snapshot taken after PR creation does NOT become after; merged_at stays NULL', async (t) => {
+  await withDb(t, async (pool, project) => {
+    await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-10-01T00:00:00Z')
+    await registerFixChange(pool, { projectId: project.id, prUrl: PR, issues: [{ code: 'robots_missing' }] })
+    await snap(pool, project.id, 'yandex_webmaster', 'queries') // taken after PR creation, PR not merged
+    assert.equal(await linkAfterSnapshots(pool, project.id, open_), 0)
+    const [row] = await rowsOf(pool, project.id)
+    assert.deepEqual([row.after_snapshot_id, row.merged_at, row.status], [null, null, 'pr_created'])
+  })
+})
+
+test('merged PR: merged_at is saved (even before any later snapshot exists); the change stays open for now', async (t) => {
+  await withDb(t, async (pool, project) => {
+    await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-10-01T00:00:00Z')
+    await registerFixChange(pool, { projectId: project.id, prUrl: PR, issues: [{ code: 'robots_missing' }] })
+    assert.equal(await linkAfterSnapshots(pool, project.id, merged()), 0) // no snapshot after the merge yet
+    const [row] = await rowsOf(pool, project.id)
+    assert.equal(new Date(row.merged_at).toISOString(), MERGED)
+    assert.deepEqual([row.after_snapshot_id, row.status], [null, 'merged'])
+  })
+})
+
+test('snapshot BEFORE merged_at is not after; the FIRST snapshot after merged_at is; later ones never replace it; comparison uses both', async (t) => {
   await withDb(t, async (pool, project) => {
     const baseline = await snap(pool, project.id, 'yandex_webmaster', 'queries', [{ query: 'q', impressions: 100, clicks: 10, avgPosition: 4 }], '2026-10-01T00:00:00Z')
-    await registerFixChange(pool, { projectId: project.id, prUrl: 'https://github.com/o/r/pull/1', issues: [{ code: 'robots_missing' }] })
-    const otherKind = await snap(pool, project.id, 'yandex_metrika', 'organic_pages') // later, but a different provider/kind
-    assert.equal(await linkAfterSnapshots(pool, project.id), 0)
+    await registerFixChange(pool, { projectId: project.id, prUrl: PR, issues: [{ code: 'robots_missing' }] })
+    await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-10-04T00:00:00Z') // after PR creation? no — before the merge
+    await snap(pool, project.id, 'yandex_metrika', 'organic_pages', [], '2026-10-06T00:00:00Z') // after the merge, but another provider/kind
+    assert.equal(await linkAfterSnapshots(pool, project.id, merged()), 0)
     assert.equal((await rowsOf(pool, project.id))[0].after_snapshot_id, null)
-    assert.notEqual(otherKind, baseline)
 
-    const after = await snap(pool, project.id, 'yandex_webmaster', 'queries', [{ query: 'q', impressions: 150, clicks: 20, avgPosition: 3 }])
-    assert.equal(await linkAfterSnapshots(pool, project.id), 1)
+    const first = await snap(pool, project.id, 'yandex_webmaster', 'queries', [{ query: 'q', impressions: 150, clicks: 20, avgPosition: 3 }], '2026-10-06T12:00:00Z')
+    assert.equal(await linkAfterSnapshots(pool, project.id, merged()), 1)
+    await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-10-07T00:00:00Z')
+    assert.equal(await linkAfterSnapshots(pool, project.id, merged()), 0)
     const [row] = await rowsOf(pool, project.id)
-    assert.deepEqual([Number(row.baseline_snapshot_id), Number(row.after_snapshot_id), row.status], [baseline, after, 'after_linked'])
-
-    await snap(pool, project.id, 'yandex_webmaster', 'queries')
-    assert.equal(await linkAfterSnapshots(pool, project.id), 0) // already closed
-    assert.equal(Number((await rowsOf(pool, project.id))[0].after_snapshot_id), after)
+    assert.deepEqual([Number(row.baseline_snapshot_id), Number(row.after_snapshot_id), row.status], [baseline, first, 'after_linked'])
 
     const [view] = await listPageChanges(pool, project.id)
     assert.deepEqual(view.comparison?.before, { impressions: 100, clicks: 10, avgPosition: 4 })
     assert.deepEqual(view.comparison?.after, { impressions: 150, clicks: 20, avgPosition: 3 })
-    assert.equal(view.comparison?.overlap, true) // the 28-day window ends before today, so it starts before the change
   })
 })
 
-test('an OLD snapshot (taken before the change) never becomes the after snapshot', async (t) => {
+test('an already linked change is never rewritten (GitHub is not even asked)', async (t) => {
   await withDb(t, async (pool, project) => {
-    const baseline = await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-09-01T00:00:00Z')
-    await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-09-05T00:00:00Z') // also older than the change, not the baseline
-    await registerFixChange(pool, { projectId: project.id, prUrl: 'https://github.com/o/r/pull/1', issues: [{ code: 'robots_missing' }] })
-    assert.equal(await linkAfterSnapshots(pool, project.id), 0)
+    await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-10-01T00:00:00Z')
+    await registerFixChange(pool, { projectId: project.id, prUrl: PR, issues: [{ code: 'robots_missing' }] })
+    const after = await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-10-06T00:00:00Z')
+    assert.equal(await linkAfterSnapshots(pool, project.id, merged()), 1)
+    await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-10-07T00:00:00Z')
+    let asked = 0
+    assert.equal(await linkAfterSnapshots(pool, project.id, async () => { asked++; return { merged: true, mergedAt: '2026-10-06T23:00:00Z' } }), 0)
+    assert.equal(asked, 0)
     const [row] = await rowsOf(pool, project.id)
-    assert.equal(row.after_snapshot_id, null)
-    assert.notEqual(row.baseline_snapshot_id, null)
-    assert.ok(baseline > 0)
+    assert.deepEqual([Number(row.after_snapshot_id), new Date(row.merged_at).toISOString()], [after, MERGED])
   })
 })
 
-test('without any snapshots: the change is kept with baseline NULL; the first later snapshot becomes after; no comparison without a baseline', async (t) => {
+test('GitHub failure (null / throw / unreadable): nothing is linked, merged_at untouched, no exception', async (t) => {
   await withDb(t, async (pool, project) => {
-    await registerFixChange(pool, { projectId: project.id, prUrl: 'https://github.com/o/r/pull/1', issues: [{ code: 'robots_missing' }] })
-    assert.equal(await linkAfterSnapshots(pool, project.id), 0)
-    const first = await snap(pool, project.id, 'yandex_webmaster', 'queries')
-    assert.equal(await linkAfterSnapshots(pool, project.id), 1)
+    await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-10-01T00:00:00Z')
+    await registerFixChange(pool, { projectId: project.id, prUrl: PR, issues: [{ code: 'robots_missing' }] })
+    await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2026-10-06T00:00:00Z')
+    for (const reader of [async () => null, async () => { throw new Error('gh: HTTP 502') }, async () => ({ merged: true, mergedAt: 'not a date' })]) {
+      assert.equal(await linkAfterSnapshots(pool, project.id, reader), 0)
+    }
+    const [row] = await rowsOf(pool, project.id)
+    assert.deepEqual([row.after_snapshot_id, row.merged_at], [null, null])
+  })
+})
+
+test('Observer run survives a GitHub failure: snapshots are saved, the change stays open', async (t) => {
+  await withDb(t, async (pool, project) => {
+    await registerFixChange(pool, { projectId: project.id, prUrl: PR, issues: [{ code: 'robots_missing' }] })
+    const run = await runSeoObserver(pool, { id: project.id, slug: 'driveset', domain: project.domain }, { webmaster: { popularQueries: async () => [{ query: 'q', impressions: 1, clicks: 0, ctr: 0, avgPosition: 5 }] }, metrika: null })
+    assert.equal(run.webmaster.status, 'ok')
+    assert.equal(await linkAfterSnapshots(pool, project.id, async () => { throw new Error('gh down') }).catch(() => -1), 0)
+    assert.equal((await rowsOf(pool, project.id))[0].after_snapshot_id, null)
+  })
+})
+
+test('without any baseline snapshot: after is still only set after the merge; no comparison without a baseline', async (t) => {
+  await withDb(t, async (pool, project) => {
+    await registerFixChange(pool, { projectId: project.id, prUrl: PR, issues: [{ code: 'robots_missing' }] })
+    const early = await snap(pool, project.id, 'yandex_webmaster', 'queries') // right after PR creation, PR open
+    assert.equal(await linkAfterSnapshots(pool, project.id, open_), 0)
+    const late = await snap(pool, project.id, 'yandex_webmaster', 'queries', [], '2099-01-01T00:00:00Z') // after the (mocked) merge
+    assert.equal(await linkAfterSnapshots(pool, project.id, merged(new Date(Date.now() + 3_600_000).toISOString())), 1) // merged an hour from now: `early` predates it
     const [view] = await listPageChanges(pool, project.id)
-    assert.deepEqual([view.baseline, view.after?.id, view.comparison], [null, first, null])
+    assert.deepEqual([view.baseline, view.after?.id, view.comparison], [null, late, null])
+    assert.notEqual(view.after?.id, early)
   })
 })
 
@@ -175,15 +227,25 @@ test('Webmaster and Metrika stay separate in the comparison: a page-level change
     await addPage(pool, project.id, url)
     await snap(pool, project.id, 'yandex_webmaster', 'queries', [{ query: url, impressions: 9, clicks: 9, avgPosition: 1 }], '2026-10-01T00:00:00Z')
     await snap(pool, project.id, 'yandex_metrika', 'organic_pages', [{ path: '/a', url, visits: 4 }], '2026-10-01T00:00:00Z')
-    await registerFixChange(pool, { projectId: project.id, prUrl: 'https://github.com/o/r/pull/1', issues: [{ code: 'title_missing', url }] })
-    await snap(pool, project.id, 'yandex_metrika', 'organic_pages', [{ path: '/a', url, visits: 8 }])
-    await linkAfterSnapshots(pool, project.id)
+    await registerFixChange(pool, { projectId: project.id, prUrl: PR, issues: [{ code: 'title_missing', url }] })
+    await snap(pool, project.id, 'yandex_metrika', 'organic_pages', [{ path: '/a', url, visits: 8 }], '2026-10-06T00:00:00Z')
+    await linkAfterSnapshots(pool, project.id, merged())
     const [view] = await listPageChanges(pool, project.id)
     assert.equal(view.comparison?.provider, 'yandex_metrika')
     assert.deepEqual(view.comparison?.before, { visits: 4, pageVisits: 4 })
     assert.deepEqual(view.comparison?.after, { visits: 8, pageVisits: 8 })
     assert.ok(!JSON.stringify(view.comparison).includes('impressions'))
   })
+})
+
+test('PR state parsing and wiring: gh output → merged / open / unknown; route passes the GitHub reader; no polling', () => {
+  assert.deepEqual(parsePrState('{"state":"MERGED","mergedAt":"2026-10-05T00:00:00Z"}'), { merged: true, mergedAt: '2026-10-05T00:00:00Z' })
+  assert.deepEqual(parsePrState('{"state":"OPEN","mergedAt":null}'), { merged: false, mergedAt: null })
+  assert.deepEqual(parsePrState('{"state":"CLOSED","mergedAt":null}'), { merged: false, mergedAt: null })
+  for (const bad of ['', 'nope', '{"state":"MERGED","mergedAt":"x"}', '{"state":"WHAT"}']) assert.equal(parsePrState(bad), null)
+  assert.match(readFileSync(new URL('../app/api/seo-observer/route.ts', import.meta.url), 'utf8'), /linkAfterSnapshots\(pool, project\.id, ghPrState\)/)
+  const src = readFileSync(new URL('./seo-pr-state.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(src, /setInterval|cron|'pr', 'merge'|'merge'/) // read-only; never merges
 })
 
 test("kind 'improve' is supported by the store (cluster ids, no automatic registration anywhere)", async (t) => {
