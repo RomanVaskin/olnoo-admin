@@ -45,7 +45,7 @@ Project is the main connecting object between modules. One Client can have sever
 
 ## OLNOO Agent v1 (MCP)
 
-- **AI reads OLNOO through one read-only MCP tool**, `get_driveset_summary(period)` at `POST /api/mcp` (official SDK, stateless Streamable HTTP). It calls the existing Unified Analytics and returns a small whitelist DTO — no second implementation of Direct/Metrika/CRM, no personal data, no write tools, no project parameter. The endpoint has no application auth; nginx opens exactly this path. Details and the manual nginx step: `OLNOO_PROJECT_MAP.md`.
+- **AI reads OLNOO through one read-only MCP tool**, `get_driveset_summary(period)` at `POST /api/mcp` (official SDK, stateless Streamable HTTP). It calls the existing Unified Analytics and returns a small whitelist DTO — no second implementation of Direct/Metrika/CRM, no personal data, no write tools, no project parameter. nginx opens exactly this path; the MCP authenticates every tool call itself (OAuth, below). Direct MCP Eyes v1 adds a second read-only tool, `get_direct_queries` (top search queries + current negative keywords from the existing Direct client), part of the same MCP; the whole MCP (both tools) is protected by OAuth: Auth0 is the authorization server, olnoo-admin only verifies the access token (scope `direct:read`). No static keys, no mixed/noauth tools, no secrets in URLs. Details and the manual nginx step: `OLNOO_PROJECT_MAP.md`.
 
 ## Project registry
 
