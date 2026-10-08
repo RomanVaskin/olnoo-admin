@@ -31,6 +31,8 @@ export type ExecutorProject = { id: number; name: string; slug: string | null; r
 export type ExecutorDeps = {
   getProject: (id: number) => Promise<ExecutorProject | null>
   readLastResult: (projectId: number) => Promise<ProjectHealth | null>
+  /** Optional: records the created PR in the before/after history (step F). A failure here never fails the run. */
+  registerChange?: (info: { projectId: number; prUrl: string; issues: { code: string; url?: string }[] }) => Promise<void>
   /** Server-side only: `cmd` + args array, never a shell string. */
   run: (cmd: string, args: string[], opts: CmdOptions) => Promise<CmdResult>
   makeTempDir: (runId: string) => Promise<string>
@@ -38,8 +40,6 @@ export type ExecutorDeps = {
   readFile: (path: string) => Promise<string | null>
   now: () => Date
   newRunId: () => string
-  /** Called ONCE after the PR is created (before_after tracking, step F). A failure here never fails the run. */
-  recordChange?: (info: { projectId: number; prUrl: string; issues: Issue[] }) => Promise<void>
 }
 
 export const EXECUTOR_BASE_DIR = '/tmp/olnoo-seo-executor'
@@ -240,10 +240,11 @@ async function pipeline(deps: ExecutorDeps, c: Ctx): Promise<void> {
     if (pr.code !== 0 || !url) return fail('failed', 'gh pr create failed (branch is pushed, open the PR manually)', pr)
     run.prUrl = url
     log('PR создан')
+    // One history record per created PR (never for failed / no_changes / failed_checks). Idempotent by (project, pr_url) in the store.
     try {
-      await deps.recordChange?.({ projectId: c.project.id, prUrl: url, issues: c.issues })
+      await deps.registerChange?.({ projectId: c.project.id, prUrl: url, issues: c.issues.map((i) => ({ code: i.code, ...(i.url ? { url: i.url } : {}) })) })
     } catch {
-      log('before/after: запись изменения не удалась (PR создан)')
+      log('История изменений (before/after) не сохранена')
     }
     set('pr_created')
   } finally {

@@ -6,7 +6,10 @@ import { listPageChanges } from '@/lib/seo-page-changes'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-/** SEO Before/After history (step F), read-only: GET ?projectId= → { changes } from `page_changes` + the stored snapshots. No external API, no writes. */
+/**
+ * GET /api/seo-page-changes?projectId=<id> — the before/after history of one project (newest first). Read-only: the database only,
+ * no external API, no writes. Records are created by the SEO Executor (pr_created) and closed by the next manual Observer run.
+ */
 export async function GET(req: Request) {
   const id = Number(new URL(req.url).searchParams.get('projectId'))
   const project = Number.isInteger(id) && id > 0 ? await getProject(pool, id) : null
