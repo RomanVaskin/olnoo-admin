@@ -439,7 +439,7 @@ D. **Decision rules как чистая функция — реализован�
 E. **Executor только для Technical SEO Fix** (раздел 3a); merge вручную.
 F. **Before/After tracking v1 — реализован** (на существующей `page_changes`, без миграции; раздел 3a): запись FIX на каждый `pr_created`, baseline = последний существующий snapshot, after = первый snapshot ПОСЛЕ merge PR (merge проверяется через `gh` только при ручном запуске Observer; PR открыт или GitHub недоступен → after не ставится), история в SEO → Observer. Improve только model/store-ready; deploy не отслеживается.
 G. **Later:** Google Search Console, AI Visibility (раздел 8a), multilingual, scheduler, более широкий Executor; всё из списка «Later / not now» в разделе 6.
-G. **Cleanup legacy** (отдельным PR, не смешивать с другими изменениями). Предварительно проверить production data: `count(*)` в `keyword_pages`; используется ли SEO Map; как часто человек меняет AI review decision. Затем убрать второй source of truth (SEO Map / `keyword_pages` / `keywords.cluster`) и отдельный AI review. Шаг не зависит от A–F и выполняется, когда подтверждены production data.
+H. **Cleanup legacy** (отдельным PR, не смешивать с другими изменениями). Предварительно проверить production data: `count(*)` в `keyword_pages`; используется ли SEO Map; как часто человек меняет AI review decision. Затем убрать второй source of truth (SEO Map / `keyword_pages` / `keywords.cluster`) и отдельный AI review. Шаг не зависит от A–F и выполняется, когда подтверждены production data.
 
 ## 13. Владение документацией
 
