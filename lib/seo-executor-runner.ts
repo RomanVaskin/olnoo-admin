@@ -34,7 +34,7 @@ export function runCommand(cmd: string, args: string[], opts: CmdOptions): Promi
   })
 }
 
-export const realExecutorDeps = (db: Pick<ExecutorDeps, 'getProject' | 'readLastResult'>): ExecutorDeps => ({
+export const realExecutorDeps = (db: Pick<ExecutorDeps, 'getProject' | 'readLastResult' | 'recordChange'>): ExecutorDeps => ({
   ...db,
   run: runCommand,
   makeTempDir: async (runId) => {

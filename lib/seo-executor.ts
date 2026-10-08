@@ -38,6 +38,8 @@ export type ExecutorDeps = {
   readFile: (path: string) => Promise<string | null>
   now: () => Date
   newRunId: () => string
+  /** Called ONCE after the PR is created (before_after tracking, step F). A failure here never fails the run. */
+  recordChange?: (info: { projectId: number; prUrl: string; issues: Issue[] }) => Promise<void>
 }
 
 export const EXECUTOR_BASE_DIR = '/tmp/olnoo-seo-executor'
@@ -238,6 +240,11 @@ async function pipeline(deps: ExecutorDeps, c: Ctx): Promise<void> {
     if (pr.code !== 0 || !url) return fail('failed', 'gh pr create failed (branch is pushed, open the PR manually)', pr)
     run.prUrl = url
     log('PR создан')
+    try {
+      await deps.recordChange?.({ projectId: c.project.id, prUrl: url, issues: c.issues })
+    } catch {
+      log('before/after: запись изменения не удалась (PR создан)')
+    }
     set('pr_created')
   } finally {
     if (dir) await deps.removeDir(dir).catch(() => {})
