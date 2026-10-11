@@ -23,10 +23,11 @@ Project is the main connecting object between modules. One Client can have sever
 
 ## CRM intake from messengers
 
-- **Record, never converse.** Messenger integrations (Telegram Business today) only turn a client's incoming message into a CRM lead. No auto-replies, no chatbot, no AI answers: the code calls no Bot API method that writes to a chat, and the bot is connected without reply rights. Managers answer clients in the messenger themselves.
-- **A click is not a lead.** A site click on a Telegram/MAX/phone link is a contact intent and stays an analytics micro-conversion (Metrika); a lead is a message actually received or a form actually submitted.
-- **One open lead per person per channel.** Follow-up messages never create another lead while one is open; after Won/Lost a new message is a new enquiry.
-- **No invented attribution.** A messenger message carries no ad attribution, so such leads are `source=Direct` (the CRM's direct/unknown value) — never Ads/Yandex Direct without confirmed attribution.
+- **A personal Telegram Business message is NOT a CRM lead (Patch A).** The previous rule here — "a client's incoming Telegram Business message automatically becomes a CRM lead" — is no longer correct and is not what the code does. The webhook still accepts and classifies incoming `business_message` updates, but a message from a private counterpart now always ends as `ignored`: no lead is created, and no personal data about the sender (numeric id / `tg:<id>`, display name, message text) is read past classification or stored anywhere. See `OLNOO_PROJECT_MAP.md` → "Telegram Business intake" for the current implementation and what would need to change to re-enable it.
+- **Record, never converse (still applies if messenger→lead intake is ever re-enabled).** No auto-replies, no chatbot, no AI answers: the code calls no Bot API method that writes to a chat, and the bot is connected without reply rights. Managers answer clients in the messenger themselves.
+- **A click is not a lead.** A site click on a Telegram/MAX/phone link is a contact intent and stays an analytics micro-conversion (Metrika); a lead is a message actually received or a form actually submitted — this principle is about web contact-intent clicks, not a statement that a messenger message currently does become a lead.
+- **One open lead per person per channel (design rule for any future re-enablement).** Follow-up messages should never create another lead while one is open; after Won/Lost a new message is a new enquiry. Not currently exercised by Telegram Business while Patch A stands.
+- **No invented attribution.** A messenger message carries no ad attribution, so if a lead is ever created from one, it must be `source=Direct` (the CRM's direct/unknown value) — never Ads/Yandex Direct without confirmed attribution.
 
 ## Ads Agent
 
