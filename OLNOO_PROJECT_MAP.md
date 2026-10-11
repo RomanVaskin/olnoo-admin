@@ -66,6 +66,7 @@ Confirmed API routes (`olnoo-admin`):
 - `PATCH/DELETE /api/leads/[id]` — edit and delete.
 - `GET /api/projects` (+ `POST`, `PATCH /api/projects/[id]`; see "Project registry"), `GET /api/clients`.
 - `POST /api/leads/inbound` — API-key-authenticated (`OLNOO_CRM_API_KEY`) server-to-server intake. **In use by DriveSet** (`driveset.ru` `/api/lead` proxy, `project=driveset`, phone-only leads). `olnoo.com` itself does not use it — it writes directly to Postgres (above) after the key-based path proved unreliable for it.
+- New, non-replayed leads accepted by `/api/leads/inbound` can also be copied to Telegram using the existing `TELEGRAM_BOT_TOKEN` plus `CRM_TELEGRAM_CHAT_ID`. Telegram is notification-only and best-effort: a send failure never rolls back or rejects the CRM lead.
 - `POST /api/telegram/business-webhook` — Telegram Business intake (see "Telegram Business intake" below). Code is in place; **not yet connected to Telegram** (no bot token in production env, no webhook registered).
 
 Migration: `db/migrations/0004_crm_leads.sql` (added `leads` table + `projects.slug`). Applied to production.
