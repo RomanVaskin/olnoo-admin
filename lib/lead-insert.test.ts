@@ -38,7 +38,7 @@ const attr = (input: Parameters<typeof parseLeadAttribution>[0] = {}): LeadAttri
 
 let n = 0
 const lead = (projectId: number, attribution: LeadAttribution, extra: Partial<LeadRow> = {}): LeadRow => ({
-  id: `li-${Date.now()}-${++n}`, projectId, name: 'Lead', company: '', email: '', service: 's', message: '', source: 'Ads', notes: '', phone: '+70000000000', contact: null,
+  id: `li-${Date.now()}-${++n}`, projectId, name: 'Lead', company: '', email: '', service: 's', message: '', source: 'Ads', channel: null, notes: '', phone: '+70000000000', contact: null,
   landingPage: '', pagePath: '/p', referrer: '', locale: '', utmSource: 'yandex', utmMedium: 'cpc', utmCampaign: '1', utmContent: '2', utmTerm: 'kw',
   attribution, ...extra,
 })
@@ -61,6 +61,16 @@ test('an old lead without any attribution field is still created (all four colum
     // two old-style leads never collide on the (partial) unique index
     created(await insertLead(pool, lead(p, attr())))
     assert.equal(await count(pool, p), 2)
+  })
+})
+
+test('a lead with a channel stores and returns it; an omitted channel stays NULL', async (t) => {
+  await withDb(t, async (pool, project) => {
+    const p = await project()
+    const withChannel = created(await insertLead(pool, lead(p, attr(), { channel: 'Quiz' })))
+    assert.equal(withChannel.row.channel, 'Quiz')
+    const withoutChannel = created(await insertLead(pool, lead(p, attr())))
+    assert.equal(withoutChannel.row.channel, null)
   })
 })
 

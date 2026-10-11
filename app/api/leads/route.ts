@@ -21,7 +21,7 @@ export async function GET(req: Request) {
 const LEADS_SELECT = `
   SELECT
     l.id, l.project_id, l.name, l.company, l.email, l.phone, l.contact, l.service, l.message,
-    l.source, l.landing_page, l.referrer, l.utm_source, l.utm_medium, l.utm_campaign,
+    l.source, l.channel, l.landing_page, l.referrer, l.utm_source, l.utm_medium, l.utm_campaign,
     l.locale, l.status, l.notes, l.created_at, l.updated_at,
     l.traffic_class_auto, l.traffic_class_reason, l.traffic_class_override, l.traffic_class_override_at,
     p.slug AS project_slug, p.name AS project_name
@@ -43,6 +43,7 @@ export async function POST(req: Request) {
     service: typeof body.service === 'string' ? body.service : undefined,
     message: typeof body.message === 'string' ? body.message : undefined,
     source: typeof body.source === 'string' ? body.source : 'manual',
+    channel: typeof body.channel === 'string' ? body.channel : undefined,
     notes: typeof body.notes === 'string' ? body.notes : undefined,
   })
 

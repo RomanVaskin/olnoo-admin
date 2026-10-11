@@ -52,6 +52,14 @@ test('formatLeadNotification falls back phone -> email -> contact for the Кон
   assert.ok(text.includes('Контакт: a@b.com'))
 })
 
+test('formatLeadNotification includes "Канал: <channel>" only when channel is set', () => {
+  const withChannel = formatLeadNotification({ name: 'Ivan', phone: '+70000000000', channel: 'Quiz' }, PROJECT)
+  assert.ok(withChannel.includes('Канал: Quiz'))
+
+  const withoutChannel = formatLeadNotification({ name: 'Ivan', phone: '+70000000000' }, PROJECT)
+  assert.ok(!withoutChannel.includes('Канал:'))
+})
+
 test('a new lead -> the Telegram send function is called exactly once', async () => {
   await withEnv({ CRM_NOTIFY_TELEGRAM_CHAT_ID: '12345' }, async () => {
     let calls = 0

@@ -12,6 +12,7 @@ export function fromApiLead(row: Record<string, unknown>): Lead {
     contact: (row.contact as string) ?? '',
     service: (row.service as string) ?? '',
     source: row.source as Lead['source'],
+    channel: (row.channel as string | null) ?? null,
     landingPage: (row.landing_page as string) ?? '',
     status: row.status as Lead['status'],
     created: new Date(row.created_at as string).toISOString().slice(0, 10),

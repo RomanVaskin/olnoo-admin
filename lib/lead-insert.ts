@@ -15,6 +15,9 @@ export type LeadRow = {
   message: string
   /** Already normalised to the CRM source vocabulary. */
   source: string
+  /** How the lead got in touch (Form/Quiz/Telegram/Email/WhatsApp/MAX/Phone/...), distinct from
+   * `source`. Free text, no enum (migration 0020); null when the caller didn't send one. */
+  channel: string | null
   notes: string
   phone: string | null
   contact: string | null
@@ -78,10 +81,10 @@ export async function insertLead(db: Pick<Pool | PoolClient, 'query'>, lead: Lea
       id, project_id, name, company, email, service, message, source, status, notes,
       phone, contact, landing_page, page_path, referrer, locale,
       utm_source, utm_medium, utm_campaign, utm_content, utm_term,
-      lead_tracking_id, metrika_client_id, yclid, first_seen_at${withClass ? ', traffic_class_auto, traffic_class_reason' : ''}
+      lead_tracking_id, metrika_client_id, yclid, first_seen_at, channel${withClass ? ', traffic_class_auto, traffic_class_reason' : ''}
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'New', $9,
       $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-      $21, $22, $23, $24::timestamptz${withClass ? ', $25, $26' : ''})
+      $21, $22, $23, $24::timestamptz, $25${withClass ? ', $26, $27' : ''})
     ON CONFLICT (lead_tracking_id) WHERE lead_tracking_id IS NOT NULL DO NOTHING
     RETURNING *
     `,
@@ -89,7 +92,7 @@ export async function insertLead(db: Pick<Pool | PoolClient, 'query'>, lead: Lea
       lead.id, lead.projectId, lead.name, lead.company, lead.email, lead.service, lead.message, lead.source, lead.notes,
       lead.phone, lead.contact, lead.landingPage, lead.pagePath, lead.referrer, lead.locale,
       lead.utmSource, lead.utmMedium, lead.utmCampaign, lead.utmContent, lead.utmTerm,
-      a.leadTrackingId, a.metrikaClientId, a.yclid, a.firstSeenAt,
+      a.leadTrackingId, a.metrikaClientId, a.yclid, a.firstSeenAt, lead.channel,
       ...(withClass && lead.trafficClass ? [lead.trafficClass.auto, lead.trafficClass.reason] : []),
     ],
   )

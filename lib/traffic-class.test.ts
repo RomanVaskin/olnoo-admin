@@ -172,7 +172,7 @@ function fakeDb(columnsExist: boolean | 'error') {
   }
 }
 const baseLead = (over: Partial<LeadRow> = {}): LeadRow => ({
-  id: 'x', projectId: 1, name: 'n', company: '', email: '', service: '', message: '', source: 'Ads', notes: '', phone: '+7', contact: null,
+  id: 'x', projectId: 1, name: 'n', company: '', email: '', service: '', message: '', source: 'Ads', channel: null, notes: '', phone: '+7', contact: null,
   landingPage: '', pagePath: '', referrer: '', locale: '', utmSource: '', utmMedium: '', utmCampaign: '', utmContent: '', utmTerm: '',
   attribution: parseLeadAttribution({}) as LeadAttribution, ...over,
 })
@@ -184,7 +184,7 @@ test('intake before the migration: the INSERT does not name the new columns, so 
     await insertLead(db as never, baseLead({ trafficClass: { auto: 'TEST', reason: 'legacy_utm_marker' } }))
     const insert = db.statements.find((s) => s.sql.includes('INSERT INTO leads'))!
     assert.doesNotMatch(insert.sql, /traffic_class/)
-    assert.equal(insert.params.length, 24)
+    assert.equal(insert.params.length, 25)
   }
 })
 
@@ -195,8 +195,8 @@ test('intake after the migration: the classification is written; the probe is ca
   await insertLead(db as never, baseLead({ trafficClass: { auto: 'UNKNOWN', reason: 'unclassified' } }))
   const inserts = db.statements.filter((s) => s.sql.includes('INSERT INTO leads'))
   assert.match(inserts[0].sql, /traffic_class_auto, traffic_class_reason\s*\) VALUES/)
-  assert.deepEqual(inserts[0].params.slice(24), ['TEST', 'legacy_utm_marker'])
-  assert.deepEqual(inserts[1].params.slice(24), ['UNKNOWN', 'unclassified'])
+  assert.deepEqual(inserts[0].params.slice(25), ['TEST', 'legacy_utm_marker'])
+  assert.deepEqual(inserts[1].params.slice(25), ['UNKNOWN', 'unclassified'])
   assert.equal(db.statements.filter((s) => s.sql.includes('information_schema')).length, 1) // positive answer cached
 
   resetTrafficClassProbe()

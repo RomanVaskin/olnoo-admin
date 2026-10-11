@@ -10,6 +10,9 @@ import { LEAD_STATUSES, type Lead, type LeadStatus } from '@/lib/data'
 import { fromApiLead } from '@/lib/crm-client'
 
 const sources = ['All', 'SEO', 'Ads', 'Telegram', 'Direct', 'Referral'] as const
+// Free text in the DB (no enum) — this is just the fixed set of channels current and planned
+// integrations actually send; a value outside this list still displays fine, just isn't a filter option.
+const channels = ['All', 'Form', 'Quiz', 'Telegram', 'Email', 'WhatsApp', 'MAX', 'Phone'] as const
 
 function LeadDetail({
   lead,
@@ -101,6 +104,7 @@ function LeadDetail({
             <span className="label-mono text-muted-foreground">{t.leadsView.sourceInformation}</span>
             <dl className="flex flex-col gap-px border border-hairline bg-hairline">
               <Field label={t.field.source} value={t.leadSource[lead.source]} />
+              {lead.channel && <Field label={t.field.channel} value={lead.channel} />}
               <Field label={t.field.landingPage} value={lead.landingPage} mono />
               <Field label={t.field.referrer} value={lead.referrer} mono />
               <Field label={t.field.utmSource} value={lead.utmSource} mono />
@@ -200,6 +204,7 @@ function LeadCreateForm({ project, onClose, onCreated }: { project: string; onCl
   const [company, setCompany] = useState('')
   const [service, setService] = useState('')
   const [message, setMessage] = useState('')
+  const [channel, setChannel] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -211,7 +216,7 @@ function LeadCreateForm({ project, onClose, onCreated }: { project: string; onCl
       const res = await fetch('/api/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project: selectedProject, name, email, company, service, message, source: 'manual' }),
+        body: JSON.stringify({ project: selectedProject, name, email, company, service, message, source: 'manual', channel: channel || undefined }),
       })
       if (!res.ok) throw new Error('failed')
       onCreated(fromApiLead(await res.json()))
@@ -258,6 +263,21 @@ function LeadCreateForm({ project, onClose, onCreated }: { project: string; onCl
           <CreateField label={t.field.email} value={email} onChange={setEmail} type="email" />
           <CreateField label={t.field.company} value={company} onChange={setCompany} />
           <CreateField label={t.field.service} value={service} onChange={setService} />
+          <label className="flex flex-col gap-1.5">
+            <span className="label-mono text-muted-foreground">{t.field.channel}</span>
+            <select
+              value={channel}
+              onChange={(e) => setChannel(e.target.value)}
+              className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+            >
+              <option value="">—</option>
+              {channels.filter((c) => c !== 'All').map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="flex flex-col gap-1.5">
             <span className="label-mono text-muted-foreground">{t.leadsView.enquiry}</span>
             <textarea
@@ -332,6 +352,7 @@ export function LeadsView({ project, onProjectChange }: { project: string; onPro
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<string>('All')
   const [source, setSource] = useState<string>('All')
+  const [channel, setChannel] = useState<string>('All')
 
   useEffect(() => {
     let cancelled = false
@@ -363,14 +384,16 @@ export function LeadsView({ project, onProjectChange }: { project: string; onPro
         l.service.toLowerCase().includes(q)
       const matchesStatus = status === 'All' || l.status === status
       const matchesSource = source === 'All' || l.source === source
-      return matchesQuery && matchesStatus && matchesSource
+      const matchesChannel = channel === 'All' || l.channel === channel
+      return matchesQuery && matchesStatus && matchesSource && matchesChannel
     })
-  }, [leads, query, status, source])
+  }, [leads, query, status, source, channel])
 
   const statusOptions = ['All', ...LEAD_STATUSES] as const
   const statusLabel = (v: string) => (v === 'All' ? t.common.all : t.status[v as LeadStatus])
   const sourceLabel = (v: string) =>
     v === 'All' ? t.common.all : t.leadSource[v as Exclude<(typeof sources)[number], 'All'>]
+  const channelLabel = (v: string) => (v === 'All' ? t.common.all : v)
 
   function handleSaved(updated: Lead) {
     setLeads((current) => current.map((l) => (l.id === updated.id ? updated : l)))
@@ -423,6 +446,13 @@ export function LeadsView({ project, onProjectChange }: { project: string; onPro
           options={[...sources]}
           getLabel={sourceLabel}
           label={t.leadsView.filterSource}
+        />
+        <Select
+          value={channel}
+          onChange={setChannel}
+          options={[...channels]}
+          getLabel={channelLabel}
+          label={t.leadsView.filterChannel}
         />
       </div>
 

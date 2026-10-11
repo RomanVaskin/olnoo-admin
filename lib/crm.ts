@@ -32,6 +32,9 @@ export type CreateLeadInput = {
   service?: string
   message?: string
   source?: string
+  /** How the lead got in touch (e.g. "Form"/"Quiz"/"Telegram") — distinct from `source`. Free
+   * text, optional; absent/blank stores NULL. Never required for backward compatibility. */
+  channel?: string
   notes?: string
   /** Optional attribution identifiers (validated here; absent/blank values are simply not stored). */
   attribution?: LeadAttributionInput
@@ -77,6 +80,7 @@ export async function createLeadRecord(
     service: (input.service ?? '').trim(),
     message: input.message ?? '',
     source: normalizeSource(input.source),
+    channel: (input.channel ?? '').trim() || null,
     notes: input.notes ?? '',
     phone: phone || null,
     contact: contact || null,

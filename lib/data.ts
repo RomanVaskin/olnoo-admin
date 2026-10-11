@@ -48,6 +48,9 @@ export type Lead = {
   contact: string
   service: string
   source: 'SEO' | 'Ads' | 'Telegram' | 'Direct' | 'Referral'
+  /** How the lead got in touch (Form/Quiz/Telegram/Email/WhatsApp/MAX/Phone/...) — distinct from
+   * `source`. Free text, nullable; older leads have none. */
+  channel?: string | null
   landingPage: string
   status: LeadStatus
   created: string

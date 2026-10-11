@@ -15,6 +15,8 @@ export type LeadNotifyRow = {
   name?: string | null
   service?: string | null
   source?: string | null
+  /** How the lead got in touch (Form/Quiz/Telegram/...) — distinct from `source`. */
+  channel?: string | null
   phone?: string | null
   email?: string | null
   contact?: string | null
@@ -38,6 +40,7 @@ export function formatLeadNotification(row: LeadNotifyRow, project: ProjectInfo)
   field('Имя', row.name)
   field('Услуга', row.service)
   field('Источник', row.source)
+  field('Канал', row.channel)
   field('Контакт', contact)
   lines.push('', 'Открыть в CRM:', `${ADMIN_BASE_URL}/en?screen=crm-leads&project=${project.slug}`)
   return lines.join('\n')
