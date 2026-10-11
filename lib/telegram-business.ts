@@ -1,21 +1,35 @@
 import { timingSafeEqual } from 'node:crypto'
-import { classifyTelegramBusinessUpdate } from './telegram-business-update.ts'
+import type { Pool, PoolClient } from 'pg'
+import { findOrCreateTelegramLead } from './telegram-business-lead.ts'
+import {
+  classifyTelegramBusinessUpdate,
+  telegramContactKey,
+  telegramLeadMessage,
+  type TelegramBusinessUpdateDecision,
+} from './telegram-business-update.ts'
 
-// Server-side only. Telegram Business intake: accepts and acknowledges a client's message to
-// the connected business account, but — per Patch A — no longer turns it into a CRM lead. This
-// module never calls sendMessage or any other method that writes to a chat.
+// Server-side only. Telegram Business intake: accepts and acknowledges a client's message to a
+// connected business account. Patch A disabled lead creation for every connection. Patch D
+// (this revision) re-enables it, but ONLY for the one connection configured as DriveSet's
+// (TELEGRAM_BUSINESS_DRIVESET_CONNECTION_ID) — every other business_connection_id still ends
+// `ignored`, same as Patch A. This module never calls sendMessage or any other method that
+// writes to a chat; the owner's Telegram notification for a created lead is sent entirely by
+// createLeadRecord (Patch C) — nothing here duplicates that.
 //
-// Patch A (CRM leads from personal Telegram Business messages, disabled): an incoming
-// business_message from a private counterpart used to create/find a CRM lead, storing the
-// sender's numeric id as `tg:<id>`, their display name, and their message text. That is no
-// longer correct: personal Telegram Business messages must not become leads and must not have
-// any of that read past classification. The update is still accepted by the webhook and
-// classified (ignore / business_connection / incoming), but an `incoming` decision now always
-// resolves to `{ action: 'ignored' }` — the CRM write helper is no longer imported by this file,
-// and telegramUserId/displayName/firstMessage are never read past classification. See
-// OLNOO_PROJECT_MAP.md → "Telegram Business intake" for the current (disabled) status.
+// Kept free of `@/` imports so it runs directly under `node --test` (see
+// telegram-business.test.ts) — the real DB pool, resolveProjectId and createLeadRecord are
+// injected by the route (app/api/telegram/business-webhook/route.ts) via TelegramBusinessDeps,
+// which is the only place that imports `@/lib/db` and `@/lib/crm`.
 
-type TelegramBusinessConfig = { token: string; secret: string; ownerUserId: string; project: string }
+export type TelegramBusinessConfig = {
+  token: string
+  secret: string
+  ownerUserId: string
+  project: string
+  /** The one business_connection_id that may create a lead (DriveSet's). Empty = none configured
+   * → every incoming message stays ignored, same as Patch A (fail closed, never fail open). */
+  driveSetConnectionId: string
+}
 
 export function telegramBusinessConfig(): TelegramBusinessConfig | null {
   const token = process.env.TELEGRAM_BUSINESS_BOT_TOKEN?.trim()
@@ -23,7 +37,8 @@ export function telegramBusinessConfig(): TelegramBusinessConfig | null {
   const ownerUserId = process.env.TELEGRAM_BUSINESS_OWNER_USER_ID?.trim()
   const project = process.env.TELEGRAM_BUSINESS_PROJECT?.trim()
   if (!token || !secret || !ownerUserId || !/^\d+$/.test(ownerUserId) || !project) return null
-  return { token, secret, ownerUserId, project }
+  const driveSetConnectionId = process.env.TELEGRAM_BUSINESS_DRIVESET_CONNECTION_ID?.trim() ?? ''
+  return { token, secret, ownerUserId, project, driveSetConnectionId }
 }
 
 /** Constant-time check of Telegram's X-Telegram-Bot-Api-Secret-Token header. */
@@ -36,13 +51,31 @@ export function isValidWebhookSecret(provided: string | null, expected: string):
 export type TelegramBusinessOutcome =
   | { action: 'ignored'; reason: string }
   | { action: 'connection'; enabled: boolean }
+  | { action: 'lead_created'; leadId: string }
+  | { action: 'lead_exists'; leadId: string }
+
+/** DB/CRM dependencies, injected by the caller so this module stays `@/`-free (see top of file). */
+export type TelegramBusinessDeps = {
+  pool: Pool
+  resolveProjectId: (slug: string) => Promise<number | null>
+  /** Inserts the lead inside the caller's transaction/lock; returns the new lead's id. Production
+   * wires this to createLeadRecord (Patch C), so the owner's Telegram notification still fires. */
+  createLead: (
+    input: { project: string; name: string; contact: string; message: string; channel: string; source: string },
+    client: PoolClient,
+  ) => Promise<string>
+}
 
 /**
- * Handles one webhook update. Throws only on a transient failure (currently none remain on the
- * `incoming` path — it no longer touches the DB or the Bot API) so the route can answer 500 and
- * Telegram redelivers safely.
+ * Handles one webhook update. Throws only on a transient failure (DB) on the DriveSet
+ * lead-creation path, so the route can answer 500 and Telegram redelivers safely — redelivery
+ * never creates a second lead, see findOrCreateTelegramLead.
  */
-export async function handleTelegramBusinessUpdate(update: unknown, config: TelegramBusinessConfig): Promise<TelegramBusinessOutcome> {
+export async function handleTelegramBusinessUpdate(
+  update: unknown,
+  config: TelegramBusinessConfig,
+  deps: TelegramBusinessDeps,
+): Promise<TelegramBusinessOutcome> {
   const decision = classifyTelegramBusinessUpdate(update, config.ownerUserId)
 
   if (decision.kind === 'ignore') return { action: 'ignored', reason: decision.reason }
@@ -57,7 +90,42 @@ export async function handleTelegramBusinessUpdate(update: unknown, config: Tele
     return { action: 'connection', enabled: decision.enabled }
   }
 
-  // decision.kind === 'incoming' — Patch A: no lead is created and nothing about the sender
-  // (telegram id, display name, message text) is read any further.
-  return { action: 'ignored', reason: 'incoming business messages no longer create leads (disabled)' }
+  // decision.kind === 'incoming'. Only the configured DriveSet connection may create a lead —
+  // every other connection (including no connection configured at all) keeps Patch A's disabled
+  // behavior, unchanged in wording so existing monitoring/tests built on it still match.
+  if (!config.driveSetConnectionId || decision.connectionId !== config.driveSetConnectionId) {
+    return { action: 'ignored', reason: 'incoming business messages no longer create leads (disabled)' }
+  }
+  return handleDriveSetMessage(decision, config.project, deps)
+}
+
+/**
+ * One open lead per Telegram user per project (DriveSet only, by construction — only called once
+ * the connection has already been matched). Any existing lead for this contact — in any status —
+ * blocks a new one: no reopen-after-close nuance in this minimal pass.
+ */
+async function handleDriveSetMessage(
+  incoming: Extract<TelegramBusinessUpdateDecision, { kind: 'incoming' }>,
+  projectSlug: string,
+  deps: TelegramBusinessDeps,
+): Promise<TelegramBusinessOutcome> {
+  const projectId = await deps.resolveProjectId(projectSlug)
+  if (!projectId) throw new Error(`TELEGRAM_BUSINESS_PROJECT "${projectSlug}" is not a known project slug`)
+
+  const contact = telegramContactKey(incoming.telegramUserId)
+  const result = await findOrCreateTelegramLead(deps.pool, projectId, contact, (client) =>
+    deps.createLead(
+      {
+        project: projectSlug,
+        name: incoming.displayName,
+        contact,
+        message: telegramLeadMessage(incoming),
+        channel: 'Telegram',
+        // No ad attribution travels with a Telegram message: never claim Ads/Yandex Direct here.
+        source: 'Direct',
+      },
+      client,
+    ),
+  )
+  return result.created ? { action: 'lead_created', leadId: result.leadId } : { action: 'lead_exists', leadId: result.leadId }
 }

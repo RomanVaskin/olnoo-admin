@@ -1,7 +1,26 @@
 import { NextResponse } from 'next/server'
-import { handleTelegramBusinessUpdate, isValidWebhookSecret, telegramBusinessConfig } from '@/lib/telegram-business'
+import { pool } from '@/lib/db'
+import { createLeadRecord, resolveProjectId } from '@/lib/crm'
+import {
+  handleTelegramBusinessUpdate,
+  isValidWebhookSecret,
+  telegramBusinessConfig,
+  type TelegramBusinessDeps,
+} from '@/lib/telegram-business'
 
 export const runtime = 'nodejs'
+
+// The only place that wires the real DB pool and createLeadRecord into lib/telegram-business.ts,
+// which is otherwise kept free of `@/` imports so it runs directly under `node --test`.
+const deps: TelegramBusinessDeps = {
+  pool,
+  resolveProjectId,
+  createLead: async (input, client) => {
+    const result = await createLeadRecord(input, client)
+    if ('error' in result) throw new Error(`lead insert rejected: ${result.error}`)
+    return String(result.row.id)
+  },
+}
 
 /**
  * Telegram Business webhook (registered once by hand with setWebhook + secret_token, allowed
@@ -20,7 +39,7 @@ export async function POST(req: Request) {
 
   const update = await req.json().catch(() => null)
   try {
-    const outcome = await handleTelegramBusinessUpdate(update, config)
+    const outcome = await handleTelegramBusinessUpdate(update, config, deps)
     return NextResponse.json({ ok: true, ...outcome })
   } catch (error) {
     // Transient (DB / Bot API): 500 makes Telegram redeliver; lead creation is deduped.
