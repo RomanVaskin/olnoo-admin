@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import { pool } from '@/lib/db'
 import { parseLeadAttribution, type LeadAttributionInput } from './lead-attribution.ts'
 import { insertLead } from './lead-insert.ts'
+import { notifyLeadCreated, resolveProjectInfo, shouldNotifyLeadCreation } from './lead-notify.ts'
 import { classifyLead, type LeadIntake } from './traffic-class.ts'
 
 /** Resolves a URL-facing project slug (e.g. "olnoo") to the numeric projects.id, or null for "all"/unknown. */
@@ -42,11 +43,18 @@ export type CreateLeadInput = {
 export type CreateLeadResult = { error: string; status: number } | { row: Record<string, unknown>; replay?: boolean }
 
 /**
- * Shared insert used by the Admin UI's create form, the authenticated inbound API and the
- * Telegram Business webhook. `db` defaults to the pool; pass a transaction client to run the
- * insert inside a caller's transaction (the Telegram dedup lock).
+ * Shared insert used by the Admin UI's create form and the authenticated inbound API (DriveSet).
+ * `db` defaults to the pool; pass a transaction client to run the insert inside a caller's
+ * transaction. On a genuinely new lead (never on an idempotent `lead_tracking_id` replay, and
+ * never on a validation error) sends exactly one Telegram notification to the owner — see
+ * lib/lead-notify.ts. `notify` is injectable so tests can assert the trigger without a real
+ * Telegram API.
  */
-export async function createLeadRecord(input: CreateLeadInput, db: Pool | PoolClient = pool): Promise<CreateLeadResult> {
+export async function createLeadRecord(
+  input: CreateLeadInput,
+  db: Pool | PoolClient = pool,
+  notify: typeof notifyLeadCreated = notifyLeadCreated,
+): Promise<CreateLeadResult> {
   if (!input.name.trim()) return { error: 'name is required', status: 400 }
   const email = (input.email ?? '').trim()
   const phone = (input.phone ?? '').trim()
@@ -96,6 +104,14 @@ export async function createLeadRecord(input: CreateLeadInput, db: Pool | PoolCl
     }),
   })
   if ('error' in result) return result
+  if (shouldNotifyLeadCreation(result)) {
+    const project = await resolveProjectInfo(db, projectId).catch(() => null)
+    if (project) {
+      await notify(result.row, project).catch((err) => console.error('[lead-notify] unexpected error', err))
+    } else {
+      console.warn('[lead-notify] could not resolve project for notification')
+    }
+  }
   return result.replay ? { row: result.row, replay: true } : { row: result.row }
 }
 
