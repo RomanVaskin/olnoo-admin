@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createLeadRecord } from '@/lib/crm'
+import { notifyCrmLeadTelegram } from '@/lib/crm-telegram-notify'
 
 /**
  * Server-to-server lead intake for public OLNOO-family sites (e.g. olnoo.com's
@@ -55,6 +56,20 @@ export async function POST(req: Request) {
   })
 
   if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status })
+
+  if (!result.replay) {
+    void notifyCrmLeadTelegram({
+      project: typeof body.project === 'string' ? body.project : '',
+      name: body.name,
+      phone: typeof body.phone === 'string' ? body.phone : undefined,
+      contact: typeof body.contact === 'string' ? body.contact : undefined,
+      service: typeof body.service === 'string' ? body.service : undefined,
+      source: typeof body.source === 'string' ? body.source : undefined,
+    }).catch((error) => {
+      console.warn('[crm-telegram] Lead notification failed', error instanceof Error ? error.message : error)
+    })
+  }
+
   // A replayed lead_tracking_id returns the existing lead with the same 201 callers already expect
   // (DriveSet treats anything else as a failure); the header tells the two cases apart.
   return NextResponse.json(result.row, { status: 201, headers: result.replay ? { 'X-Idempotent-Replay': 'true' } : undefined })
