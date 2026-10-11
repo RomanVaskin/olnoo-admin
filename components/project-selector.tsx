@@ -49,7 +49,7 @@ export function ProjectSelector({
             onClick={() => setOpen(false)}
             aria-hidden
           />
-          <div className="absolute left-0 top-[calc(100%+4px)] z-20 min-w-full border border-hairline bg-card shadow-sm">
+          <div className="absolute left-0 top-[calc(100%+4px)] z-20 max-h-80 min-w-full overflow-y-auto border border-hairline bg-card shadow-sm">
             {options.map((o) => (
               <button
                 key={o.id}

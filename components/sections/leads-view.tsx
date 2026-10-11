@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
+import { ProjectSelector } from '@/components/project-selector'
+import { useProjects } from '@/components/sections/seo-project-picker'
 import { useI18n } from '@/components/i18n-provider'
 import { LEAD_STATUSES, type Lead, type LeadStatus } from '@/lib/data'
 import { fromApiLead } from '@/lib/crm-client'
@@ -188,6 +190,11 @@ function LeadDetail({
 
 function LeadCreateForm({ project, onClose, onCreated }: { project: string; onClose: () => void; onCreated: (lead: Lead) => void }) {
   const { t } = useI18n()
+  const { projects } = useProjects()
+  const projectOptions = projects.filter((p) => p.slug)
+  // A specific project selected in the filter bar pre-fills the form; "All projects" leaves it
+  // blank and the manager must choose one — a lead can never be created without a known project.
+  const [selectedProject, setSelectedProject] = useState(project !== 'all' ? project : '')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [company, setCompany] = useState('')
@@ -197,13 +204,14 @@ function LeadCreateForm({ project, onClose, onCreated }: { project: string; onCl
   const [error, setError] = useState('')
 
   async function submit() {
+    if (!selectedProject) return
     setSaving(true)
     setError('')
     try {
       const res = await fetch('/api/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, name, email, company, service, message, source: 'manual' }),
+        body: JSON.stringify({ project: selectedProject, name, email, company, service, message, source: 'manual' }),
       })
       if (!res.ok) throw new Error('failed')
       onCreated(fromApiLead(await res.json()))
@@ -230,6 +238,22 @@ function LeadCreateForm({ project, onClose, onCreated }: { project: string; onCl
         </div>
 
         <div className="flex flex-col gap-5 px-6 py-6">
+          <label className="flex flex-col gap-1.5">
+            <span className="label-mono text-muted-foreground">{t.table.project}</span>
+            <select
+              value={selectedProject}
+              onChange={(e) => setSelectedProject(e.target.value)}
+              className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+            >
+              <option value="">{t.leadsView.selectProjectPlaceholder}</option>
+              {projectOptions.map((p) => (
+                <option key={p.slug} value={p.slug as string}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {!selectedProject && <span className="text-xs text-muted-foreground">{t.leadsView.selectProjectHint}</span>}
+          </label>
           <CreateField label={t.table.name} value={name} onChange={setName} />
           <CreateField label={t.field.email} value={email} onChange={setEmail} type="email" />
           <CreateField label={t.field.company} value={company} onChange={setCompany} />
@@ -246,7 +270,7 @@ function LeadCreateForm({ project, onClose, onCreated }: { project: string; onCl
 
           <button
             onClick={submit}
-            disabled={saving || !name.trim() || !email.trim()}
+            disabled={saving || !name.trim() || !email.trim() || !selectedProject}
             className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
           >
             {saving ? t.common.saving : t.leadsView.addLead}
@@ -299,7 +323,7 @@ function Field({ label, value, mono, href }: { label: string; value: string; mon
   )
 }
 
-export function LeadsView({ project }: { project: string }) {
+export function LeadsView({ project, onProjectChange }: { project: string; onProjectChange: (id: string) => void }) {
   const { t } = useI18n()
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
@@ -327,12 +351,16 @@ export function LeadsView({ project }: { project: string }) {
   }, [project])
 
   const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
     return leads.filter((l) => {
       const matchesQuery =
-        !query ||
-        l.name.toLowerCase().includes(query.toLowerCase()) ||
-        l.company.toLowerCase().includes(query.toLowerCase()) ||
-        l.email.toLowerCase().includes(query.toLowerCase())
+        !q ||
+        l.name.toLowerCase().includes(q) ||
+        l.company.toLowerCase().includes(q) ||
+        l.email.toLowerCase().includes(q) ||
+        l.phone.toLowerCase().includes(q) ||
+        l.contact.toLowerCase().includes(q) ||
+        l.service.toLowerCase().includes(q)
       const matchesStatus = status === 'All' || l.status === status
       const matchesSource = source === 'All' || l.source === source
       return matchesQuery && matchesStatus && matchesSource
@@ -375,6 +403,7 @@ export function LeadsView({ project }: { project: string }) {
       />
 
       <div className="flex flex-wrap items-center gap-2">
+        <ProjectSelector value={project} onChange={onProjectChange} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -400,12 +429,10 @@ export function LeadsView({ project }: { project: string }) {
       <TableShell>
         <thead>
           <tr>
-            <Th>{t.table.name}</Th>
-            <Th>{t.table.company}</Th>
-            <Th>{t.table.email}</Th>
-            <Th>{t.table.service}</Th>
+            <Th className="max-w-[160px]">{t.table.name}</Th>
+            <Th className="max-w-[140px]">{t.table.project}</Th>
+            <Th className="max-w-[140px]">{t.table.service}</Th>
             <Th>{t.table.source}</Th>
-            <Th>{t.table.landingPage}</Th>
             <Th>{t.table.status}</Th>
             <Th>{t.table.created}</Th>
           </tr>
@@ -417,18 +444,18 @@ export function LeadsView({ project }: { project: string }) {
               onClick={() => setSelected(l)}
               className="cursor-pointer transition-colors hover:bg-muted/60"
             >
-              <Td className="font-medium text-foreground">{l.name}</Td>
-              <Td className="text-muted-foreground">{l.company}</Td>
-              <Td className="font-mono text-xs">{l.email}</Td>
-              <Td>{l.service}</Td>
-              <Td>
-                <span className="label-mono text-muted-foreground">{t.leadSource[l.source]}</span>
+              <Td className="max-w-[160px] truncate font-medium text-foreground">{l.name}</Td>
+              <Td className="max-w-[140px] truncate text-muted-foreground" title={l.projectName || l.projectSlug}>
+                {l.projectName || l.projectSlug}
               </Td>
-              <Td className="font-mono text-xs text-blue">{l.landingPage}</Td>
+              <Td className="max-w-[140px] truncate">{l.service}</Td>
               <Td>
+                <span className="label-mono whitespace-nowrap text-muted-foreground">{t.leadSource[l.source]}</span>
+              </Td>
+              <Td className="whitespace-nowrap">
                 <StatusPill status={l.status} />
               </Td>
-              <Td className="font-mono text-xs text-muted-foreground">{l.created}</Td>
+              <Td className="whitespace-nowrap font-mono text-xs text-muted-foreground">{l.created}</Td>
             </tr>
           ))}
           {!loading && filtered.length === 0 && (
@@ -436,8 +463,6 @@ export function LeadsView({ project }: { project: string }) {
               <Td className="text-muted-foreground">
                 <span className="label-mono">{t.leadsView.noResults}</span>
               </Td>
-              <Td> </Td>
-              <Td> </Td>
               <Td> </Td>
               <Td> </Td>
               <Td> </Td>

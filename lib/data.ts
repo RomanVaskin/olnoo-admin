@@ -45,6 +45,7 @@ export type Lead = {
   company: string
   email: string
   phone: string
+  contact: string
   service: string
   source: 'SEO' | 'Ads' | 'Telegram' | 'Direct' | 'Referral'
   landingPage: string
@@ -57,6 +58,9 @@ export type Lead = {
   utmCampaign: string
   locale: string
   notes: string
+  /** Project the lead belongs to (projects.slug / projects.name, joined server-side). */
+  projectSlug: string
+  projectName: string
   /** Traffic class (Test Traffic v1): the automatic class + reason, the manual override and the effective class (override ?? auto). */
   trafficClassAuto?: TrafficClass
   trafficClassReason?: string
@@ -347,6 +351,9 @@ export const leads: Lead[] = [
     company: 'ABC Group',
     email: 'ivan@example.com',
     phone: '',
+    contact: '',
+    projectSlug: 'olnoo',
+    projectName: 'OLNOO',
     service: 'AI Agents',
     source: 'SEO',
     landingPage: '/ru/services/ai-agents',
@@ -371,6 +378,9 @@ export const leads: Lead[] = [
     company: 'Techline',
     email: 'maria@example.com',
     phone: '',
+    contact: '',
+    projectSlug: 'olnoo',
+    projectName: 'OLNOO',
     service: 'Business Automation',
     source: 'Direct',
     landingPage: '/ru/services/business-automation',
@@ -394,6 +404,9 @@ export const leads: Lead[] = [
     company: 'Nordwind Freight',
     email: 'dmitry@example.com',
     phone: '',
+    contact: '',
+    projectSlug: 'olnoo',
+    projectName: 'OLNOO',
     service: 'Operational AI',
     source: 'Referral',
     landingPage: '/ru/cases/nordwind-freight',
@@ -418,6 +431,9 @@ export const leads: Lead[] = [
     company: 'Meridian GmbH',
     email: 'anna@example.com',
     phone: '',
+    contact: '',
+    projectSlug: 'olnoo',
+    projectName: 'OLNOO',
     service: 'Market Entry',
     source: 'SEO',
     landingPage: '/en/services/market-entry',
@@ -443,6 +459,9 @@ export const leads: Lead[] = [
     company: 'RetailPro',
     email: 'oleg@example.com',
     phone: '',
+    contact: '',
+    projectSlug: 'olnoo',
+    projectName: 'OLNOO',
     service: 'CRM Automation',
     source: 'Ads',
     landingPage: '/ru/services/crm-automation',
@@ -463,6 +482,9 @@ export const leads: Lead[] = [
     company: 'FinGroup',
     email: 'elena@example.com',
     phone: '',
+    contact: '',
+    projectSlug: 'olnoo',
+    projectName: 'OLNOO',
     service: 'Telegram Bots',
     source: 'Telegram',
     landingPage: '/ru/services/telegram-bots',
@@ -486,6 +508,9 @@ export const leads: Lead[] = [
     company: 'LogiTrans',
     email: 'pavel@example.com',
     phone: '',
+    contact: '',
+    projectSlug: 'olnoo',
+    projectName: 'OLNOO',
     service: 'Business Automation',
     source: 'SEO',
     landingPage: '/ru/services/business-automation',
@@ -506,6 +531,9 @@ export const leads: Lead[] = [
     company: 'Aura Estate',
     email: 'sofia@example.com',
     phone: '',
+    contact: '',
+    projectSlug: 'olnoo',
+    projectName: 'OLNOO',
     service: 'AI Agents',
     source: 'Direct',
     landingPage: '/ru/services/ai-agents',

@@ -77,7 +77,7 @@ export function CrmOverview({
             <thead>
               <tr>
                 <Th>{t.table.lead}</Th>
-                <Th>{t.table.company}</Th>
+                <Th>{t.table.project}</Th>
                 <Th>{t.table.source}</Th>
                 <Th>{t.table.service}</Th>
                 <Th>{t.table.status}</Th>
@@ -88,7 +88,9 @@ export function CrmOverview({
               {recent.map((l) => (
                 <tr key={l.id}>
                   <Td className="font-medium text-foreground">{l.name}</Td>
-                  <Td className="text-muted-foreground">{l.company}</Td>
+                  <Td className="max-w-[140px] truncate text-muted-foreground" title={l.projectName || l.projectSlug}>
+                    {l.projectName || l.projectSlug}
+                  </Td>
                   <Td>
                     <span className="label-mono text-muted-foreground">{t.leadSource[l.source]}</span>
                   </Td>

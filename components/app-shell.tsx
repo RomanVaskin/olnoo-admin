@@ -323,7 +323,7 @@ export function AppShell() {
           {active === 'crm-overview' && (
             <CrmOverview project={project} onProjectChange={setProject} />
           )}
-          {active === 'crm-leads' && <LeadsView project={project} />}
+          {active === 'crm-leads' && <LeadsView project={project} onProjectChange={setProject} />}
           {/* project === 'all' here is always transient for these two: the recovery effect above
               redirects to the remembered project on the very next tick, if one exists. Not
               rendering yet avoids firing a project=all fetch these project-required screens

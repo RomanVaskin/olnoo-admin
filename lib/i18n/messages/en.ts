@@ -578,10 +578,12 @@ export const en = {
     description:
       'Every enquiry captured across OLNOO properties, with acquisition context preserved for each record.',
     addLead: '+ Add lead',
-    searchPlaceholder: 'Search name, company, email',
+    searchPlaceholder: 'Search name, company, email, phone, service',
     filterStatus: 'Status',
     filterSource: 'Source',
     noResults: 'No leads match the current filters.',
+    selectProjectPlaceholder: 'Select project…',
+    selectProjectHint: 'Select a project to add a lead.',
     detailLabel: 'Lead',
     enquiry: 'Enquiry',
     trafficClass: 'Traffic class',

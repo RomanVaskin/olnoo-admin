@@ -588,10 +588,12 @@ export const ru: Messages = {
     description:
       'Все обращения со всех проектов OLNOO с сохранённым контекстом привлечения по каждой записи.',
     addLead: '+ Добавить лид',
-    searchPlaceholder: 'Поиск по имени, компании, email',
+    searchPlaceholder: 'Поиск по имени, компании, email, телефону, услуге',
     filterStatus: 'Статус',
     filterSource: 'Источник',
     noResults: 'Нет лидов, соответствующих текущим фильтрам.',
+    selectProjectPlaceholder: 'Выберите проект…',
+    selectProjectHint: 'Выберите проект, чтобы добавить лид.',
     detailLabel: 'Лид',
     enquiry: 'Обращение',
     trafficClass: 'Класс трафика',
