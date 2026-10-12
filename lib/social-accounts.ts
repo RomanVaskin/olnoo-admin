@@ -26,6 +26,13 @@ export type SocialAccountResult = { error: string; status: number } | { row: Rec
  * caller-supplied slug — an account id from another project can never be read, edited, or
  * deleted by supplying a different id with this project's slug (or vice versa). */
 
+/** Explicit column allowlist instead of a bare "select every column" query — these rows go
+ * straight into `NextResponse.json(...)` in app/api/social-accounts*, so any column added to
+ * `social_accounts` later (e.g. a future secret/token field) is never exposed to the browser just
+ * by existing; it has to be added here deliberately first. Keep in sync with
+ * db/migrations/0007_social_accounts_publications.sql. */
+const ACCOUNT_COLUMNS = 'id, project_id, platform, name, username, public_url, status, active, notes, created_at, updated_at'
+
 export async function listSocialAccounts(
   projectSlug: string | null,
   filters: { platform?: string } = {},
@@ -42,7 +49,7 @@ export async function listSocialAccounts(
   }
 
   const { rows } = await pool.query(
-    `SELECT * FROM social_accounts WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`,
+    `SELECT ${ACCOUNT_COLUMNS} FROM social_accounts WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`,
     params,
   )
   return rows
@@ -54,7 +61,10 @@ export async function getSocialAccount(
 ): Promise<Record<string, unknown> | null> {
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return null
-  const { rows } = await pool.query('SELECT * FROM social_accounts WHERE id = $1 AND project_id = $2', [id, projectId])
+  const { rows } = await pool.query(
+    `SELECT ${ACCOUNT_COLUMNS} FROM social_accounts WHERE id = $1 AND project_id = $2`,
+    [id, projectId],
+  )
   return rows[0] ?? null
 }
 
@@ -74,7 +84,7 @@ export async function createSocialAccount(
     INSERT INTO social_accounts (
       id, project_id, platform, name, username, public_url, status, active, notes
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    RETURNING *
+    RETURNING ${ACCOUNT_COLUMNS}
     `,
     [
       id,
@@ -132,7 +142,7 @@ export async function updateSocialAccount(
   params.push(id, projectId)
 
   const { rows } = await pool.query(
-    `UPDATE social_accounts SET ${sets.join(', ')} WHERE id = $${i} AND project_id = $${i + 1} RETURNING *`,
+    `UPDATE social_accounts SET ${sets.join(', ')} WHERE id = $${i} AND project_id = $${i + 1} RETURNING ${ACCOUNT_COLUMNS}`,
     params,
   )
   if (!rows[0]) return { error: 'not found', status: 404 }
