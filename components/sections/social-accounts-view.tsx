@@ -70,6 +70,8 @@ function AccountDetail({
   const [vkToken, setVkToken] = useState('')
   const [vkConnecting, setVkConnecting] = useState(false)
   const [vkConnectError, setVkConnectError] = useState('')
+  const [telegramConnecting, setTelegramConnecting] = useState(false)
+  const [telegramConnectError, setTelegramConnectError] = useState('')
 
   useEffect(() => {
     setPlatform(account.platform)
@@ -81,6 +83,7 @@ function AccountDetail({
     setNotes(account.notes)
     setVkToken('')
     setVkConnectError('')
+    setTelegramConnectError('')
   }, [account])
 
   async function save(patch: Record<string, unknown>) {
@@ -121,6 +124,28 @@ function AccountDetail({
       if (updated.status === 'error') setVkConnectError(updated.connectionError)
     } finally {
       setVkConnecting(false)
+    }
+  }
+
+  async function connectTelegram(usernameOverride: string | null) {
+    setTelegramConnecting(true)
+    setTelegramConnectError('')
+    try {
+      const res = await fetch(`/api/social-accounts/${account.id}/telegram-connection?project=${encodeURIComponent(project)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(usernameOverride ? { username: usernameOverride } : {}),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setTelegramConnectError((data && typeof data.error === 'string' && data.error) || t.socialAccountsView.createError)
+        return
+      }
+      const updated = fromApiAccount(data)
+      onSaved(updated)
+      if (updated.status === 'error') setTelegramConnectError(updated.connectionError)
+    } finally {
+      setTelegramConnecting(false)
     }
   }
 
@@ -253,6 +278,50 @@ function AccountDetail({
                 )}
               </div>
               {vkConnectError && <p className="text-sm text-destructive">{vkConnectError}</p>}
+            </div>
+          )}
+
+          {platform === 'telegram' && account.publicUrl && (
+            <a
+              href={account.publicUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="label-mono border border-hairline px-4 py-2.5 text-center text-foreground transition-colors hover:bg-muted/60"
+            >
+              {t.socialAccountsView.openInTelegram}
+            </a>
+          )}
+
+          {platform === 'telegram' && (
+            <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
+              <span className="label-mono text-muted-foreground">{t.socialAccountsView.telegramConnection}</span>
+              <div className="flex items-center gap-2">
+                <span className={`size-1.5 rounded-full ${account.status === 'connected' ? 'bg-blue' : account.status === 'error' ? 'bg-destructive' : 'bg-muted-foreground'}`} aria-hidden />
+                <span className="text-sm text-foreground/80">
+                  {account.status === 'connected' ? t.socialAccountsView.telegramConnected : t.socialAccountsView.telegramNotConnected}
+                </span>
+              </div>
+              {account.connectionError && <p className="text-sm text-destructive">{account.connectionError}</p>}
+              <p className="text-sm text-muted-foreground">{t.socialAccountsView.telegramUsernameHint}</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => connectTelegram(username)}
+                  disabled={telegramConnecting || !username.trim()}
+                  className="label-mono flex-1 border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+                >
+                  {telegramConnecting ? t.socialAccountsView.telegramConnecting : t.socialAccountsView.telegramConnect}
+                </button>
+                {account.status !== 'created' && (
+                  <button
+                    onClick={() => connectTelegram(null)}
+                    disabled={telegramConnecting}
+                    className="label-mono flex-1 border border-hairline px-4 py-2.5 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+                  >
+                    {telegramConnecting ? t.socialAccountsView.telegramConnecting : t.socialAccountsView.telegramRecheck}
+                  </button>
+                )}
+              </div>
+              {telegramConnectError && <p className="text-sm text-destructive">{telegramConnectError}</p>}
             </div>
           )}
 
