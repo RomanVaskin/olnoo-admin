@@ -2,17 +2,18 @@ import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { THREADS_TEXT_MAX_LENGTH, resolveThreadsText } from '@/lib/social-threads-text'
-import { compareAccountOwnership } from '@/lib/social-account-ownership'
+import { compareAccountOwnership, resolveOwnerProjectSlug, verifyProjectIsAllowed } from '@/lib/social-account-ownership'
 
 // Server-side only. THREADS_ACCESS_TOKEN and THREADS_USER_ID must never be sent to the browser —
 // they are read here and only here, inside a function called exclusively from a server route
 // handler. Like Instagram, the target account isn't resolved from social_accounts: a Threads
 // access token is already scoped to one specific Threads user, so the user id comes from its own
-// env var. social_accounts is still used, both as a project-scoped "is Threads actually connected
-// and active for this project" guard, AND — since that guard alone can't prove the global
-// credentials point at *this* project's account — as the known-good @handle an ownership check
-// (lib/social-account-ownership.ts) compares the actually-connected account's username against
-// before any publish call is made. See that module for why this exists.
+// env var — global across every project. THREADS_OWNER_PROJECT names the one project allowed to
+// use it at all; social_accounts is still used too, both as a project-scoped "is Threads actually
+// connected and active for this project" guard, AND as the known-good @handle an ownership check
+// compares the actually-connected account's username against before any publish call is made —
+// but neither social_accounts row nor username match is, by itself, the authorization. See
+// lib/social-account-ownership.ts for why.
 
 export type SocialThreadsResult = { error: string; status: number } | { row: Record<string, unknown> }
 
@@ -69,11 +70,13 @@ async function waitForContainerFinished(containerId: string, token: string): Pro
  * 'threads' to exist (linked via social_account_id if set, else the project's first active
  * threads account) — the actual API target user comes from THREADS_USER_ID, since a Threads
  * access token is already scoped to one user (never the account's username/handle — that would
- * not be a valid API user id), which is global across every project. Before any publish call,
- * this account's `username` column is compared against the username the global credentials are
- * actually connected to (see lib/social-account-ownership.ts); a mismatch or a blank username
- * refuses to publish — this is the check that stops one project's content from reaching another
- * project's real Threads account.
+ * not be a valid API user id), which is global across every project. Before anything else,
+ * `projectSlug` must equal `THREADS_OWNER_PROJECT` — the one project allowed to use these global
+ * credentials at all (see lib/social-account-ownership.ts for why `social_accounts.username`
+ * alone, being user-editable and not unique across projects, cannot be that authorization). Once
+ * that passes, this account's `username` is additionally compared against the username the
+ * global credentials are actually connected to, as a second, independent sanity check; a
+ * mismatch or a blank username still refuses to publish.
  *
  * Never re-sends an already-published publication (duplicate protection: rejected before any
  * Threads API call). A Threads API error, a failed/expired container, or a network failure is not
@@ -90,6 +93,13 @@ export async function publishSocialPublicationToThreads(
 ): Promise<SocialThreadsResult> {
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
+
+  // Authorization gate: the global credentials below belong to exactly one project. This must be
+  // checked before anything else — social_accounts.username (checked further down) is
+  // user-editable and not unique, so it cannot be the thing that decides this.
+  const ownerProject = resolveOwnerProjectSlug(process.env.THREADS_OWNER_PROJECT)
+  const projectGate = verifyProjectIsAllowed('Threads', 'THREADS_OWNER_PROJECT', ownerProject, projectSlug)
+  if (!projectGate.ok) return { error: projectGate.error, status: 403 }
 
   const { rows: pubRows } = await pool.query<{
     id: string

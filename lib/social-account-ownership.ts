@@ -10,15 +10,67 @@
 // guard and both would publish through the same global token, into whichever single account that
 // token actually owns.
 //
-// The only existing signal that can settle this without a migration is `social_accounts.username`
-// (already documented, in lib/social-instagram.ts/lib/social-threads.ts, as "the real @handle,
-// never a token or numeric id"). This module compares it against the actual handle the global
-// credentials are connected to — one cheap read-only API call the caller makes with its own
-// already-validated token, same call shape (`GET /{id}?fields=...&access_token=...`) those files
-// already use elsewhere. A blank `username` or a mismatch blocks publishing outright: ownership
-// is confirmed from existing data or publishing is refused, never guessed.
+// Two checks, in order, and neither is skippable:
+//
+// 1. `verifyProjectIsAllowed` — the actual authorization. The global credentials for a platform
+//    belong to exactly one project, named by that platform's own env var
+//    (INSTAGRAM_OWNER_PROJECT / THREADS_OWNER_PROJECT) — the existing `project_id`/slug
+//    mechanism every other project-scoped check in this app already uses, just pinned to one
+//    fixed value per platform instead of taken from the request. Unset, or a project slug that
+//    doesn't match, blocks publishing. This is the actual fix for the gap `username` alone left
+//    open: `social_accounts.username` is user-editable and not unique, so two projects could
+//    (accidentally or not) both set it to the same handle and both pass a username-only check —
+//    the owner-project pin is the one thing in this app that can't silently collide that way,
+//    because only one project can ever match a single fixed slug.
+// 2. `compareAccountOwnership` — a second, independent sanity check once (1) has already
+//    confirmed this is the one allowed project: does the account's own `social_accounts.username`
+//    (already documented as "the real @handle, never a token or numeric id") also match the
+//    actual handle the global credentials are connected to? This catches a misconfigured/blank
+//    username on the *correct* project; it is deliberately never treated as sufficient on its
+//    own (see (1)) specifically because it can't rule out two projects sharing one username.
+//
+// Neither check is a guess: both read existing data (an env var naming a specific project, and a
+// column that already existed) or block — ownership is never inferred from anything else.
 
 export type OwnershipResult = { ok: true } | { ok: false; error: string }
+
+/** The one project slug allowed to publish through a platform's global credentials, from that
+ * platform's own env var (e.g. INSTAGRAM_OWNER_PROJECT). Unset/blank -> null (fail closed below). */
+export function resolveOwnerProjectSlug(envValue: string | undefined | null): string | null {
+  return envValue?.trim().toLowerCase() || null
+}
+
+/**
+ * The actual authorization check: is `requestedProjectSlug` the one project allowed to use this
+ * platform's global credentials? `envVarName` is only used to name the fix in the error message.
+ * Fails closed: no owner configured, or a slug that doesn't match it exactly, blocks publishing —
+ * this app never infers or guesses which project a global credential belongs to.
+ */
+export function verifyProjectIsAllowed(
+  platformLabel: string,
+  envVarName: string,
+  ownerProjectSlug: string | null,
+  requestedProjectSlug: string | null,
+): OwnershipResult {
+  if (!ownerProjectSlug) {
+    return {
+      ok: false,
+      error: `Cannot verify which project owns the global ${platformLabel} credentials: ` +
+        `${envVarName} is not configured on the server. Set it to the single project slug ` +
+        `allowed to publish through these credentials before publishing.`,
+    }
+  }
+  const requested = requestedProjectSlug?.trim().toLowerCase() || null
+  if (requested !== ownerProjectSlug) {
+    return {
+      ok: false,
+      error: `This project is not the one allowed to use the global ${platformLabel} credentials ` +
+        `(configured owner project: "${ownerProjectSlug}"). Refusing to publish — this would use ` +
+        `another project's credentials.`,
+    }
+  }
+  return { ok: true }
+}
 
 function normalizeHandle(value: string): string {
   return value.trim().toLowerCase().replace(/^@+/, '')
