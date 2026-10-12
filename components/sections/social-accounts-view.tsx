@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, HeaderActions, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
+import { useProjects } from '@/components/sections/seo-project-picker'
 import { useI18n } from '@/components/i18n-provider'
 
 const PLATFORMS = ['telegram', 'instagram', 'threads', 'vk'] as const
@@ -27,6 +28,12 @@ type SocialAccount = {
   // without needing to see the secret.
   vkGroupId: string
   connectionError: string
+  // Always present — the list API now joins `projects` for every row, in both "all" and
+  // single-project mode (see lib/social-accounts.ts's listSocialAccounts). This is the project a
+  // row's own edit/delete/connection calls are scoped to, independent of the screen's current
+  // filter — critical once the filter is "all" and the table shows rows from many projects.
+  projectSlug: string
+  projectName: string
 }
 
 function fromApiAccount(row: Record<string, unknown>): SocialAccount {
@@ -42,6 +49,8 @@ function fromApiAccount(row: Record<string, unknown>): SocialAccount {
     createdAt: row.created_at as string,
     vkGroupId: (row.vk_group_id as string) ?? '',
     connectionError: (row.connection_error as string) ?? '',
+    projectSlug: (row.project_slug as string) ?? '',
+    projectName: (row.project_name as string) ?? '',
   }
 }
 
@@ -405,6 +414,12 @@ function CreateForm({
   onCreated: (account: SocialAccount) => void
 }) {
   const { t } = useI18n()
+  const { projects } = useProjects()
+  const projectOptions = projects.filter((p) => p.slug)
+  // A specific project selected in the filter bar pre-fills the form; "All projects" leaves it
+  // blank and the admin must choose one explicitly — an account can never be created without a
+  // known project (same rule as LeadCreateForm in leads-view.tsx / CreateForm in social-view.tsx).
+  const [selectedProject, setSelectedProject] = useState(project !== 'all' ? project : '')
   const [platform, setPlatform] = useState<SocialPlatform>('telegram')
   const [name, setName] = useState('')
   const [username, setUsername] = useState('')
@@ -412,13 +427,14 @@ function CreateForm({
   const [error, setError] = useState('')
 
   async function submit() {
+    if (!selectedProject) return
     setSaving(true)
     setError('')
     try {
       const res = await fetch('/api/social-accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, platform, name, username }),
+        body: JSON.stringify({ project: selectedProject, platform, name, username }),
       })
       if (!res.ok) throw new Error('failed')
       onCreated(fromApiAccount(await res.json()))
@@ -445,6 +461,25 @@ function CreateForm({
         </div>
 
         <div className="flex flex-col gap-5 px-6 py-6">
+          <label className="flex flex-col gap-1.5">
+            <span className="label-mono text-muted-foreground">{t.table.project}</span>
+            <select
+              value={selectedProject}
+              onChange={(e) => setSelectedProject(e.target.value)}
+              className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+            >
+              <option value="">{t.socialAccountsView.selectProjectPlaceholder}</option>
+              {projectOptions.map((p) => (
+                <option key={p.slug} value={p.slug as string}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {!selectedProject && (
+              <span className="text-xs text-muted-foreground">{t.socialAccountsView.selectProjectHint}</span>
+            )}
+          </label>
+
           <label className="flex flex-col gap-1.5">
             <span className="label-mono text-muted-foreground">{t.socialAccountsView.platform}</span>
             <select
@@ -478,7 +513,7 @@ function CreateForm({
 
           <button
             onClick={submit}
-            disabled={saving}
+            disabled={saving || !selectedProject}
             className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
           >
             {saving ? t.common.saving : t.socialAccountsView.addAccount}
@@ -594,6 +629,7 @@ export function SocialAccountsView({
         <thead>
           <tr>
             <Th>{t.socialAccountsView.platform}</Th>
+            <Th className="max-w-[140px]">{t.table.project}</Th>
             <Th>{t.socialAccountsView.name}</Th>
             <Th>{t.socialAccountsView.username}</Th>
             <Th>{t.field.status}</Th>
@@ -609,6 +645,9 @@ export function SocialAccountsView({
             >
               <Td>
                 <span className="label-mono text-muted-foreground">{t.socialChannel[a.platform]}</span>
+              </Td>
+              <Td className="max-w-[140px] truncate text-muted-foreground" title={a.projectName || a.projectSlug}>
+                {a.projectName || a.projectSlug}
               </Td>
               <Td className="font-medium text-foreground">{a.name || '—'}</Td>
               <Td className="text-muted-foreground">{a.username || '—'}</Td>
@@ -627,6 +666,7 @@ export function SocialAccountsView({
               <Td> </Td>
               <Td> </Td>
               <Td> </Td>
+              <Td> </Td>
             </tr>
           )}
         </tbody>
@@ -635,7 +675,7 @@ export function SocialAccountsView({
       {selected && (
         <AccountDetail
           account={selected}
-          project={project}
+          project={selected.projectSlug}
           onClose={() => setSelected(null)}
           onSaved={handleSaved}
           onDeleted={handleDeleted}

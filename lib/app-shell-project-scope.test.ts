@@ -14,8 +14,13 @@ import { readFile } from 'node:fs/promises'
 // attached to the wrong client's project with no visible action by the admin — confirmed as the
 // cause of a production Instagram account and its publications being recorded under project
 // "domtrack" while the admin believed they were working on OLNOO's own project. Removed entirely
-// (components/app-shell.tsx): these screens now render nothing until a real, explicit ?project= is
-// present in the URL (from a bookmark/link or from clicking ProjectSelector) — never guessed.
+// (components/app-shell.tsx): the project a write (create/edit/publish) happens under must come
+// only from a real, explicit ?project= in the URL (from a bookmark/link or from clicking
+// ProjectSelector) — never guessed. social-posts/social-accounts themselves no longer require this
+// upfront just to LIST data — like social-overview, they now support "All projects" with a
+// cross-project read (see lib/social-project-selector-wiring.test.ts) — but still never
+// auto-select a project for a write, which is enforced inside each screen's own CreateForm/
+// PostDetail/AccountDetail, not by gating the whole screen here.
 
 async function sourceOf(file: string): Promise<string> {
   return readFile(new URL(file, import.meta.url), 'utf8')
@@ -32,41 +37,44 @@ test('app-shell: no localStorage-based fallback can silently choose which projec
   )
 })
 
-test('app-shell: social-posts, social-accounts and ads only render their real content once a real project slug is in the URL, with no fallback path', async () => {
+test('app-shell: ads still only renders its real content once a real project slug is in the URL, with no fallback path', async () => {
   const source = await sourceOf('../components/app-shell.tsx')
-  // 'ads' is untouched by this change — still the simple short-circuit form.
+  // 'ads' is the one screen this task leaves untouched — it still cannot handle "all" at all, so
+  // it keeps the simple short-circuit form rather than gaining an "All projects" view.
   assert.match(source, /active === 'ads' && project !== 'all' && <AdsView/, "ads must stay gated on an explicit, non-'all' project")
-  // social-posts/social-accounts now show an explicit project-picker prompt (SelectProjectPrompt)
-  // instead of rendering nothing when project === 'all' — but the real, data-fetching/write-
-  // capable component (SocialView/SocialAccountsView) must still only ever appear in the
-  // project !== 'all' branch, never as a fallback for 'all'.
-  for (const [screen, component] of [
-    ['social-posts', 'SocialView'],
-    ['social-accounts', 'SocialAccountsView'],
-  ] as const) {
-    const screenIdx = source.indexOf(`active === '${screen}'`)
-    assert.ok(screenIdx > 0, `${screen} must still be handled`)
-    const block = source.slice(screenIdx, screenIdx + 400)
-    assert.match(block, /project !== 'all'/, `${screen} must still branch on an explicit, non-'all' project`)
-    const ternaryIdx = block.search(/\?\s*\n?\s*<\w/)
-    assert.ok(ternaryIdx > 0, `${screen} must use a ternary (real screen vs. project-picker prompt)`)
-    const trueBranch = block.slice(0, block.indexOf(':', ternaryIdx))
-    assert.ok(trueBranch.includes(component), `${screen}'s project !== 'all' branch must render ${component}`)
-    assert.ok(!trueBranch.includes('SelectProjectPrompt'), `${screen} must not render the picker prompt in its real-project branch`)
-  }
   // `project` itself must be derived directly from the URL's own ?project= param, not from any
   // effect that could overwrite it with a remembered value before these screens render.
   const rawProjectIdx = source.indexOf("searchParams.get('project')")
   assert.ok(rawProjectIdx > 0, 'project must be read directly from the URL search params')
 })
 
-test('app-shell: social-overview renders unconditionally (supports both "all" and one project), unlike Posts/Accounts', async () => {
+test('app-shell: social-posts and social-accounts render unconditionally (support both "all" and one project), same as social-overview', async () => {
   const source = await sourceOf('../components/app-shell.tsx')
-  const idx = source.indexOf("active === 'social-overview'")
-  assert.ok(idx > 0, 'social-overview must be handled')
-  const block = source.slice(idx, idx + 150)
-  assert.match(block, /<SocialOverview project=\{project\} onProjectChange=\{setProject\}/)
-  assert.ok(!block.includes("project !== 'all'"), "social-overview must not be gated on project !== 'all' — it supports the aggregate view")
+  for (const [screen, component] of [
+    ['social-overview', 'SocialOverview'],
+    ['social-posts', 'SocialView'],
+    ['social-accounts', 'SocialAccountsView'],
+  ] as const) {
+    const idx = source.indexOf(`active === '${screen}'`)
+    assert.ok(idx > 0, `${screen} must be handled`)
+    const nextIdx = source.indexOf("{active ===", idx + 1)
+    const block = source.slice(idx, nextIdx > 0 ? nextIdx : idx + 200)
+    assert.match(block, new RegExp(`<${component} project=\\{project\\} onProjectChange=\\{setProject\\}`))
+    assert.ok(
+      !block.includes("project !== 'all'"),
+      `${screen} must not be gated on project !== 'all' — it supports the "All projects" aggregate view`,
+    )
+  }
+})
+
+test('app-shell: the removed SelectProjectPrompt (and its project-picker gate) is gone for good', async () => {
+  const source = await sourceOf('../components/app-shell.tsx')
+  assert.ok(
+    !source.includes('SelectProjectPrompt'),
+    'social-posts/social-accounts list unconditionally now (like social-overview) — the blocking ' +
+      '"select a project" screen that used to stand in for them when project === \'all\' must not ' +
+      'reappear; the per-project requirement moved into each screen\'s own write paths instead',
+  )
 })
 
 test("app-shell: 'social-overview' is the first child of the Social nav group", async () => {
@@ -76,13 +84,4 @@ test("app-shell: 'social-overview' is the first child of the Social nav group", 
   const childrenIdx = source.indexOf('children:', socialGroupIdx)
   const childrenLine = source.slice(childrenIdx, source.indexOf(']', childrenIdx) + 1)
   assert.match(childrenLine, /\[\s*\{ id: 'social-overview' \}/, "social-overview must be the first entry so it's the Social group's default screen")
-})
-
-test('app-shell: SelectProjectPrompt reuses the shared ProjectSelector, not a new/ad-hoc picker', async () => {
-  const source = await sourceOf('../components/app-shell.tsx')
-  const fnIdx = source.indexOf('function SelectProjectPrompt')
-  assert.ok(fnIdx > 0, 'SelectProjectPrompt must exist')
-  const fnBody = source.slice(fnIdx, fnIdx + 600)
-  assert.match(fnBody, /<ProjectSelector\b/, 'must render the existing ProjectSelector component')
-  assert.match(source, /import \{ ProjectSelector \} from '@\/components\/project-selector'/)
 })

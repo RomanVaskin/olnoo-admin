@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
+import { resolveLeadsProjectFilter, wantsAllProjects } from '@/lib/leads-project-filter'
 
 const KNOWN_STATUSES = ['idea', 'draft', 'ready', 'published'] as const
 export type SocialStatus = (typeof KNOWN_STATUSES)[number]
@@ -122,28 +123,47 @@ export type SocialResult = { error: string; status: number } | { row: Record<str
  * caller-supplied slug — a post id from another project can never be read, edited, or deleted
  * by supplying a different id with this project's slug (or vice versa). */
 
+/**
+ * `projectSlug` of `null`/`''`/`'all'` lists posts across every project (the Social "All projects"
+ * mode) — each row carries its own `project_slug`/`project_name` (joined from `projects`, same
+ * pattern as `LEADS_SELECT` in app/api/leads/route.ts and lib/social-overview.ts) so the UI can
+ * show a Project column and know which project to scope a later edit/delete/publish to. A real
+ * slug scopes to that one project as before. An unresolved slug returns `null` (never silently
+ * falls back to "all") — reuses lib/leads-project-filter.ts's `wantsAllProjects`/
+ * `resolveLeadsProjectFilter` rather than re-deciding the same fail-closed rule again.
+ */
 export async function listSocialPosts(
   projectSlug: string | null,
   filters: { q?: string; status?: string } = {},
 ): Promise<Record<string, unknown>[] | null> {
-  const projectId = await resolveProjectId(projectSlug)
-  if (!projectId) return null
+  const resolvedProjectId = wantsAllProjects(projectSlug) ? null : await resolveProjectId(projectSlug)
+  const filter = resolveLeadsProjectFilter(projectSlug, resolvedProjectId)
+  if (filter.kind === 'none') return null
 
-  const clauses = ['project_id = $1']
-  const params: unknown[] = [projectId]
+  const clauses: string[] = []
+  const params: unknown[] = []
+  if (filter.kind === 'one') {
+    params.push(filter.projectId)
+    clauses.push(`sp.project_id = $${params.length}`)
+  }
 
   const q = filters.q?.trim()
   if (q) {
     params.push(`%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)
-    clauses.push(`(topic ILIKE $${params.length} ESCAPE '\\' OR category ILIKE $${params.length} ESCAPE '\\')`)
+    clauses.push(`(sp.topic ILIKE $${params.length} ESCAPE '\\' OR sp.category ILIKE $${params.length} ESCAPE '\\')`)
   }
   if (filters.status && isSocialStatus(filters.status)) {
     params.push(filters.status)
-    clauses.push(`status = $${params.length}`)
+    clauses.push(`sp.status = $${params.length}`)
   }
 
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
   const { rows } = await pool.query(
-    `SELECT * FROM social_posts WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`,
+    `SELECT sp.*, p.slug AS project_slug, p.name AS project_name
+     FROM social_posts sp
+     JOIN projects p ON p.id = sp.project_id
+     ${where}
+     ORDER BY sp.created_at DESC`,
     params,
   )
   return rows

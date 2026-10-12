@@ -4,7 +4,6 @@ import { useCallback } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { OlnooLogo } from '@/components/olnoo-logo'
 import { LocaleSwitcher } from '@/components/locale-switcher'
-import { ProjectSelector } from '@/components/project-selector'
 import { useI18n } from '@/components/i18n-provider'
 import { AdminOverview } from '@/components/sections/admin-overview'
 import { ClientsView } from '@/components/sections/clients-view'
@@ -110,21 +109,6 @@ const clientGroups: NavGroup[] = [
 
 function childIds(item: NavItem) {
   return item.children?.map((c) => c.id) ?? []
-}
-
-/** Shown instead of social-posts/social-accounts when no project is explicitly selected yet (see
- * the comment above their render guards) — gives the admin a direct, visible way to pick one
- * right here, rather than requiring them to first go set a project on a different screen (e.g.
- * CRM) and navigate back. Reuses the same ProjectSelector every other project-scoped screen uses;
- * picking a real project here is the only way these two screens render their content. */
-function SelectProjectPrompt({ onProjectChange }: { onProjectChange: (id: string) => void }) {
-  const { t } = useI18n()
-  return (
-    <div className="flex flex-col items-start gap-4 border border-hairline bg-card px-6 py-10">
-      <p className="label-mono text-muted-foreground">{t.shell.selectProjectPrompt}</p>
-      <ProjectSelector value="all" onChange={onProjectChange} />
-    </div>
-  )
 }
 
 export function AppShell() {
@@ -316,27 +300,18 @@ export function AppShell() {
           {active === 'social-overview' && (
             <SocialOverview project={project} onProjectChange={setProject} />
           )}
-          {/* social-posts/social-accounts/ads cannot function without a real project slug (their
-              API calls 400/return nothing for "all") — unlike admin-overview/crm-overview, which
-              have their own "All projects" aggregate view. project === 'all' means no project is
-              explicitly selected, so these three render nothing rather than fetching with
-              project=all (which they can't handle) or guessing which project the admin meant.
-              There is deliberately no fallback to a project remembered from a previous, unrelated
-              session (e.g. via localStorage): these screens create and publish data (a social
-              account, a post, an ad campaign) under whichever project is active, so silently
-              reusing a project the admin isn't currently looking at is exactly how a new
-              Instagram account or a new post ends up attached to the wrong client. An explicit
-              `?project=` in the URL (from a real bookmark/link, or from clicking
-              ProjectSelector) is the only source. */}
-          {active === 'social-posts' && (
-            project !== 'all'
-              ? <SocialView project={project} onProjectChange={setProject} />
-              : <SelectProjectPrompt onProjectChange={setProject} />
-          )}
+          {/* social-posts/social-accounts support "All projects" the same way social-overview
+              does: their list reads join `projects` and show a Project column, with no project
+              required just to look. Only ads still cannot function without a real project slug
+              (its API calls 400/return nothing for "all"), so it keeps its own gate. There is
+              deliberately no fallback to a project remembered from a previous, unrelated session
+              (e.g. via localStorage) for any of these — creating/editing/publishing a post or
+              account always happens in the context of one specific project the admin explicitly
+              picked (via the URL or ProjectSelector), never guessed: see CreateForm/PostDetail/
+              AccountDetail in social-view.tsx and social-accounts-view.tsx. */}
+          {active === 'social-posts' && <SocialView project={project} onProjectChange={setProject} />}
           {active === 'social-accounts' && (
-            project !== 'all'
-              ? <SocialAccountsView project={project} onProjectChange={setProject} />
-              : <SelectProjectPrompt onProjectChange={setProject} />
+            <SocialAccountsView project={project} onProjectChange={setProject} />
           )}
           {active === 'ads' && project !== 'all' && <AdsView project={project} />}
           {active === 'settings' && <SettingsView />}

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, HeaderActions, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
+import { useProjects } from '@/components/sections/seo-project-picker'
 import { useI18n } from '@/components/i18n-provider'
 import { SocialPublications, type PublicationSummary } from '@/components/sections/social-publications'
 import { toDatetimeLocalInputValue, formatPublishDate } from '@/lib/social-publish-date-format'
@@ -27,6 +28,12 @@ type SocialPost = {
   publishDate: string
   status: SocialStatus
   createdAt: string
+  // Always present — the list API now joins `projects` for every row, in both "all" and
+  // single-project mode (see lib/social.ts's listSocialPosts). This is the project a row's own
+  // edit/delete/publish calls are scoped to, independent of the screen's current filter — critical
+  // once the filter is "all" and the table shows rows from many different projects at once.
+  projectSlug: string
+  projectName: string
 }
 
 function fromApiPost(row: Record<string, unknown>): SocialPost {
@@ -46,6 +53,8 @@ function fromApiPost(row: Record<string, unknown>): SocialPost {
     publishDate: (row.publish_date as string) ?? '',
     status: (row.status as SocialStatus) ?? 'idea',
     createdAt: row.created_at as string,
+    projectSlug: (row.project_slug as string) ?? '',
+    projectName: (row.project_name as string) ?? '',
   }
 }
 
@@ -464,18 +473,25 @@ function CreateForm({
   onCreated: (post: SocialPost) => void
 }) {
   const { t } = useI18n()
+  const { projects } = useProjects()
+  const projectOptions = projects.filter((p) => p.slug)
+  // A specific project selected in the filter bar pre-fills the form; "All projects" leaves it
+  // blank and the admin must choose one explicitly — a post can never be created without a known
+  // project (same rule as LeadCreateForm in leads-view.tsx).
+  const [selectedProject, setSelectedProject] = useState(project !== 'all' ? project : '')
   const [topic, setTopic] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   async function submit() {
+    if (!selectedProject) return
     setSaving(true)
     setError('')
     try {
       const res = await fetch('/api/social', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, topic }),
+        body: JSON.stringify({ project: selectedProject, topic }),
       })
       if (!res.ok) throw new Error('failed')
       onCreated(fromApiPost(await res.json()))
@@ -503,6 +519,23 @@ function CreateForm({
 
         <div className="flex flex-col gap-5 px-6 py-6">
           <label className="flex flex-col gap-1.5">
+            <span className="label-mono text-muted-foreground">{t.table.project}</span>
+            <select
+              value={selectedProject}
+              onChange={(e) => setSelectedProject(e.target.value)}
+              className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+            >
+              <option value="">{t.socialView.selectProjectPlaceholder}</option>
+              {projectOptions.map((p) => (
+                <option key={p.slug} value={p.slug as string}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {!selectedProject && <span className="text-xs text-muted-foreground">{t.socialView.selectProjectHint}</span>}
+          </label>
+
+          <label className="flex flex-col gap-1.5">
             <span className="label-mono text-muted-foreground">Topic</span>
             <input
               value={topic}
@@ -513,7 +546,7 @@ function CreateForm({
 
           <button
             onClick={submit}
-            disabled={saving || !topic.trim()}
+            disabled={saving || !topic.trim() || !selectedProject}
             className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
           >
             {saving ? t.common.saving : t.socialView.addPost}
@@ -639,6 +672,7 @@ export function SocialView({
         <thead>
           <tr>
             <Th>Topic</Th>
+            <Th className="max-w-[140px]">{t.table.project}</Th>
             <Th>{t.socialView.channels}</Th>
             <Th>{t.socialView.filterStatus}</Th>
             <Th>{t.socialView.publishDate}</Th>
@@ -652,6 +686,9 @@ export function SocialView({
               className="cursor-pointer transition-colors hover:bg-muted/60"
             >
               <Td className="font-medium text-foreground">{p.topic}</Td>
+              <Td className="max-w-[140px] truncate text-muted-foreground" title={p.projectName || p.projectSlug}>
+                {p.projectName || p.projectSlug}
+              </Td>
               <Td>
                 <span className="label-mono text-muted-foreground">
                   {p.channels.map((c) => t.socialChannel[c]).join(', ') || '—'}
@@ -671,6 +708,7 @@ export function SocialView({
               <Td> </Td>
               <Td> </Td>
               <Td> </Td>
+              <Td> </Td>
             </tr>
           )}
         </tbody>
@@ -679,7 +717,7 @@ export function SocialView({
       {selected && (
         <PostDetail
           post={selected}
-          project={project}
+          project={selected.projectSlug}
           onClose={() => setSelected(null)}
           onSaved={handleSaved}
           onDeleted={handleDeleted}

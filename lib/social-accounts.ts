@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { isSocialChannel } from '@/lib/social'
+import { resolveLeadsProjectFilter, wantsAllProjects } from '@/lib/leads-project-filter'
 
 const KNOWN_STATUSES = ['created', 'connected', 'error'] as const
 export type SocialAccountStatus = (typeof KNOWN_STATUSES)[number]
@@ -39,23 +40,42 @@ export type SocialAccountResult = { error: string; status: number } | { row: Rec
 const ACCOUNT_COLUMNS =
   'id, project_id, platform, name, username, public_url, status, active, notes, vk_group_id, connection_error, created_at, updated_at'
 
+/**
+ * `projectSlug` of `null`/`''`/`'all'` lists accounts across every project (the Social "All
+ * projects" mode) — each row carries its own `project_slug`/`project_name` (joined from
+ * `projects`, same pattern as `listSocialPosts` and `lib/social-overview.ts`) so the UI can show a
+ * Project column and know which project to scope a later edit/delete/connection check to. A real
+ * slug scopes to that one project as before. An unresolved slug returns `null`.
+ */
 export async function listSocialAccounts(
   projectSlug: string | null,
   filters: { platform?: string } = {},
 ): Promise<Record<string, unknown>[] | null> {
-  const projectId = await resolveProjectId(projectSlug)
-  if (!projectId) return null
+  const resolvedProjectId = wantsAllProjects(projectSlug) ? null : await resolveProjectId(projectSlug)
+  const filter = resolveLeadsProjectFilter(projectSlug, resolvedProjectId)
+  if (filter.kind === 'none') return null
 
-  const clauses = ['project_id = $1']
-  const params: unknown[] = [projectId]
-
+  const clauses: string[] = []
+  const params: unknown[] = []
+  if (filter.kind === 'one') {
+    params.push(filter.projectId)
+    clauses.push(`sa.project_id = $${params.length}`)
+  }
   if (filters.platform && isSocialChannel(filters.platform)) {
     params.push(filters.platform)
-    clauses.push(`platform = $${params.length}`)
+    clauses.push(`sa.platform = $${params.length}`)
   }
 
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+  const accountColumnsQualified = ACCOUNT_COLUMNS.split(', ')
+    .map((column) => `sa.${column}`)
+    .join(', ')
   const { rows } = await pool.query(
-    `SELECT ${ACCOUNT_COLUMNS} FROM social_accounts WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`,
+    `SELECT ${accountColumnsQualified}, p.slug AS project_slug, p.name AS project_name
+     FROM social_accounts sa
+     JOIN projects p ON p.id = sa.project_id
+     ${where}
+     ORDER BY sa.created_at DESC`,
     params,
   )
   return rows
