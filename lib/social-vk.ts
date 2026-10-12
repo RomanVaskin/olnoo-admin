@@ -1,14 +1,25 @@
 import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
+import { decryptAccountSecret } from '@/lib/social-account-crypto'
 
-// Server-side only. VK_ACCESS_TOKEN must never be sent to the browser — it is read here and only
-// here, inside a function called exclusively from a server route handler.
+// Server-side only. A VK community's access token must never be sent to the browser — it is
+// decrypted here and only here, inside a function called exclusively from a server route handler.
+//
+// Each project connects its own VK community (Social → Accounts), token encrypted at rest in that
+// account's own social_accounts row (see db/migrations/0021_social_accounts_vk_credentials.sql,
+// lib/social-accounts-vk-connection.ts) — there is no shared global VK_ACCESS_TOKEN anymore. This
+// is what actually prevents one project's content from reaching another project's VK community: the
+// credentials used for a publish are scoped by construction to the social_accounts row this
+// project's own publication is linked to (already project_id-scoped, same as every other query in
+// this module), not by a separate ownership check layered on top.
 
 export type SocialVkResult = { error: string; status: number } | { row: Record<string, unknown> }
 
 // Overridable the same way TELEGRAM_API_BASE_URL overrides lib/social-telegram.ts's base URL —
 // not a secret, just lets a non-production environment point at a mock VK API for verification.
+// lib/social-vk-verify.ts (connection verification) reads the same env var independently, kept as
+// a separate read rather than importing this constant, so that file stays free of `@/` imports.
 const VK_API_BASE = process.env.VK_API_BASE_URL || 'https://api.vk.com'
 
 // https://dev.vk.com/en/method/wall.post — current stable API version as of this integration.
@@ -62,10 +73,17 @@ async function resolveOwnerId(identifier: string, token: string): Promise<{ owne
  * Publishes one social_publications row (platform must be 'vk') via the VK API's wall.post,
  * posting as the community (from_group=1). Text is vk_text if the post has one, else the shared
  * body. The target community is the linked social_accounts row (publication.social_account_id) if
- * set, else the project's first active vk account — resolved from that account's username (or,
- * if empty, the last path segment of its public_url) via VK's utils.resolveScreenName when it
- * isn't already a numeric id. Project-scoped like the rest of the Social module — a publication id
- * from another project resolves as not-found.
+ * set, else the project's first active vk account. Project-scoped like the rest of the Social
+ * module — a publication id from another project resolves as not-found.
+ *
+ * Credentials come from that specific account row, not a global env var: `vk_access_token_encrypted`
+ * is decrypted here, and `vk_group_id` (set when the community was connected/verified — see
+ * lib/social-accounts-vk-connection.ts) is used as the wall.post owner_id directly. A legacy account
+ * that was never connected this way (no vk_access_token_encrypted) is refused with a clear error
+ * rather than falling back to any shared credential — there is nothing left to fall back to, and
+ * guessing which token to use is exactly the cross-project risk this replaces. If `vk_group_id` is
+ * for some reason blank despite a token being present, the old username/public_url resolution via
+ * VK's utils.resolveScreenName still runs as a fallback, using that same per-account token.
  *
  * Never re-sends an already-published publication (duplicate protection: rejected before any VK
  * API call). A VK API error or network failure is not thrown — it is written to the row as
@@ -106,10 +124,18 @@ export async function publishSocialPublicationToVk(
   const text = post?.vk_text?.trim() || post?.body?.trim() || ''
   if (!text) return { error: 'post has no content to publish', status: 400 }
 
-  let account: { username: string; public_url: string; platform?: string; active: boolean } | undefined
+  type VkAccountRow = {
+    username: string
+    public_url: string
+    platform?: string
+    active: boolean
+    vk_access_token_encrypted: string
+    vk_group_id: string
+  }
+  let account: VkAccountRow | undefined
   if (publication.social_account_id) {
-    const { rows } = await pool.query<{ username: string; public_url: string; platform: string; active: boolean }>(
-      'SELECT username, public_url, platform, active FROM social_accounts WHERE id = $1 AND project_id = $2',
+    const { rows } = await pool.query<VkAccountRow>(
+      'SELECT username, public_url, platform, active, vk_access_token_encrypted, vk_group_id FROM social_accounts WHERE id = $1 AND project_id = $2',
       [publication.social_account_id, projectId],
     )
     account = rows[0]
@@ -117,8 +143,8 @@ export async function publishSocialPublicationToVk(
       return { error: 'linked account is not a VK account', status: 400 }
     }
   } else {
-    const { rows } = await pool.query<{ username: string; public_url: string; active: boolean }>(
-      `SELECT username, public_url, active FROM social_accounts WHERE project_id = $1 AND platform = 'vk' AND active = true ORDER BY created_at ASC LIMIT 1`,
+    const { rows } = await pool.query<VkAccountRow>(
+      `SELECT username, public_url, active, vk_access_token_encrypted, vk_group_id FROM social_accounts WHERE project_id = $1 AND platform = 'vk' AND active = true ORDER BY created_at ASC LIMIT 1`,
       [projectId],
     )
     account = rows[0]
@@ -130,21 +156,31 @@ export async function publishSocialPublicationToVk(
     return { error: 'the linked VK account is not active', status: 400 }
   }
 
-  const identifier = account.username?.trim() || screenNameFromPublicUrl(account.public_url || '')
-  if (!identifier) {
-    return { error: 'the VK account has no username or public URL to identify the community', status: 400 }
+  if (!account.vk_access_token_encrypted) {
+    return {
+      error: 'this VK community has not connected its own access token yet — connect it from Social → Accounts before publishing',
+      status: 400,
+    }
+  }
+  let token: string
+  try {
+    token = decryptAccountSecret(account.vk_access_token_encrypted)
+  } catch (err) {
+    return { error: `Could not decrypt the stored VK token: ${err instanceof Error ? err.message : String(err)}`, status: 500 }
   }
 
-  const token = process.env.VK_ACCESS_TOKEN
-  if (!token) {
-    return { error: 'VK_ACCESS_TOKEN is not configured on the server', status: 500 }
+  const fallbackIdentifier = account.username?.trim() || screenNameFromPublicUrl(account.public_url || '')
+  if (!account.vk_group_id?.trim() && !fallbackIdentifier) {
+    return { error: 'the VK account has no resolved group id, username, or public URL to identify the community', status: 400 }
   }
 
   let vkError: string | null = null
   let postId: number | null = null
   let ownerId: number | null = null
   try {
-    const resolved = await resolveOwnerId(identifier, token)
+    const resolved = account.vk_group_id?.trim()
+      ? { ownerId: -Math.abs(Number(account.vk_group_id.trim())) }
+      : await resolveOwnerId(fallbackIdentifier, token)
     if ('error' in resolved) {
       vkError = resolved.error
     } else {

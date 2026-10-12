@@ -6,7 +6,7 @@ import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/prim
 import { useI18n } from '@/components/i18n-provider'
 
 const PLATFORMS = ['telegram', 'instagram', 'threads', 'vk'] as const
-const STATUSES = ['created', 'connected'] as const
+const STATUSES = ['created', 'connected', 'error'] as const
 
 type SocialPlatform = (typeof PLATFORMS)[number]
 type SocialAccountStatus = (typeof STATUSES)[number]
@@ -21,6 +21,11 @@ type SocialAccount = {
   active: boolean
   notes: string
   createdAt: string
+  // VK only — never the token itself (the API never returns it). vkGroupId is set once a token has
+  // been verified at least once; its presence is how the UI knows a VK connection already exists
+  // without needing to see the secret.
+  vkGroupId: string
+  connectionError: string
 }
 
 function fromApiAccount(row: Record<string, unknown>): SocialAccount {
@@ -34,6 +39,8 @@ function fromApiAccount(row: Record<string, unknown>): SocialAccount {
     active: (row.active as boolean) ?? true,
     notes: (row.notes as string) ?? '',
     createdAt: row.created_at as string,
+    vkGroupId: (row.vk_group_id as string) ?? '',
+    connectionError: (row.connection_error as string) ?? '',
   }
 }
 
@@ -60,6 +67,9 @@ function AccountDetail({
   const [notes, setNotes] = useState(account.notes)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [vkToken, setVkToken] = useState('')
+  const [vkConnecting, setVkConnecting] = useState(false)
+  const [vkConnectError, setVkConnectError] = useState('')
 
   useEffect(() => {
     setPlatform(account.platform)
@@ -69,6 +79,8 @@ function AccountDetail({
     setStatus(account.status)
     setActive(account.active)
     setNotes(account.notes)
+    setVkToken('')
+    setVkConnectError('')
   }, [account])
 
   async function save(patch: Record<string, unknown>) {
@@ -87,6 +99,29 @@ function AccountDetail({
 
   async function saveAll() {
     await save({ name, username, publicUrl, notes })
+  }
+
+  async function connectVk(token: string | null) {
+    setVkConnecting(true)
+    setVkConnectError('')
+    try {
+      const res = await fetch(`/api/social-accounts/${account.id}/vk-connection?project=${encodeURIComponent(project)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(token ? { accessToken: token } : {}),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setVkConnectError((data && typeof data.error === 'string' && data.error) || t.socialAccountsView.createError)
+        return
+      }
+      const updated = fromApiAccount(data)
+      onSaved(updated)
+      setVkToken('')
+      if (updated.status === 'error') setVkConnectError(updated.connectionError)
+    } finally {
+      setVkConnecting(false)
+    }
   }
 
   async function handleDelete() {
@@ -170,6 +205,56 @@ function AccountDetail({
               className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
             />
           </label>
+
+          {platform === 'vk' && account.publicUrl && (
+            <a
+              href={account.publicUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="label-mono border border-hairline px-4 py-2.5 text-center text-foreground transition-colors hover:bg-muted/60"
+            >
+              {t.socialAccountsView.openInVk}
+            </a>
+          )}
+
+          {platform === 'vk' && (
+            <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
+              <span className="label-mono text-muted-foreground">{t.socialAccountsView.vkConnection}</span>
+              <div className="flex items-center gap-2">
+                <span className={`size-1.5 rounded-full ${account.status === 'connected' ? 'bg-blue' : account.status === 'error' ? 'bg-destructive' : 'bg-muted-foreground'}`} aria-hidden />
+                <span className="text-sm text-foreground/80">
+                  {account.status === 'connected' ? t.socialAccountsView.vkConnected : t.socialAccountsView.vkNotConnected}
+                </span>
+              </div>
+              {account.connectionError && <p className="text-sm text-destructive">{account.connectionError}</p>}
+              <input
+                type="password"
+                value={vkToken}
+                onChange={(e) => setVkToken(e.target.value)}
+                placeholder={account.vkGroupId ? t.socialAccountsView.vkTokenPlaceholderSet : t.socialAccountsView.vkTokenPlaceholderUnset}
+                className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => connectVk(vkToken)}
+                  disabled={vkConnecting || !vkToken.trim()}
+                  className="label-mono flex-1 border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+                >
+                  {vkConnecting ? t.socialAccountsView.vkConnecting : t.socialAccountsView.vkConnect}
+                </button>
+                {account.vkGroupId && (
+                  <button
+                    onClick={() => connectVk(null)}
+                    disabled={vkConnecting}
+                    className="label-mono flex-1 border border-hairline px-4 py-2.5 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+                  >
+                    {vkConnecting ? t.socialAccountsView.vkConnecting : t.socialAccountsView.vkRecheck}
+                  </button>
+                )}
+              </div>
+              {vkConnectError && <p className="text-sm text-destructive">{vkConnectError}</p>}
+            </div>
+          )}
 
           <label className="flex flex-col gap-1.5">
             <span className="label-mono text-muted-foreground">{t.socialAccountsView.notes}</span>
