@@ -64,9 +64,16 @@ export function verifyProjectIsAllowed(
   if (requested !== ownerProjectSlug) {
     return {
       ok: false,
+      // Echoing the requested slug (not just the configured owner) is what makes this error
+      // self-diagnosing: without it, a slug that merely differs by whitespace, casing kept as
+      // typed, or an altogether different project looks identical to a real misconfiguration —
+      // an admin seeing only the owner side has no way to tell which one is "wrong" without
+      // reading server logs or this source file. Both sides are logged exactly as compared
+      // (trimmed+lowercased), never the raw env var or raw request value, so this never risks
+      // leaking anything beyond a project slug, which is not a secret.
       error: `This project is not the one allowed to use the global ${platformLabel} credentials ` +
-        `(configured owner project: "${ownerProjectSlug}"). Refusing to publish — this would use ` +
-        `another project's credentials.`,
+        `(requested project: "${requested ?? '(none)'}", configured owner project: "${ownerProjectSlug}"). ` +
+        `Refusing to publish — this would use another project's credentials.`,
     }
   }
   return { ok: true }
