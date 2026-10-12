@@ -83,6 +83,18 @@ export function Metric({
   )
 }
 
+/**
+ * Pairs a `ProjectSelector`-style control (a taller, two-line button: name + domain) with a plain
+ * single-line action button — e.g. "+ Add post" — at matching height, both vertically centered.
+ * `items-stretch` makes the shorter sibling grow to match the taller one; the single-line button
+ * still needs its own `flex items-center justify-center` so its label re-centers once stretched
+ * (see its usages in social-view.tsx / social-accounts-view.tsx). One shared fix for the one place
+ * this pairing exists, rather than a bespoke height hack repeated per screen.
+ */
+export function HeaderActions({ children }: { children: ReactNode }) {
+  return <div className="flex flex-wrap items-stretch gap-2">{children}</div>
+}
+
 export function TableShell({ children }: { children: ReactNode }) {
   return (
     <div className="overflow-x-auto border border-hairline bg-card">

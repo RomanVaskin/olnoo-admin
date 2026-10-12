@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
-import { SectionHeader, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
+import { SectionHeader, HeaderActions, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
 import { useI18n } from '@/components/i18n-provider'
 import { SocialPublications, type PublicationSummary } from '@/components/sections/social-publications'
@@ -592,15 +592,15 @@ export function SocialView({
         title={t.socialView.title}
         description={t.socialView.description}
         action={
-          <div className="flex flex-wrap items-center gap-2">
+          <HeaderActions>
             <ProjectSelector value={project} onChange={onProjectChange} />
             <button
               onClick={() => setCreating(true)}
-              className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground"
+              className="label-mono flex items-center justify-center border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground"
             >
               {t.socialView.addPost}
             </button>
-          </div>
+          </HeaderActions>
         }
       />
 
