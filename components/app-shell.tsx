@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect } from 'react'
+import { useCallback } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { OlnooLogo } from '@/components/olnoo-logo'
 import { LocaleSwitcher } from '@/components/locale-switcher'
@@ -32,13 +32,6 @@ import {
 } from '@/components/sections/client-view'
 
 type Mode = 'admin' | 'client'
-
-// Screens that cannot function without a real project slug (their API calls 400/return nothing
-// for "all") — as opposed to admin-overview/crm-overview, which have their own "All projects"
-// aggregate view. If one of these loads with no ?project=, we fall back to whatever project the
-// admin last had selected, remembered in localStorage — never a hardcoded slug.
-const PROJECT_REQUIRED_SCREENS = new Set(['social-posts', 'social-accounts', 'ads'])
-const LAST_PROJECT_STORAGE_KEY = 'olnoo-admin-last-project'
 
 type NavItem = {
   id: string
@@ -147,27 +140,6 @@ export function AppShell() {
     },
     [pathname, router, searchParams],
   )
-
-  // Remembers the last real project selected, and recovers it for a project-required screen that
-  // somehow ends up with no ?project= (e.g. a stale link, a bookmark) — never a hardcoded slug.
-  useEffect(() => {
-    if (rawProject) {
-      try {
-        window.localStorage.setItem(LAST_PROJECT_STORAGE_KEY, rawProject)
-      } catch {
-        // Private mode / disabled storage — this fallback simply won't be available, never fatal.
-      }
-      return
-    }
-    if (!PROJECT_REQUIRED_SCREENS.has(active)) return
-    let remembered: string | null = null
-    try {
-      remembered = window.localStorage.getItem(LAST_PROJECT_STORAGE_KEY)
-    } catch {
-      remembered = null
-    }
-    if (remembered) updateParams({ project: remembered })
-  }, [active, rawProject, updateParams])
 
   function switchMode(next: Mode) {
     updateParams({
@@ -324,10 +296,18 @@ export function AppShell() {
             <CrmOverview project={project} onProjectChange={setProject} />
           )}
           {active === 'crm-leads' && <LeadsView project={project} onProjectChange={setProject} />}
-          {/* project === 'all' here is always transient for these two: the recovery effect above
-              redirects to the remembered project on the very next tick, if one exists. Not
-              rendering yet avoids firing a project=all fetch these project-required screens
-              can't handle. */}
+          {/* social-posts/social-accounts/ads cannot function without a real project slug (their
+              API calls 400/return nothing for "all") — unlike admin-overview/crm-overview, which
+              have their own "All projects" aggregate view. project === 'all' means no project is
+              explicitly selected, so these three render nothing rather than fetching with
+              project=all (which they can't handle) or guessing which project the admin meant.
+              There is deliberately no fallback to a project remembered from a previous, unrelated
+              session (e.g. via localStorage): these screens create and publish data (a social
+              account, a post, an ad campaign) under whichever project is active, so silently
+              reusing a project the admin isn't currently looking at is exactly how a new
+              Instagram account or a new post ends up attached to the wrong client. An explicit
+              `?project=` in the URL (from a real bookmark/link, or from clicking
+              ProjectSelector) is the only source. */}
           {active === 'social-posts' && project !== 'all' && <SocialView project={project} />}
           {active === 'social-accounts' && project !== 'all' && <SocialAccountsView project={project} />}
           {active === 'ads' && project !== 'all' && <AdsView project={project} />}
