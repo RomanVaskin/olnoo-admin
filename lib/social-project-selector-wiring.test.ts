@@ -33,21 +33,71 @@ test('social-accounts-view.tsx (Accounts): reuses the existing ProjectSelector a
   assert.match(source, /onProjectChange:\s*\(id:\s*string\)\s*=>\s*void/, 'SocialAccountsView must accept onProjectChange')
 })
 
-test('social-view.tsx: creating a post always sends the exact `project` the screen was given, never a hardcoded or substituted value', async () => {
+// Posts/Accounts now support "All projects" for listing, so a post/account can no longer be
+// created by silently reusing the screen's filter `project` as-is (that would be "all" — not a
+// real project). CreateForm now has its own `selectedProject` state, pre-filled only when the
+// filter is already a real project and left blank for "all" — same pattern as LeadCreateForm in
+// leads-view.tsx — so creation always requires an explicit, non-automatic project choice.
+test('social-view.tsx: creating a post requires an explicit project choice, never an automatic one from "all"', async () => {
   const source = await sourceOf('../components/sections/social-view.tsx')
-  // The CreateForm's submit body must reference `project` (the prop) directly.
+  assert.match(
+    source,
+    /const \[selectedProject, setSelectedProject\] = useState\(project !== 'all' \? project : ''\)/,
+    "CreateForm's own selectedProject must start blank for 'all', pre-filled only for a real project",
+  )
   const submitIdx = source.indexOf('async function submit()')
   assert.ok(submitIdx > 0)
   const submitBody = source.slice(submitIdx, submitIdx + 600)
-  assert.match(submitBody, /JSON\.stringify\(\{\s*project,\s*topic\s*\}\)/, 'post creation must send the project prop as-is')
+  assert.match(submitBody, /if \(!selectedProject\) return/, 'must refuse to submit without an explicit project')
+  assert.match(
+    submitBody,
+    /JSON\.stringify\(\{\s*project:\s*selectedProject,\s*topic\s*\}\)/,
+    'post creation must send the explicitly chosen project, never the screen\'s raw (possibly "all") filter',
+  )
+  assert.match(source, /disabled=\{saving \|\| !topic\.trim\(\) \|\| !selectedProject\}/, 'submit button must stay disabled until a project is chosen')
 })
 
-test('social-accounts-view.tsx: creating an account always sends the exact `project` the screen was given, never a hardcoded or substituted value', async () => {
+test('social-accounts-view.tsx: creating an account requires an explicit project choice, never an automatic one from "all"', async () => {
   const source = await sourceOf('../components/sections/social-accounts-view.tsx')
+  assert.match(
+    source,
+    /const \[selectedProject, setSelectedProject\] = useState\(project !== 'all' \? project : ''\)/,
+    "CreateForm's own selectedProject must start blank for 'all', pre-filled only for a real project",
+  )
   const submitIdx = source.indexOf('async function submit()')
   assert.ok(submitIdx > 0)
   const submitBody = source.slice(submitIdx, submitIdx + 600)
-  assert.match(submitBody, /JSON\.stringify\(\{\s*project,\s*platform,\s*name,\s*username\s*\}\)/, 'account creation must send the project prop as-is')
+  assert.match(submitBody, /if \(!selectedProject\) return/, 'must refuse to submit without an explicit project')
+  assert.match(
+    submitBody,
+    /JSON\.stringify\(\{\s*project:\s*selectedProject,\s*platform,\s*name,\s*username\s*\}\)/,
+    'account creation must send the explicitly chosen project, never the screen\'s raw (possibly "all") filter',
+  )
+  assert.match(source, /disabled=\{saving \|\| !selectedProject\}/, 'submit button must stay disabled until a project is chosen')
+})
+
+// Once the list supports "All projects", a row's own edit/delete/publish calls must be scoped to
+// THAT row's project (it may differ from the screen's current filter), never to the screen's
+// filter value directly — otherwise selecting a post from project B while filtered to "all" would
+// try to PATCH/DELETE/publish it under project "all", which the API rejects outright.
+test('social-view.tsx: PostDetail is scoped to the selected post\'s OWN project, not the screen\'s filter', async () => {
+  const source = await sourceOf('../components/sections/social-view.tsx')
+  assert.match(source, /<PostDetail\s+post=\{selected\}\s+project=\{selected\.projectSlug\}/)
+})
+
+test('social-accounts-view.tsx: AccountDetail is scoped to the selected account\'s OWN project, not the screen\'s filter', async () => {
+  const source = await sourceOf('../components/sections/social-accounts-view.tsx')
+  assert.match(source, /<AccountDetail\s+account=\{selected\}\s+project=\{selected\.projectSlug\}/)
+})
+
+// Requirement: in "All projects" mode, the list shows a Project column, by analogy with CRM's
+// leads-view.tsx (t.table.project, unconditionally rendered — not just when project === 'all').
+test('social-view.tsx and social-accounts-view.tsx: the table shows a Project column, same as CRM\'s leads-view.tsx', async () => {
+  for (const file of ['../components/sections/social-view.tsx', '../components/sections/social-accounts-view.tsx']) {
+    const source = await sourceOf(file)
+    assert.match(source, /<Th className="max-w-\[140px\]">\{t\.table\.project\}<\/Th>/, `${file}: table header must include a Project column`)
+    assert.match(source, /projectName \|\| \w\.projectSlug/, `${file}: Project cell must show projectName, falling back to projectSlug`)
+  }
 })
 
 test('app-shell.tsx: passes onProjectChange (setProject) into both Social screens, not just project', async () => {
