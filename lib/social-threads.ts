@@ -2,14 +2,17 @@ import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { THREADS_TEXT_MAX_LENGTH, resolveThreadsText } from '@/lib/social-threads-text'
+import { compareAccountOwnership } from '@/lib/social-account-ownership'
 
 // Server-side only. THREADS_ACCESS_TOKEN and THREADS_USER_ID must never be sent to the browser —
 // they are read here and only here, inside a function called exclusively from a server route
 // handler. Like Instagram, the target account isn't resolved from social_accounts: a Threads
 // access token is already scoped to one specific Threads user, so the user id comes from its own
-// env var. social_accounts is still used, but only as a project-scoped "is Threads actually
-// connected and active for this project" guard — its username stays the real @handle, never a
-// token or numeric id.
+// env var. social_accounts is still used, both as a project-scoped "is Threads actually connected
+// and active for this project" guard, AND — since that guard alone can't prove the global
+// credentials point at *this* project's account — as the known-good @handle an ownership check
+// (lib/social-account-ownership.ts) compares the actually-connected account's username against
+// before any publish call is made. See that module for why this exists.
 
 export type SocialThreadsResult = { error: string; status: number } | { row: Record<string, unknown> }
 
@@ -64,9 +67,13 @@ async function waitForContainerFinished(containerId: string, token: string): Pro
  * Project-scoped like the rest of the Social module — a publication id from another project
  * resolves as not-found. Requires a project-scoped, active social_accounts row for platform
  * 'threads' to exist (linked via social_account_id if set, else the project's first active
- * threads account) purely as a connection guard — the actual API target user comes from
- * THREADS_USER_ID, since a Threads access token is already scoped to one user (never the
- * account's username/handle — that would not be a valid API user id).
+ * threads account) — the actual API target user comes from THREADS_USER_ID, since a Threads
+ * access token is already scoped to one user (never the account's username/handle — that would
+ * not be a valid API user id), which is global across every project. Before any publish call,
+ * this account's `username` column is compared against the username the global credentials are
+ * actually connected to (see lib/social-account-ownership.ts); a mismatch or a blank username
+ * refuses to publish — this is the check that stops one project's content from reaching another
+ * project's real Threads account.
  *
  * Never re-sends an already-published publication (duplicate protection: rejected before any
  * Threads API call). A Threads API error, a failed/expired container, or a network failure is not
@@ -101,10 +108,10 @@ export async function publishSocialPublicationToThreads(
     return { error: 'this publication is already published', status: 409 }
   }
 
-  let account: { platform?: string; active: boolean } | undefined
+  let account: { platform?: string; active: boolean; username: string } | undefined
   if (publication.social_account_id) {
-    const { rows } = await pool.query<{ platform: string; active: boolean }>(
-      'SELECT platform, active FROM social_accounts WHERE id = $1 AND project_id = $2',
+    const { rows } = await pool.query<{ platform: string; active: boolean; username: string }>(
+      'SELECT platform, active, username FROM social_accounts WHERE id = $1 AND project_id = $2',
       [publication.social_account_id, projectId],
     )
     account = rows[0]
@@ -112,8 +119,8 @@ export async function publishSocialPublicationToThreads(
       return { error: 'linked account is not a Threads account', status: 400 }
     }
   } else {
-    const { rows } = await pool.query<{ active: boolean }>(
-      `SELECT active FROM social_accounts WHERE project_id = $1 AND platform = 'threads' AND active = true ORDER BY created_at ASC LIMIT 1`,
+    const { rows } = await pool.query<{ active: boolean; username: string }>(
+      `SELECT active, username FROM social_accounts WHERE project_id = $1 AND platform = 'threads' AND active = true ORDER BY created_at ASC LIMIT 1`,
       [projectId],
     )
     account = rows[0]
@@ -141,6 +148,21 @@ export async function publishSocialPublicationToThreads(
   if (!userId || !token) {
     return { error: 'THREADS_ACCESS_TOKEN/THREADS_USER_ID is not configured on the server', status: 500 }
   }
+
+  // Ownership guard: the global credentials above are shared across every project. Confirm they
+  // actually point at THIS project's Threads account before anything gets published — see
+  // lib/social-account-ownership.ts.
+  const identityParams = new URLSearchParams({ fields: 'username', access_token: token })
+  const identityRes = await fetch(`${THREADS_API_BASE}/${userId}?${identityParams.toString()}`)
+  const identityData = await identityRes.json().catch(() => null)
+  if (!identityRes.ok || identityData?.error) {
+    return {
+      error: (identityData?.error?.message as string) || `Threads API request failed (${identityRes.status})`,
+      status: 502,
+    }
+  }
+  const ownership = compareAccountOwnership('Threads', account.username, identityData?.username as string | undefined)
+  if (!ownership.ok) return { error: ownership.error, status: 403 }
 
   let threadsError: string | null = null
   let mediaId: string | null = null

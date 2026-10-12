@@ -1,14 +1,17 @@
 import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
+import { compareAccountOwnership } from '@/lib/social-account-ownership'
 
 // Server-side only. INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_ACCOUNT_ID must never be sent to the
 // browser — they are read here and only here, inside a function called exclusively from a server
 // route handler. Unlike Telegram/VK, the target account isn't resolved from social_accounts: an
 // Instagram Login access token is already scoped to one specific account, so the account id comes
-// from its own env var. social_accounts is still used, but only as a project-scoped "is Instagram
-// actually connected and active for this project" guard — its username stays the real @handle,
-// never a token or numeric id.
+// from its own env var. social_accounts is still used, both as a project-scoped "is Instagram
+// actually connected and active for this project" guard, AND — since that guard alone can't prove
+// the global credentials point at *this* project's account — as the known-good @handle an
+// ownership check (lib/social-account-ownership.ts) compares the actually-connected account's
+// username against before any publish call is made. See that module for why this exists.
 
 export type SocialInstagramResult = { error: string; status: number } | { row: Record<string, unknown> }
 
@@ -57,8 +60,12 @@ async function waitForContainerFinished(containerId: string, token: string): Pro
  * Project-scoped like the rest of the Social module — a publication id from another project
  * resolves as not-found. Requires a project-scoped, active social_accounts row for platform
  * 'instagram' to exist (linked via social_account_id if set, else the project's first active
- * instagram account) purely as a connection guard — the actual API target account comes from
- * INSTAGRAM_ACCOUNT_ID, since an Instagram Login token is already scoped to one account.
+ * instagram account) — the actual API target account comes from INSTAGRAM_ACCOUNT_ID, since an
+ * Instagram Login token is already scoped to one account, which is global across every project.
+ * Before any publish call, this account's `username` column is compared against the username the
+ * global credentials are actually connected to (see lib/social-account-ownership.ts); a mismatch
+ * or a blank username refuses to publish — this is the check that stops one project's content
+ * from reaching another project's real Instagram account.
  *
  * Never re-sends an already-published publication (duplicate protection: rejected before any
  * Instagram API call). An Instagram API error, a failed/expired container, or a network failure is
@@ -91,10 +98,10 @@ export async function publishSocialPublicationToInstagram(
     return { error: 'this publication is already published', status: 409 }
   }
 
-  let account: { platform?: string; active: boolean } | undefined
+  let account: { platform?: string; active: boolean; username: string } | undefined
   if (publication.social_account_id) {
-    const { rows } = await pool.query<{ platform: string; active: boolean }>(
-      'SELECT platform, active FROM social_accounts WHERE id = $1 AND project_id = $2',
+    const { rows } = await pool.query<{ platform: string; active: boolean; username: string }>(
+      'SELECT platform, active, username FROM social_accounts WHERE id = $1 AND project_id = $2',
       [publication.social_account_id, projectId],
     )
     account = rows[0]
@@ -102,8 +109,8 @@ export async function publishSocialPublicationToInstagram(
       return { error: 'linked account is not an Instagram account', status: 400 }
     }
   } else {
-    const { rows } = await pool.query<{ active: boolean }>(
-      `SELECT active FROM social_accounts WHERE project_id = $1 AND platform = 'instagram' AND active = true ORDER BY created_at ASC LIMIT 1`,
+    const { rows } = await pool.query<{ active: boolean; username: string }>(
+      `SELECT active, username FROM social_accounts WHERE project_id = $1 AND platform = 'instagram' AND active = true ORDER BY created_at ASC LIMIT 1`,
       [projectId],
     )
     account = rows[0]
@@ -130,6 +137,21 @@ export async function publishSocialPublicationToInstagram(
   if (!accountId || !token) {
     return { error: 'INSTAGRAM_ACCESS_TOKEN/INSTAGRAM_ACCOUNT_ID is not configured on the server', status: 500 }
   }
+
+  // Ownership guard: the global credentials above are shared across every project. Confirm they
+  // actually point at THIS project's Instagram account before anything gets published — see
+  // lib/social-account-ownership.ts.
+  const identityParams = new URLSearchParams({ fields: 'username', access_token: token })
+  const identityRes = await fetch(`${IG_API_BASE}/${accountId}?${identityParams.toString()}`)
+  const identityData = await identityRes.json().catch(() => null)
+  if (!identityRes.ok || identityData?.error) {
+    return {
+      error: (identityData?.error?.message as string) || `Instagram API request failed (${identityRes.status})`,
+      status: 502,
+    }
+  }
+  const ownership = compareAccountOwnership('Instagram', account.username, identityData?.username as string | undefined)
+  if (!ownership.ok) return { error: ownership.error, status: 403 }
 
   let igError: string | null = null
   let mediaId: string | null = null
