@@ -20,6 +20,7 @@ import { SeoObserver } from '@/components/sections/seo-observer'
 import { WordstatImport } from '@/components/sections/wordstat-import'
 import { CrmOverview } from '@/components/sections/crm-overview'
 import { LeadsView } from '@/components/sections/leads-view'
+import { SocialOverview } from '@/components/sections/social-overview'
 import { SocialView } from '@/components/sections/social-view'
 import { SocialAccountsView } from '@/components/sections/social-accounts-view'
 import { AdsView } from '@/components/sections/ads-view'
@@ -74,7 +75,7 @@ const adminGroups: NavGroup[] = [
       {
         id: 'social',
         status: 'active',
-        children: [{ id: 'social-posts' }, { id: 'social-accounts' }],
+        children: [{ id: 'social-overview' }, { id: 'social-posts' }, { id: 'social-accounts' }],
       },
       { id: 'ads', status: 'active' },
       { id: 'pr', status: 'soon' },
@@ -312,6 +313,9 @@ export function AppShell() {
             <CrmOverview project={project} onProjectChange={setProject} />
           )}
           {active === 'crm-leads' && <LeadsView project={project} onProjectChange={setProject} />}
+          {active === 'social-overview' && (
+            <SocialOverview project={project} onProjectChange={setProject} />
+          )}
           {/* social-posts/social-accounts/ads cannot function without a real project slug (their
               API calls 400/return nothing for "all") — unlike admin-overview/crm-overview, which
               have their own "All projects" aggregate view. project === 'all' means no project is

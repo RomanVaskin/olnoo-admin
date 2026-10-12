@@ -55,3 +55,30 @@ test('app-shell.tsx: passes onProjectChange (setProject) into both Social screen
   assert.match(source, /<SocialView project=\{project\} onProjectChange=\{setProject\}/)
   assert.match(source, /<SocialAccountsView project=\{project\} onProjectChange=\{setProject\}/)
 })
+
+// Requirement: ProjectSelector must sit in the same place (SectionHeader's `action`, top-right)
+// on Overview, Posts and Accounts — same as CrmOverview/AdminOverview — not in the filter row
+// below, so the current project is equally visible and equally reachable on all three screens.
+test('social-view.tsx and social-accounts-view.tsx: ProjectSelector lives in SectionHeader.action, not the filter row', async () => {
+  for (const file of ['../components/sections/social-view.tsx', '../components/sections/social-accounts-view.tsx']) {
+    const source = await sourceOf(file)
+    const sectionHeaderIdx = source.indexOf('<SectionHeader')
+    assert.ok(sectionHeaderIdx > 0, `${file}: must render SectionHeader`)
+    const actionIdx = source.indexOf('action={', sectionHeaderIdx)
+    assert.ok(actionIdx > sectionHeaderIdx, `${file}: SectionHeader must have an action prop`)
+    assert.match(source.slice(actionIdx, actionIdx + 250), /<ProjectSelector/, `${file}: ProjectSelector must be inside SectionHeader's action`)
+
+    // The filter-bar className is reused by both the new action wrapper and the real filter row
+    // below it — take the LAST occurrence (the actual filter row, after the metrics section) and
+    // confirm ProjectSelector is not there; the old placement had it as that row's first child.
+    const filterBarIdx = source.lastIndexOf("flex flex-wrap items-center gap-2")
+    assert.ok(filterBarIdx > actionIdx, `${file}: the real filter bar must come after the header's action`)
+    const filterBarSnippet = source.slice(filterBarIdx, filterBarIdx + 150)
+    assert.ok(!filterBarSnippet.includes('<ProjectSelector'), `${file}: ProjectSelector must not also sit in the filter row`)
+  }
+})
+
+test('social-overview.tsx: ProjectSelector lives in SectionHeader.action, same as CrmOverview', async () => {
+  const source = await sourceOf('../components/sections/social-overview.tsx')
+  assert.match(source, /action=\{<ProjectSelector value=\{project\} onChange=\{onProjectChange\} \/>\}/)
+})
