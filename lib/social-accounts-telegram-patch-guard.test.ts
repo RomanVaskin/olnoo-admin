@@ -30,6 +30,25 @@ test('updateSocialAccount: a telegram account refuses a direct username or statu
   assert.ok(updateIdx > errorIdx, 'the guard must be checked before the UPDATE is executed')
 })
 
+test('updateSocialAccount: switching platform to telegram inherits the stored status, so a PATCH touching only `platform` on an account already status=connected (e.g. a connected vk account) must still be refused', async () => {
+  const source = await sourceOf('./social-accounts.ts')
+  const fnIdx = source.indexOf('export async function updateSocialAccount')
+  assert.ok(fnIdx > 0)
+  // The guard must also trigger when ONLY `platform` is part of the PATCH (no `username`, no
+  // `status`) — otherwise an account already `status='connected'` from a different platform keeps
+  // that status untouched after switching to telegram, since nothing in this PATCH writes `status`
+  // at all; the row ends up platform='telegram' + status='connected' with no Telegram API call ever
+  // made.
+  const conditionIdx = source.indexOf("input.platform !== undefined", fnIdx)
+  assert.ok(conditionIdx > fnIdx, 'the guard condition must also trigger on a plain platform change')
+  // It must resolve the RESULTANT status (existing stored status if this PATCH doesn't set one),
+  // not just whatever `input.status` literally says in this one request.
+  const resultantIdx = source.indexOf('resultantStatus = input.status ?? existing?.status', conditionIdx)
+  assert.ok(resultantIdx > conditionIdx, "must fall back to the account's existing stored status when this PATCH does not set one")
+  const guardIdx = source.indexOf("targetPlatform === 'telegram' && (typeof input.username === 'string' || resultantStatus === 'connected')", resultantIdx)
+  assert.ok(guardIdx > conditionIdx, 'the final check must refuse telegram + a resultant connected status, not just an explicit input.status')
+})
+
 test('createSocialAccount: a telegram account cannot be created already status=connected', async () => {
   const source = await sourceOf('./social-accounts.ts')
   const fnIdx = source.indexOf('export async function createSocialAccount')
