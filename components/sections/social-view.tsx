@@ -588,16 +588,19 @@ export function SocialView({
   return (
     <div className="flex flex-col gap-10">
       <SectionHeader
-        index="01"
+        index="02"
         title={t.socialView.title}
         description={t.socialView.description}
         action={
-          <button
-            onClick={() => setCreating(true)}
-            className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground"
-          >
-            {t.socialView.addPost}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <ProjectSelector value={project} onChange={onProjectChange} />
+            <button
+              onClick={() => setCreating(true)}
+              className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground"
+            >
+              {t.socialView.addPost}
+            </button>
+          </div>
         }
       />
 
@@ -609,7 +612,6 @@ export function SocialView({
       </section>
 
       <div className="flex flex-wrap items-center gap-2">
-        <ProjectSelector value={project} onChange={onProjectChange} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}

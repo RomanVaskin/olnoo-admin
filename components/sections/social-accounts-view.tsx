@@ -550,21 +550,23 @@ export function SocialAccountsView({
   return (
     <div className="flex flex-col gap-10">
       <SectionHeader
-        index="02"
+        index="03"
         title={t.socialAccountsView.title}
         description={t.socialAccountsView.description}
         action={
-          <button
-            onClick={() => setCreating(true)}
-            className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground"
-          >
-            {t.socialAccountsView.addAccount}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <ProjectSelector value={project} onChange={onProjectChange} />
+            <button
+              onClick={() => setCreating(true)}
+              className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground"
+            >
+              {t.socialAccountsView.addAccount}
+            </button>
+          </div>
         }
       />
 
       <div className="flex flex-wrap items-center gap-2">
-        <ProjectSelector value={project} onChange={onProjectChange} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}

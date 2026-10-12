@@ -60,6 +60,24 @@ test('app-shell: social-posts, social-accounts and ads only render their real co
   assert.ok(rawProjectIdx > 0, 'project must be read directly from the URL search params')
 })
 
+test('app-shell: social-overview renders unconditionally (supports both "all" and one project), unlike Posts/Accounts', async () => {
+  const source = await sourceOf('../components/app-shell.tsx')
+  const idx = source.indexOf("active === 'social-overview'")
+  assert.ok(idx > 0, 'social-overview must be handled')
+  const block = source.slice(idx, idx + 150)
+  assert.match(block, /<SocialOverview project=\{project\} onProjectChange=\{setProject\}/)
+  assert.ok(!block.includes("project !== 'all'"), "social-overview must not be gated on project !== 'all' — it supports the aggregate view")
+})
+
+test("app-shell: 'social-overview' is the first child of the Social nav group", async () => {
+  const source = await sourceOf('../components/app-shell.tsx')
+  const socialGroupIdx = source.indexOf("id: 'social',")
+  assert.ok(socialGroupIdx > 0)
+  const childrenIdx = source.indexOf('children:', socialGroupIdx)
+  const childrenLine = source.slice(childrenIdx, source.indexOf(']', childrenIdx) + 1)
+  assert.match(childrenLine, /\[\s*\{ id: 'social-overview' \}/, "social-overview must be the first entry so it's the Social group's default screen")
+})
+
 test('app-shell: SelectProjectPrompt reuses the shared ProjectSelector, not a new/ad-hoc picker', async () => {
   const source = await sourceOf('../components/app-shell.tsx')
   const fnIdx = source.indexOf('function SelectProjectPrompt')
