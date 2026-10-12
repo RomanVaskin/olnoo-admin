@@ -3,7 +3,7 @@ import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { isSocialChannel } from '@/lib/social'
 
-const KNOWN_STATUSES = ['created', 'connected'] as const
+const KNOWN_STATUSES = ['created', 'connected', 'error'] as const
 export type SocialAccountStatus = (typeof KNOWN_STATUSES)[number]
 
 export function isSocialAccountStatus(value: unknown): value is SocialAccountStatus {
@@ -30,8 +30,14 @@ export type SocialAccountResult = { error: string; status: number } | { row: Rec
  * straight into `NextResponse.json(...)` in app/api/social-accounts*, so any column added to
  * `social_accounts` later (e.g. a future secret/token field) is never exposed to the browser just
  * by existing; it has to be added here deliberately first. Keep in sync with
- * db/migrations/0007_social_accounts_publications.sql. */
-const ACCOUNT_COLUMNS = 'id, project_id, platform, name, username, public_url, status, active, notes, created_at, updated_at'
+ * db/migrations/0007_social_accounts_publications.sql and 0021_social_accounts_vk_credentials.sql.
+ * `vk_access_token_encrypted` is deliberately NOT here — it is ciphertext, not plaintext, but there
+ * is still no reason for it to ever leave the server; only lib/social-vk.ts and
+ * lib/social-accounts-vk-connection.ts read it, via their own dedicated queries. `vk_group_id` and
+ * `connection_error` are not secrets (a resolved numeric community id and a VK API error message)
+ * and are safe to expose the same as every other column here. */
+const ACCOUNT_COLUMNS =
+  'id, project_id, platform, name, username, public_url, status, active, notes, vk_group_id, connection_error, created_at, updated_at'
 
 export async function listSocialAccounts(
   projectSlug: string | null,
