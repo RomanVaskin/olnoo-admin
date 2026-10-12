@@ -101,6 +101,14 @@ function AccountDetail({
   }
 
   async function saveAll() {
+    // Telegram's username (the channel chat_id/handle) only ever changes through
+    // connectTelegram, which verifies the bot can post there first — the server now rejects a
+    // plain PATCH that tries to change it (lib/social-accounts.ts), so it's left out here to
+    // avoid a silently-failing save on blur. Every other platform is unaffected.
+    if (platform === 'telegram') {
+      await save({ name, publicUrl, notes })
+      return
+    }
     await save({ name, username, publicUrl, notes })
   }
 

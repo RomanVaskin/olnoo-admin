@@ -40,3 +40,29 @@ test('lib/social-accounts-telegram-connection.ts: no new per-project bot token i
   assert.match(source, /process\.env\.TELEGRAM_BOT_TOKEN/)
   assert.ok(!/BOT_TOKEN_[A-Z_]+/.test(source), 'must not introduce a per-project bot token env var')
 })
+
+test('lib/social-accounts-telegram-connection.ts: the duplicate-channel check and the write are inside one advisory-locked transaction (race safety)', async () => {
+  const source = await sourceOf('./social-accounts-telegram-connection.ts')
+  const beginIdx = source.indexOf("client.query('BEGIN')")
+  assert.ok(beginIdx > 0, 'must start an explicit transaction before the conflict check')
+  const lockIdx = source.indexOf('pg_advisory_xact_lock', beginIdx)
+  assert.ok(lockIdx > beginIdx, 'must acquire an advisory lock right after BEGIN, before the conflict check')
+  const conflictIdx = source.indexOf("status = 'connected' AND lower(username)", lockIdx)
+  assert.ok(conflictIdx > lockIdx, 'the conflict check must run after the lock is held')
+  const writeIdx = source.indexOf("SET username = $1", conflictIdx)
+  assert.ok(writeIdx > conflictIdx, 'the write must come after the conflict check, inside the same lock')
+  const commitIdx = source.indexOf("client.query('COMMIT')", writeIdx)
+  assert.ok(commitIdx > writeIdx, 'must commit after the write, releasing the lock')
+  // Every query between BEGIN and COMMIT must run on the dedicated `client`, not the shared `pool`
+  // — otherwise the transaction (and the lock with it) would not actually wrap them.
+  const txBody = source.slice(beginIdx, commitIdx)
+  assert.ok(!/\bpool\.query/.test(txBody), 'no query inside the transaction body may bypass it by using `pool.query` directly')
+})
+
+test('lib/social-accounts-telegram-connection.ts: storage and conflict detection both key on the confirmed chat identity, not raw admin-typed text', async () => {
+  const source = await sourceOf('./social-accounts-telegram-connection.ts')
+  assert.match(source, /canonicalChatIdentifier/, 'must derive a canonical identifier from the verified Telegram identity')
+  const fnIdx = source.indexOf('function canonicalChatIdentifier')
+  assert.ok(fnIdx > 0)
+  assert.match(source.slice(fnIdx, fnIdx + 300), /identity\.chatId/, 'must fall back to the confirmed chat.id, not the raw typed identifier, for channels with no public username')
+})

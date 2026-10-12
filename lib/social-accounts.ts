@@ -80,6 +80,15 @@ export async function createSocialAccount(
 ): Promise<SocialAccountResult> {
   if (!isSocialChannel(input.platform)) return { error: 'a known platform is required', status: 400 }
   if (input.status && !isSocialAccountStatus(input.status)) return { error: 'invalid status', status: 400 }
+  // Same reasoning as updateSocialAccount's guard below: a telegram account can't be created
+  // already 'connected' outside the verified connect endpoint either.
+  if (input.platform === 'telegram' && input.status === 'connected') {
+    return {
+      error:
+        'Telegram channel connection status must be set through POST /api/social-accounts/[id]/telegram-connection, which verifies the bot can actually post there — not a direct create',
+      status: 400,
+    }
+  }
 
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
@@ -119,6 +128,28 @@ export async function updateSocialAccount(
 
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
+
+  // Telegram's connection check (lib/social-accounts-telegram-connection.ts) only means anything
+  // if a verified username/chat id and a 'connected' status can't also be set by any other path.
+  // A plain PATCH changing `username` (the field the publisher trusts as the target chat) or
+  // forcing `status` to 'connected' would silently invalidate that verification — the account
+  // would look connected without the bot ever having been confirmed able to post there. So for a
+  // telegram account, both are refused here unconditionally; they only ever change through
+  // POST /api/social-accounts/[id]/telegram-connection, which actually calls the Telegram API
+  // first. Every other field (name, public_url, notes, active, a non-'connected' status) is
+  // unaffected — this is not a blanket lock on the account, just on the two fields that assert a
+  // verified connection.
+  if (typeof input.username === 'string' || input.status === 'connected') {
+    const targetPlatform =
+      input.platform ?? (await pool.query<{ platform: string }>('SELECT platform FROM social_accounts WHERE id = $1 AND project_id = $2', [id, projectId])).rows[0]?.platform
+    if (targetPlatform === 'telegram') {
+      return {
+        error:
+          'Telegram channel username/connection status must be set through POST /api/social-accounts/[id]/telegram-connection, which verifies the bot can actually post there — not a direct update',
+        status: 400,
+      }
+    }
+  }
 
   const sets: string[] = []
   const params: unknown[] = []
