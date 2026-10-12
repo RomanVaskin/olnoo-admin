@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
+import { ProjectSelector } from '@/components/project-selector'
 import { useI18n } from '@/components/i18n-provider'
 import { SocialPublications, type PublicationSummary } from '@/components/sections/social-publications'
 import { toDatetimeLocalInputValue, formatPublishDate } from '@/lib/social-publish-date-format'
@@ -524,7 +525,13 @@ function CreateForm({
   )
 }
 
-export function SocialView({ project }: { project: string }) {
+export function SocialView({
+  project,
+  onProjectChange,
+}: {
+  project: string
+  onProjectChange: (id: string) => void
+}) {
   const { t } = useI18n()
   const [posts, setPosts] = useState<SocialPost[]>([])
   const [loading, setLoading] = useState(true)
@@ -602,6 +609,7 @@ export function SocialView({ project }: { project: string }) {
       </section>
 
       <div className="flex flex-wrap items-center gap-2">
+        <ProjectSelector value={project} onChange={onProjectChange} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}

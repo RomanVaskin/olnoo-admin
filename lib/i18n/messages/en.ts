@@ -16,6 +16,7 @@ export const en = {
     clientCabinet: 'Client cabinet',
     workspaceBerlin: 'Workspace · Berlin',
     readOnlyClientCabinet: 'Read-only client cabinet',
+    selectProjectPrompt: 'Select a project to continue.',
   },
   navGroup: {
     workspace: 'Workspace',

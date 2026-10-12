@@ -26,6 +26,7 @@ export const ru: Messages = {
     clientCabinet: 'Кабинет клиента',
     workspaceBerlin: 'Рабочее пространство · Берлин',
     readOnlyClientCabinet: 'Кабинет клиента (только чтение)',
+    selectProjectPrompt: 'Выберите проект, чтобы продолжить.',
   },
   navGroup: {
     workspace: 'Рабочее пространство',
