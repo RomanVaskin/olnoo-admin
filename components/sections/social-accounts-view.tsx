@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
+import { ProjectSelector } from '@/components/project-selector'
 import { useI18n } from '@/components/i18n-provider'
 
 const PLATFORMS = ['telegram', 'instagram', 'threads', 'vk'] as const
@@ -489,7 +490,13 @@ function CreateForm({
   )
 }
 
-export function SocialAccountsView({ project }: { project: string }) {
+export function SocialAccountsView({
+  project,
+  onProjectChange,
+}: {
+  project: string
+  onProjectChange: (id: string) => void
+}) {
   const { t } = useI18n()
   const [accounts, setAccounts] = useState<SocialAccount[]>([])
   const [loading, setLoading] = useState(true)
@@ -557,6 +564,7 @@ export function SocialAccountsView({ project }: { project: string }) {
       />
 
       <div className="flex flex-wrap items-center gap-2">
+        <ProjectSelector value={project} onChange={onProjectChange} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}

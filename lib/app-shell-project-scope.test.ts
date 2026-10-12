@@ -32,14 +32,39 @@ test('app-shell: no localStorage-based fallback can silently choose which projec
   )
 })
 
-test('app-shell: social-posts, social-accounts and ads only render once a real project slug is in the URL, with no fallback path', async () => {
+test('app-shell: social-posts, social-accounts and ads only render their real content once a real project slug is in the URL, with no fallback path', async () => {
   const source = await sourceOf('../components/app-shell.tsx')
-  for (const screen of ['social-posts', 'social-accounts', 'ads']) {
-    const regex = new RegExp(`active === '${screen}' && project !== 'all'`)
-    assert.match(source, regex, `${screen} must stay gated on an explicit, non-'all' project`)
+  // 'ads' is untouched by this change — still the simple short-circuit form.
+  assert.match(source, /active === 'ads' && project !== 'all' && <AdsView/, "ads must stay gated on an explicit, non-'all' project")
+  // social-posts/social-accounts now show an explicit project-picker prompt (SelectProjectPrompt)
+  // instead of rendering nothing when project === 'all' — but the real, data-fetching/write-
+  // capable component (SocialView/SocialAccountsView) must still only ever appear in the
+  // project !== 'all' branch, never as a fallback for 'all'.
+  for (const [screen, component] of [
+    ['social-posts', 'SocialView'],
+    ['social-accounts', 'SocialAccountsView'],
+  ] as const) {
+    const screenIdx = source.indexOf(`active === '${screen}'`)
+    assert.ok(screenIdx > 0, `${screen} must still be handled`)
+    const block = source.slice(screenIdx, screenIdx + 400)
+    assert.match(block, /project !== 'all'/, `${screen} must still branch on an explicit, non-'all' project`)
+    const ternaryIdx = block.search(/\?\s*\n?\s*<\w/)
+    assert.ok(ternaryIdx > 0, `${screen} must use a ternary (real screen vs. project-picker prompt)`)
+    const trueBranch = block.slice(0, block.indexOf(':', ternaryIdx))
+    assert.ok(trueBranch.includes(component), `${screen}'s project !== 'all' branch must render ${component}`)
+    assert.ok(!trueBranch.includes('SelectProjectPrompt'), `${screen} must not render the picker prompt in its real-project branch`)
   }
   // `project` itself must be derived directly from the URL's own ?project= param, not from any
   // effect that could overwrite it with a remembered value before these screens render.
   const rawProjectIdx = source.indexOf("searchParams.get('project')")
   assert.ok(rawProjectIdx > 0, 'project must be read directly from the URL search params')
+})
+
+test('app-shell: SelectProjectPrompt reuses the shared ProjectSelector, not a new/ad-hoc picker', async () => {
+  const source = await sourceOf('../components/app-shell.tsx')
+  const fnIdx = source.indexOf('function SelectProjectPrompt')
+  assert.ok(fnIdx > 0, 'SelectProjectPrompt must exist')
+  const fnBody = source.slice(fnIdx, fnIdx + 600)
+  assert.match(fnBody, /<ProjectSelector\b/, 'must render the existing ProjectSelector component')
+  assert.match(source, /import \{ ProjectSelector \} from '@\/components\/project-selector'/)
 })
