@@ -23,10 +23,14 @@ type SocialAccount = {
   active: boolean
   notes: string
   createdAt: string
-  // VK only — never the token itself (the API never returns it). vkGroupId is set once a token has
-  // been verified at least once; its presence is how the UI knows a VK connection already exists
-  // without needing to see the secret.
+  // VK/Instagram/Threads only — never the token itself (the API never returns it). Each id is set
+  // once a token has been verified at least once; its presence is how the UI knows a per-account
+  // connection already exists without needing to see the secret.
   vkGroupId: string
+  instagramAccountId: string
+  instagramTokenExpiresAt: string
+  threadsUserId: string
+  threadsTokenExpiresAt: string
   connectionError: string
   // Always present — the list API now joins `projects` for every row, in both "all" and
   // single-project mode (see lib/social-accounts.ts's listSocialAccounts). This is the project a
@@ -48,6 +52,10 @@ function fromApiAccount(row: Record<string, unknown>): SocialAccount {
     notes: (row.notes as string) ?? '',
     createdAt: row.created_at as string,
     vkGroupId: (row.vk_group_id as string) ?? '',
+    instagramAccountId: (row.instagram_account_id as string) ?? '',
+    instagramTokenExpiresAt: (row.instagram_token_expires_at as string) ?? '',
+    threadsUserId: (row.threads_user_id as string) ?? '',
+    threadsTokenExpiresAt: (row.threads_token_expires_at as string) ?? '',
     connectionError: (row.connection_error as string) ?? '',
     projectSlug: (row.project_slug as string) ?? '',
     projectName: (row.project_name as string) ?? '',
@@ -82,6 +90,12 @@ function AccountDetail({
   const [vkConnectError, setVkConnectError] = useState('')
   const [telegramConnecting, setTelegramConnecting] = useState(false)
   const [telegramConnectError, setTelegramConnectError] = useState('')
+  const [instagramToken, setInstagramToken] = useState('')
+  const [instagramConnecting, setInstagramConnecting] = useState(false)
+  const [instagramConnectError, setInstagramConnectError] = useState('')
+  const [threadsToken, setThreadsToken] = useState('')
+  const [threadsConnecting, setThreadsConnecting] = useState(false)
+  const [threadsConnectError, setThreadsConnectError] = useState('')
 
   useEffect(() => {
     setPlatform(account.platform)
@@ -94,6 +108,10 @@ function AccountDetail({
     setVkToken('')
     setVkConnectError('')
     setTelegramConnectError('')
+    setInstagramToken('')
+    setInstagramConnectError('')
+    setThreadsToken('')
+    setThreadsConnectError('')
   }, [account])
 
   async function save(patch: Record<string, unknown>) {
@@ -164,6 +182,52 @@ function AccountDetail({
       if (updated.status === 'error') setTelegramConnectError(updated.connectionError)
     } finally {
       setTelegramConnecting(false)
+    }
+  }
+
+  async function connectInstagram(token: string | null) {
+    setInstagramConnecting(true)
+    setInstagramConnectError('')
+    try {
+      const res = await fetch(`/api/social-accounts/${account.id}/instagram-connection?project=${encodeURIComponent(project)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(token ? { accessToken: token } : {}),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setInstagramConnectError((data && typeof data.error === 'string' && data.error) || t.socialAccountsView.createError)
+        return
+      }
+      const updated = fromApiAccount(data)
+      onSaved(updated)
+      setInstagramToken('')
+      if (updated.status === 'error') setInstagramConnectError(updated.connectionError)
+    } finally {
+      setInstagramConnecting(false)
+    }
+  }
+
+  async function connectThreads(token: string | null) {
+    setThreadsConnecting(true)
+    setThreadsConnectError('')
+    try {
+      const res = await fetch(`/api/social-accounts/${account.id}/threads-connection?project=${encodeURIComponent(project)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(token ? { accessToken: token } : {}),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setThreadsConnectError((data && typeof data.error === 'string' && data.error) || t.socialAccountsView.createError)
+        return
+      }
+      const updated = fromApiAccount(data)
+      onSaved(updated)
+      setThreadsToken('')
+      if (updated.status === 'error') setThreadsConnectError(updated.connectionError)
+    } finally {
+      setThreadsConnecting(false)
     }
   }
 
@@ -340,6 +404,86 @@ function AccountDetail({
                 )}
               </div>
               {telegramConnectError && <p className="text-sm text-destructive">{telegramConnectError}</p>}
+            </div>
+          )}
+
+          {platform === 'instagram' && (
+            <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
+              <span className="label-mono text-muted-foreground">{t.socialAccountsView.instagramConnection}</span>
+              <div className="flex items-center gap-2">
+                <span className={`size-1.5 rounded-full ${account.status === 'connected' ? 'bg-blue' : account.status === 'error' ? 'bg-destructive' : 'bg-muted-foreground'}`} aria-hidden />
+                <span className="text-sm text-foreground/80">
+                  {account.status === 'connected' ? t.socialAccountsView.instagramConnected : t.socialAccountsView.instagramNotConnected}
+                </span>
+              </div>
+              {account.connectionError && <p className="text-sm text-destructive">{account.connectionError}</p>}
+              <p className="text-xs text-muted-foreground">{t.socialAccountsView.instagramTokenHint}</p>
+              <input
+                type="password"
+                value={instagramToken}
+                onChange={(e) => setInstagramToken(e.target.value)}
+                placeholder={account.instagramAccountId ? t.socialAccountsView.instagramTokenPlaceholderSet : t.socialAccountsView.instagramTokenPlaceholderUnset}
+                className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => connectInstagram(instagramToken)}
+                  disabled={instagramConnecting || !instagramToken.trim()}
+                  className="label-mono flex-1 border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+                >
+                  {instagramConnecting ? t.socialAccountsView.instagramConnecting : t.socialAccountsView.instagramConnect}
+                </button>
+                {account.instagramAccountId && (
+                  <button
+                    onClick={() => connectInstagram(null)}
+                    disabled={instagramConnecting}
+                    className="label-mono flex-1 border border-hairline px-4 py-2.5 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+                  >
+                    {instagramConnecting ? t.socialAccountsView.instagramConnecting : t.socialAccountsView.instagramRecheck}
+                  </button>
+                )}
+              </div>
+              {instagramConnectError && <p className="text-sm text-destructive">{instagramConnectError}</p>}
+            </div>
+          )}
+
+          {platform === 'threads' && (
+            <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
+              <span className="label-mono text-muted-foreground">{t.socialAccountsView.threadsConnection}</span>
+              <div className="flex items-center gap-2">
+                <span className={`size-1.5 rounded-full ${account.status === 'connected' ? 'bg-blue' : account.status === 'error' ? 'bg-destructive' : 'bg-muted-foreground'}`} aria-hidden />
+                <span className="text-sm text-foreground/80">
+                  {account.status === 'connected' ? t.socialAccountsView.threadsConnected : t.socialAccountsView.threadsNotConnected}
+                </span>
+              </div>
+              {account.connectionError && <p className="text-sm text-destructive">{account.connectionError}</p>}
+              <p className="text-xs text-muted-foreground">{t.socialAccountsView.threadsTokenHint}</p>
+              <input
+                type="password"
+                value={threadsToken}
+                onChange={(e) => setThreadsToken(e.target.value)}
+                placeholder={account.threadsUserId ? t.socialAccountsView.threadsTokenPlaceholderSet : t.socialAccountsView.threadsTokenPlaceholderUnset}
+                className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => connectThreads(threadsToken)}
+                  disabled={threadsConnecting || !threadsToken.trim()}
+                  className="label-mono flex-1 border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+                >
+                  {threadsConnecting ? t.socialAccountsView.threadsConnecting : t.socialAccountsView.threadsConnect}
+                </button>
+                {account.threadsUserId && (
+                  <button
+                    onClick={() => connectThreads(null)}
+                    disabled={threadsConnecting}
+                    className="label-mono flex-1 border border-hairline px-4 py-2.5 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+                  >
+                    {threadsConnecting ? t.socialAccountsView.threadsConnecting : t.socialAccountsView.threadsRecheck}
+                  </button>
+                )}
+              </div>
+              {threadsConnectError && <p className="text-sm text-destructive">{threadsConnectError}</p>}
             </div>
           )}
 
