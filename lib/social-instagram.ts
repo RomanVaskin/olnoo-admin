@@ -2,20 +2,29 @@ import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { compareAccountOwnership, resolveOwnerProjectSlug, verifyProjectIsAllowed } from '@/lib/social-account-ownership'
+import { decryptAccountSecret } from '@/lib/social-account-crypto'
 import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
 import { resolveInstagramPublishOutcome } from '@/lib/social-instagram-publish-outcome'
 import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
 
-// Server-side only. INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_ACCOUNT_ID must never be sent to the
-// browser — they are read here and only here, inside a function called exclusively from a server
-// route handler. Unlike Telegram/VK, the target account isn't resolved from social_accounts: an
-// Instagram Login access token is already scoped to one specific account, so the account id comes
-// from its own env var — global across every project. INSTAGRAM_OWNER_PROJECT names the one
-// project allowed to use it at all; social_accounts is still used too, both as a project-scoped
-// "is Instagram actually connected and active for this project" guard, AND as the known-good
-// @handle an ownership check compares the actually-connected account's username against before
-// any publish call is made — but neither social_accounts row nor username match is, by itself,
-// the authorization. See lib/social-account-ownership.ts for why.
+// Server-side only. Credentials must never be sent to the browser — they are read here and only
+// here, inside a function called exclusively from a server route handler.
+//
+// Two credential sources, tried in this order (Social Connect MVP — see
+// db/migrations/0022_social_accounts_meta_credentials.sql):
+//   1. The linked social_accounts row's OWN encrypted token (instagram_access_token_encrypted +
+//      instagram_account_id), connected per-project via lib/social-accounts-instagram-connection.ts
+//      — same model VK already uses (lib/social-vk.ts). Scoped to this project by construction:
+//      the account row is only ever read with `WHERE project_id = $2`, so there is no way for one
+//      project to resolve another project's per-account token.
+//   2. If the account has no per-account token, the original global env fallback: an Instagram
+//      Login access token is already scoped to one specific account, so INSTAGRAM_ACCESS_TOKEN/
+//      INSTAGRAM_ACCOUNT_ID are global across every project, and INSTAGRAM_OWNER_PROJECT names the
+//      one project allowed to use them at all — unchanged from before this MVP, kept so OLNOO
+//      itself never loses the ability to publish while it migrates to its own per-account
+//      connection. `social_accounts.username` is additionally compared against the global
+//      credential's actual handle as a second, independent sanity check; neither check is, by
+//      itself, sufficient — see lib/social-account-ownership.ts for why.
 
 export type SocialInstagramResult = { error: string; status: number } | { row: Record<string, unknown> }
 
@@ -103,16 +112,6 @@ export async function publishSocialPublicationToInstagram(
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
 
-  // Authorization gate: the global credentials below belong to exactly one project. This must be
-  // checked before anything else — social_accounts.username (checked further down) is
-  // user-editable and not unique, so it cannot be the thing that decides this.
-  const ownerProject = resolveOwnerProjectSlug(process.env.INSTAGRAM_OWNER_PROJECT)
-  const projectGate = verifyProjectIsAllowed('Instagram', 'INSTAGRAM_OWNER_PROJECT', ownerProject, projectSlug)
-  if (!projectGate.ok) {
-    await recordPublicationPreflightFailure(pool, id, projectId, projectGate.error)
-    return { error: projectGate.error, status: 403 }
-  }
-
   const { rows: pubRows } = await pool.query<{
     id: string
     social_post_id: string
@@ -132,10 +131,18 @@ export async function publishSocialPublicationToInstagram(
     return { error: 'this publication is already published', status: 409 }
   }
 
-  let account: { platform?: string; active: boolean; username: string } | undefined
+  type InstagramAccountRow = {
+    platform?: string
+    active: boolean
+    username: string
+    instagram_access_token_encrypted: string
+    instagram_account_id: string
+    instagram_token_expires_at: string | null
+  }
+  let account: InstagramAccountRow | undefined
   if (publication.social_account_id) {
-    const { rows } = await pool.query<{ platform: string; active: boolean; username: string }>(
-      'SELECT platform, active, username FROM social_accounts WHERE id = $1 AND project_id = $2',
+    const { rows } = await pool.query<InstagramAccountRow>(
+      'SELECT platform, active, username, instagram_access_token_encrypted, instagram_account_id, instagram_token_expires_at FROM social_accounts WHERE id = $1 AND project_id = $2',
       [publication.social_account_id, projectId],
     )
     account = rows[0]
@@ -145,8 +152,9 @@ export async function publishSocialPublicationToInstagram(
       return { error, status: 400 }
     }
   } else {
-    const { rows } = await pool.query<{ active: boolean; username: string }>(
-      `SELECT active, username FROM social_accounts WHERE project_id = $1 AND platform = 'instagram' AND active = true ORDER BY created_at ASC LIMIT 1`,
+    const { rows } = await pool.query<InstagramAccountRow>(
+      `SELECT active, username, instagram_access_token_encrypted, instagram_account_id, instagram_token_expires_at
+       FROM social_accounts WHERE project_id = $1 AND platform = 'instagram' AND active = true ORDER BY created_at ASC LIMIT 1`,
       [projectId],
     )
     account = rows[0]
@@ -180,29 +188,66 @@ export async function publishSocialPublicationToInstagram(
     return { error, status: 400 }
   }
 
-  const accountId = process.env.INSTAGRAM_ACCOUNT_ID
-  const token = process.env.INSTAGRAM_ACCESS_TOKEN
-  if (!accountId || !token) {
-    const error = 'INSTAGRAM_ACCESS_TOKEN/INSTAGRAM_ACCOUNT_ID is not configured on the server'
-    await recordPublicationPreflightFailure(pool, id, projectId, error)
-    return { error, status: 500 }
-  }
+  let accountId: string
+  let token: string
+  if (account.instagram_access_token_encrypted) {
+    // Per-account credential: scoped to this project already (the account row above was read
+    // with `WHERE project_id = $2`), so no ownership check is needed — unlike the global
+    // fallback, this token was never shared with any other project to begin with.
+    if (account.instagram_token_expires_at && new Date(account.instagram_token_expires_at) <= new Date()) {
+      const error =
+        'This Instagram account\'s access token has expired. Reconnect it in Social → Accounts (the token could not be ' +
+        'refreshed automatically — see lib/social-accounts-instagram-connection.ts for why refresh is only attempted on an explicit recheck).'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 403 }
+    }
+    try {
+      token = decryptAccountSecret(account.instagram_access_token_encrypted)
+    } catch (err) {
+      const error = `Could not decrypt the stored Instagram token: ${err instanceof Error ? err.message : String(err)}`
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 500 }
+    }
+    accountId = account.instagram_account_id
+  } else {
+    // Global env fallback — unchanged from before this MVP, still gated by INSTAGRAM_OWNER_PROJECT
+    // so it can never be used to publish into another project's account. See
+    // lib/social-account-ownership.ts for why this gate (not social_accounts.username alone) is
+    // the actual authorization.
+    const ownerProject = resolveOwnerProjectSlug(process.env.INSTAGRAM_OWNER_PROJECT)
+    const projectGate = verifyProjectIsAllowed('Instagram', 'INSTAGRAM_OWNER_PROJECT', ownerProject, projectSlug)
+    if (!projectGate.ok) {
+      await recordPublicationPreflightFailure(pool, id, projectId, projectGate.error)
+      return { error: projectGate.error, status: 403 }
+    }
 
-  // Ownership guard: the global credentials above are shared across every project. Confirm they
-  // actually point at THIS project's Instagram account before anything gets published — see
-  // lib/social-account-ownership.ts.
-  const identityParams = new URLSearchParams({ fields: 'username', access_token: token })
-  const identityRes = await fetch(`${IG_API_BASE}/${accountId}?${identityParams.toString()}`)
-  const identityData = await identityRes.json().catch(() => null)
-  if (!identityRes.ok || identityData?.error) {
-    const error = (identityData?.error?.message as string) || `Instagram API request failed (${identityRes.status})`
-    await recordPublicationPreflightFailure(pool, id, projectId, error)
-    return { error, status: 502 }
-  }
-  const ownership = compareAccountOwnership('Instagram', account.username, identityData?.username as string | undefined)
-  if (!ownership.ok) {
-    await recordPublicationPreflightFailure(pool, id, projectId, ownership.error)
-    return { error: ownership.error, status: 403 }
+    const envAccountId = process.env.INSTAGRAM_ACCOUNT_ID
+    const envToken = process.env.INSTAGRAM_ACCESS_TOKEN
+    if (!envAccountId || !envToken) {
+      const error = 'INSTAGRAM_ACCESS_TOKEN/INSTAGRAM_ACCOUNT_ID is not configured on the server'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 500 }
+    }
+
+    // Ownership guard: the global credentials above are shared across every project. Confirm they
+    // actually point at THIS project's Instagram account before anything gets published — see
+    // lib/social-account-ownership.ts.
+    const identityParams = new URLSearchParams({ fields: 'username', access_token: envToken })
+    const identityRes = await fetch(`${IG_API_BASE}/${envAccountId}?${identityParams.toString()}`)
+    const identityData = await identityRes.json().catch(() => null)
+    if (!identityRes.ok || identityData?.error) {
+      const error = (identityData?.error?.message as string) || `Instagram API request failed (${identityRes.status})`
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 502 }
+    }
+    const ownership = compareAccountOwnership('Instagram', account.username, identityData?.username as string | undefined)
+    if (!ownership.ok) {
+      await recordPublicationPreflightFailure(pool, id, projectId, ownership.error)
+      return { error: ownership.error, status: 403 }
+    }
+
+    accountId = envAccountId
+    token = envToken
   }
 
   // Container creation + the processing poll happen before any claim — nothing is posted yet at

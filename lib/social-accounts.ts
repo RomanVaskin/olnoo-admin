@@ -31,14 +31,20 @@ export type SocialAccountResult = { error: string; status: number } | { row: Rec
  * straight into `NextResponse.json(...)` in app/api/social-accounts*, so any column added to
  * `social_accounts` later (e.g. a future secret/token field) is never exposed to the browser just
  * by existing; it has to be added here deliberately first. Keep in sync with
- * db/migrations/0007_social_accounts_publications.sql and 0021_social_accounts_vk_credentials.sql.
- * `vk_access_token_encrypted` is deliberately NOT here — it is ciphertext, not plaintext, but there
- * is still no reason for it to ever leave the server; only lib/social-vk.ts and
- * lib/social-accounts-vk-connection.ts read it, via their own dedicated queries. `vk_group_id` and
- * `connection_error` are not secrets (a resolved numeric community id and a VK API error message)
- * and are safe to expose the same as every other column here. */
+ * db/migrations/0007_social_accounts_publications.sql, 0021_social_accounts_vk_credentials.sql and
+ * 0022_social_accounts_meta_credentials.sql.
+ * `vk_access_token_encrypted`, `instagram_access_token_encrypted` and
+ * `threads_access_token_encrypted` are deliberately NOT here — they are ciphertext, not plaintext,
+ * but there is still no reason for any of them to ever leave the server; only each platform's own
+ * publisher (lib/social-vk.ts, lib/social-instagram.ts, lib/social-threads.ts) and its own
+ * connection module read them, via their own dedicated queries. `vk_group_id`,
+ * `instagram_account_id`, `threads_user_id`, the two `*_token_expires_at` columns, and
+ * `connection_error` are not secrets (resolved numeric ids, an expiry timestamp, and an API error
+ * message) and are safe to expose the same as every other column here. */
 const ACCOUNT_COLUMNS =
-  'id, project_id, platform, name, username, public_url, status, active, notes, vk_group_id, connection_error, created_at, updated_at'
+  'id, project_id, platform, name, username, public_url, status, active, notes, vk_group_id, ' +
+  'instagram_account_id, instagram_token_expires_at, threads_user_id, threads_token_expires_at, ' +
+  'connection_error, created_at, updated_at'
 
 /**
  * `projectSlug` of `null`/`''`/`'all'` lists accounts across every project (the Social "All

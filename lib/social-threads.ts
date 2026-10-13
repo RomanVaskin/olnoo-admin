@@ -3,19 +3,26 @@ import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { THREADS_TEXT_MAX_LENGTH, resolveThreadsText } from '@/lib/social-threads-text'
 import { compareAccountOwnership, resolveOwnerProjectSlug, verifyProjectIsAllowed } from '@/lib/social-account-ownership'
+import { decryptAccountSecret } from '@/lib/social-account-crypto'
 import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
 import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
 
-// Server-side only. THREADS_ACCESS_TOKEN and THREADS_USER_ID must never be sent to the browser —
-// they are read here and only here, inside a function called exclusively from a server route
-// handler. Like Instagram, the target account isn't resolved from social_accounts: a Threads
-// access token is already scoped to one specific Threads user, so the user id comes from its own
-// env var — global across every project. THREADS_OWNER_PROJECT names the one project allowed to
-// use it at all; social_accounts is still used too, both as a project-scoped "is Threads actually
-// connected and active for this project" guard, AND as the known-good @handle an ownership check
-// compares the actually-connected account's username against before any publish call is made —
-// but neither social_accounts row nor username match is, by itself, the authorization. See
-// lib/social-account-ownership.ts for why.
+// Server-side only. Credentials must never be sent to the browser — they are read here and only
+// here, inside a function called exclusively from a server route handler.
+//
+// Two credential sources, tried in this order (Social Connect MVP — see
+// db/migrations/0022_social_accounts_meta_credentials.sql), same resolution order as
+// lib/social-instagram.ts:
+//   1. The linked social_accounts row's OWN encrypted token (threads_access_token_encrypted +
+//      threads_user_id), connected per-project via lib/social-accounts-threads-connection.ts.
+//      Scoped to this project by construction — the account row is only ever read with
+//      `WHERE project_id = $2`.
+//   2. If the account has no per-account token, the original global env fallback: a Threads
+//      access token is already scoped to one specific Threads user, so THREADS_ACCESS_TOKEN/
+//      THREADS_USER_ID are global across every project, and THREADS_OWNER_PROJECT names the one
+//      project allowed to use them at all — unchanged from before this MVP. `social_accounts.
+//      username` is additionally compared against the global credential's actual handle; neither
+//      check is, by itself, sufficient — see lib/social-account-ownership.ts for why.
 
 export type SocialThreadsResult = { error: string; status: number } | { row: Record<string, unknown> }
 
@@ -111,16 +118,6 @@ export async function publishSocialPublicationToThreads(
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
 
-  // Authorization gate: the global credentials below belong to exactly one project. This must be
-  // checked before anything else — social_accounts.username (checked further down) is
-  // user-editable and not unique, so it cannot be the thing that decides this.
-  const ownerProject = resolveOwnerProjectSlug(process.env.THREADS_OWNER_PROJECT)
-  const projectGate = verifyProjectIsAllowed('Threads', 'THREADS_OWNER_PROJECT', ownerProject, projectSlug)
-  if (!projectGate.ok) {
-    await recordPublicationPreflightFailure(pool, id, projectId, projectGate.error)
-    return { error: projectGate.error, status: 403 }
-  }
-
   const { rows: pubRows } = await pool.query<{
     id: string
     social_post_id: string
@@ -140,10 +137,18 @@ export async function publishSocialPublicationToThreads(
     return { error: 'this publication is already published', status: 409 }
   }
 
-  let account: { platform?: string; active: boolean; username: string } | undefined
+  type ThreadsAccountRow = {
+    platform?: string
+    active: boolean
+    username: string
+    threads_access_token_encrypted: string
+    threads_user_id: string
+    threads_token_expires_at: string | null
+  }
+  let account: ThreadsAccountRow | undefined
   if (publication.social_account_id) {
-    const { rows } = await pool.query<{ platform: string; active: boolean; username: string }>(
-      'SELECT platform, active, username FROM social_accounts WHERE id = $1 AND project_id = $2',
+    const { rows } = await pool.query<ThreadsAccountRow>(
+      'SELECT platform, active, username, threads_access_token_encrypted, threads_user_id, threads_token_expires_at FROM social_accounts WHERE id = $1 AND project_id = $2',
       [publication.social_account_id, projectId],
     )
     account = rows[0]
@@ -153,8 +158,9 @@ export async function publishSocialPublicationToThreads(
       return { error, status: 400 }
     }
   } else {
-    const { rows } = await pool.query<{ active: boolean; username: string }>(
-      `SELECT active, username FROM social_accounts WHERE project_id = $1 AND platform = 'threads' AND active = true ORDER BY created_at ASC LIMIT 1`,
+    const { rows } = await pool.query<ThreadsAccountRow>(
+      `SELECT active, username, threads_access_token_encrypted, threads_user_id, threads_token_expires_at
+       FROM social_accounts WHERE project_id = $1 AND platform = 'threads' AND active = true ORDER BY created_at ASC LIMIT 1`,
       [projectId],
     )
     account = rows[0]
@@ -187,29 +193,62 @@ export async function publishSocialPublicationToThreads(
     return { error, status: 400 }
   }
 
-  const userId = process.env.THREADS_USER_ID
-  const token = process.env.THREADS_ACCESS_TOKEN
-  if (!userId || !token) {
-    const error = 'THREADS_ACCESS_TOKEN/THREADS_USER_ID is not configured on the server'
-    await recordPublicationPreflightFailure(pool, id, projectId, error)
-    return { error, status: 500 }
-  }
+  let userId: string
+  let token: string
+  if (account.threads_access_token_encrypted) {
+    // Per-account credential: scoped to this project already (the account row above was read
+    // with `WHERE project_id = $2`), so no ownership check is needed.
+    if (account.threads_token_expires_at && new Date(account.threads_token_expires_at) <= new Date()) {
+      const error =
+        'This Threads account\'s access token has expired. Reconnect it in Social → Accounts (the token could not be ' +
+        'refreshed automatically — see lib/social-accounts-threads-connection.ts for why refresh is only attempted on an explicit recheck).'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 403 }
+    }
+    try {
+      token = decryptAccountSecret(account.threads_access_token_encrypted)
+    } catch (err) {
+      const error = `Could not decrypt the stored Threads token: ${err instanceof Error ? err.message : String(err)}`
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 500 }
+    }
+    userId = account.threads_user_id
+  } else {
+    // Global env fallback — unchanged from before this MVP, still gated by THREADS_OWNER_PROJECT.
+    const ownerProject = resolveOwnerProjectSlug(process.env.THREADS_OWNER_PROJECT)
+    const projectGate = verifyProjectIsAllowed('Threads', 'THREADS_OWNER_PROJECT', ownerProject, projectSlug)
+    if (!projectGate.ok) {
+      await recordPublicationPreflightFailure(pool, id, projectId, projectGate.error)
+      return { error: projectGate.error, status: 403 }
+    }
 
-  // Ownership guard: the global credentials above are shared across every project. Confirm they
-  // actually point at THIS project's Threads account before anything gets published — see
-  // lib/social-account-ownership.ts.
-  const identityParams = new URLSearchParams({ fields: 'username', access_token: token })
-  const identityRes = await fetch(`${THREADS_API_BASE}/${userId}?${identityParams.toString()}`)
-  const identityData = await identityRes.json().catch(() => null)
-  if (!identityRes.ok || identityData?.error) {
-    const error = (identityData?.error?.message as string) || `Threads API request failed (${identityRes.status})`
-    await recordPublicationPreflightFailure(pool, id, projectId, error)
-    return { error, status: 502 }
-  }
-  const ownership = compareAccountOwnership('Threads', account.username, identityData?.username as string | undefined)
-  if (!ownership.ok) {
-    await recordPublicationPreflightFailure(pool, id, projectId, ownership.error)
-    return { error: ownership.error, status: 403 }
+    const envUserId = process.env.THREADS_USER_ID
+    const envToken = process.env.THREADS_ACCESS_TOKEN
+    if (!envUserId || !envToken) {
+      const error = 'THREADS_ACCESS_TOKEN/THREADS_USER_ID is not configured on the server'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 500 }
+    }
+
+    // Ownership guard: the global credentials above are shared across every project. Confirm they
+    // actually point at THIS project's Threads account before anything gets published — see
+    // lib/social-account-ownership.ts.
+    const identityParams = new URLSearchParams({ fields: 'username', access_token: envToken })
+    const identityRes = await fetch(`${THREADS_API_BASE}/${envUserId}?${identityParams.toString()}`)
+    const identityData = await identityRes.json().catch(() => null)
+    if (!identityRes.ok || identityData?.error) {
+      const error = (identityData?.error?.message as string) || `Threads API request failed (${identityRes.status})`
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 502 }
+    }
+    const ownership = compareAccountOwnership('Threads', account.username, identityData?.username as string | undefined)
+    if (!ownership.ok) {
+      await recordPublicationPreflightFailure(pool, id, projectId, ownership.error)
+      return { error: ownership.error, status: 403 }
+    }
+
+    userId = envUserId
+    token = envToken
   }
 
   // Container creation + the processing poll happen before any claim — nothing is posted yet at
