@@ -645,6 +645,7 @@ export const en = {
     uploadingImage: 'Uploading…',
     replaceImage: 'Replace image',
     uploadImageError: 'Could not upload image. Please try again.',
+    uploadImageProjectRequired: 'Select a project before uploading an image.',
     generateVariants: 'Generate variants',
     generatingVariants: 'Generating…',
     generateVariantsError: 'Could not generate variants. Please try again.',

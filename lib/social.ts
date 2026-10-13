@@ -169,10 +169,27 @@ export async function listSocialPosts(
   return rows
 }
 
+/**
+ * Always includes `project_slug`/`project_name` (joined from `projects`, same as
+ * `listSocialPosts`) — not just for the "all projects" list. `createSocialPost`/`updateSocialPost`
+ * route their own return value through this function rather than their own bare `RETURNING *`, so
+ * every post the client ever receives — freshly created, just edited, or re-fetched — carries its
+ * own project slug consistently. Without that, a freshly created/edited post's client-side object
+ * would have an empty `projectSlug` until the next full list refetch, and any further per-row
+ * action scoped to that project (editing, deleting, Instagram image upload, generate-variants,
+ * publishing) would send `project=` (empty) and fail with "a known project is required" even
+ * though the admin had already picked a real project to create/edit it under.
+ */
 export async function getSocialPost(id: string, projectSlug: string | null): Promise<Record<string, unknown> | null> {
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return null
-  const { rows } = await pool.query('SELECT * FROM social_posts WHERE id = $1 AND project_id = $2', [id, projectId])
+  const { rows } = await pool.query(
+    `SELECT sp.*, p.slug AS project_slug, p.name AS project_name
+     FROM social_posts sp
+     JOIN projects p ON p.id = sp.project_id
+     WHERE sp.id = $1 AND sp.project_id = $2`,
+    [id, projectId],
+  )
   return rows[0] ?? null
 }
 
@@ -219,7 +236,12 @@ export async function createSocialPost(projectSlug: string | null, input: Social
     await ensurePublicationsForChannels(id, projectId, channels)
   }
 
-  return { row: rows[0] }
+  // Re-read through getSocialPost (not the bare `rows[0]` from RETURNING *) so the row handed
+  // back to the caller already carries project_slug/project_name — see getSocialPost's own
+  // comment for why this matters. projectId was just resolved above, so this is guaranteed to
+  // find the row just inserted.
+  const created = await getSocialPost(id, projectSlug)
+  return { row: created ?? rows[0] }
 }
 
 export async function updateSocialPost(
@@ -297,7 +319,10 @@ export async function updateSocialPost(
     if (fresh) return { row: fresh }
   }
 
-  return { row: rows[0] }
+  // Same reasoning as createSocialPost: re-read through getSocialPost rather than returning the
+  // bare `rows[0]` from RETURNING *, so this row also carries project_slug/project_name.
+  const updated = await getSocialPost(id, projectSlug)
+  return { row: updated ?? rows[0] }
 }
 
 export async function deleteSocialPost(id: string, projectSlug: string | null): Promise<boolean> {

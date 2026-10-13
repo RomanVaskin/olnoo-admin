@@ -185,6 +185,17 @@ function PostDetail({
    * server enforces them independently. */
   async function handleImageUpload(file: File) {
     setUploadImageError('')
+    // `project` here is always the specific post's own project (PostDetail is only ever opened
+    // for a real, already-saved post — see SocialView passing `project={selected.projectSlug}`),
+    // so this should never actually trigger in practice. It stays as a defensive, clear-message
+    // guard — rather than letting a blank/"all" project reach the upload endpoint and come back
+    // as its own raw "a known project is required" API error — for the same reason
+    // LeadCreateForm/CreateForm refuse to submit without an explicit project: a write must never
+    // be attempted under "all" or no project at all.
+    if (!project || project === 'all') {
+      setUploadImageError(t.socialView.uploadImageProjectRequired)
+      return
+    }
     if (file.type !== 'image/jpeg') {
       setUploadImageError(t.socialView.uploadImageError)
       return
