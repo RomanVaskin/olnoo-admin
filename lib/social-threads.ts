@@ -4,6 +4,7 @@ import { syncPostStatusFromPublications } from '@/lib/social'
 import { THREADS_TEXT_MAX_LENGTH, resolveThreadsText } from '@/lib/social-threads-text'
 import { compareAccountOwnership, resolveOwnerProjectSlug, verifyProjectIsAllowed } from '@/lib/social-account-ownership'
 import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
+import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
 
 // Server-side only. THREADS_ACCESS_TOKEN and THREADS_USER_ID must never be sent to the browser —
 // they are read here and only here, inside a function called exclusively from a server route
@@ -27,6 +28,12 @@ const THREADS_API_BASE = `${process.env.THREADS_API_BASE_URL || 'https://graph.t
 // Meta recommends waiting ~30s for a text container to finish processing before publishing.
 const CONTAINER_POLL_MAX_ATTEMPTS = 10
 const CONTAINER_POLL_DELAY_MS = 3000
+
+// Bounds how long the one, irreversible threads_publish call may hang before this is treated as
+// an unconfirmable ("unknown") outcome rather than left to hang the request indefinitely. Only
+// this specific call gets a timeout — container creation and the processing poll above are safe
+// to retry on any failure (nothing has been posted yet).
+const SEND_TIMEOUT_MS = 20_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -79,13 +86,22 @@ async function waitForContainerFinished(containerId: string, token: string): Pro
  * global credentials are actually connected to, as a second, independent sanity check; a
  * mismatch or a blank username still refuses to publish.
  *
- * Never re-sends an already-published publication (duplicate protection: rejected before any
- * Threads API call). A Threads API error, a failed/expired container, or a network failure is not
- * thrown — it is written to the row as status='failed' with the error message, leaving
- * external_post_id/external_url untouched, so a later retry is just calling this again (the
- * 'published' guard is the only thing that ever blocks a call, and 'failed' doesn't trip it).
- * Unlike Instagram, a permalink that can't be read back is not treated as fatal — the post itself
- * already published successfully at that point.
+ * Never re-sends an already-published publication, and never sends it twice concurrently: right
+ * before threads_publish — the one irreversible "post it" call — `claimPublicationForSending`
+ * atomically transitions the row to 'publishing' (see lib/social-publication-claim.ts); every
+ * other caller (a concurrent click, the scheduler, a stuck row from a previous attempt) is refused
+ * with 409 before threads_publish is ever called. Container creation and the processing poll
+ * happen BEFORE the claim — nothing is posted yet at that point, so any failure there is safely a
+ * normal, retriable 'failed'.
+ *
+ * threads_publish itself splits into two outcomes: a definitive Threads API rejection (a response
+ * was received, just not a success one) is written to the row as status='failed'. A send whose
+ * outcome is genuinely UNKNOWN — threads_publish's own fetch() never got a response at all (a
+ * timeout, a dropped connection) — is deliberately NOT written as 'failed': the row is left at
+ * 'publishing' and a 503 is returned instead, so it is never auto-retried either — only a human
+ * who has checked Threads directly can resolve it. Unlike that one case, a permalink that can't be
+ * read back is not treated as fatal (nor as "unknown") — the post itself already published
+ * successfully by that point.
  */
 export async function publishSocialPublicationToThreads(
   pool: Pool,
@@ -196,9 +212,10 @@ export async function publishSocialPublicationToThreads(
     return { error: ownership.error, status: 403 }
   }
 
+  // Container creation + the processing poll happen before any claim — nothing is posted yet at
+  // this point, so any failure here is always safely a normal, retriable 'failed'.
   let threadsError: string | null = null
-  let mediaId: string | null = null
-  let permalink: string | null = null
+  let containerId: string | undefined
   try {
     const createParams = new URLSearchParams({ media_type: 'TEXT', text, access_token: token })
     const createRes = await fetch(`${THREADS_API_BASE}/${userId}/threads`, {
@@ -210,43 +227,99 @@ export async function publishSocialPublicationToThreads(
     if (!createRes.ok || createData?.error) {
       threadsError = (createData?.error?.message as string) || `Threads API request failed (${createRes.status})`
     } else {
-      const containerId = createData?.id as string | undefined
+      containerId = createData?.id as string | undefined
       if (!containerId) {
         threadsError = 'Threads did not return a media container id'
       } else {
         const finished = await waitForContainerFinished(containerId, token)
         if ('error' in finished) {
           threadsError = finished.error
-        } else {
-          const publishParams = new URLSearchParams({ creation_id: containerId, access_token: token })
-          const publishRes = await fetch(`${THREADS_API_BASE}/${userId}/threads_publish`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: publishParams.toString(),
-          })
-          const publishData = await publishRes.json().catch(() => null)
-          if (!publishRes.ok || publishData?.error) {
-            threadsError = (publishData?.error?.message as string) || `Threads API request failed (${publishRes.status})`
-          } else {
-            mediaId = (publishData?.id as string) || null
-            if (!mediaId) {
-              threadsError = 'Threads did not return a published post id'
-            } else {
-              // Best-effort only: the post already published successfully above, so a permalink
-              // lookup failure here must not turn a successful publish into a reported failure.
-              const permaParams = new URLSearchParams({ fields: 'permalink', access_token: token })
-              const permaRes = await fetch(`${THREADS_API_BASE}/${mediaId}?${permaParams.toString()}`)
-              const permaData = await permaRes.json().catch(() => null)
-              if (permaRes.ok && !permaData?.error) {
-                permalink = (permaData?.permalink as string) || null
-              }
-            }
-          }
+          containerId = undefined
         }
       }
     }
   } catch (err) {
     threadsError = err instanceof Error ? err.message : String(err)
+    containerId = undefined
+  }
+
+  if (!containerId) {
+    const { rows } = await pool.query(
+      `UPDATE social_publications SET status = 'failed', error = $1, updated_at = now() WHERE id = $2 AND project_id = $3 RETURNING *`,
+      [threadsError || 'Threads did not return a media container id', id, projectId],
+    )
+    return { row: rows[0] }
+  }
+
+  // Atomic claim, right before the one irreversible call — see claimPublicationForSending's own
+  // comment. Container creation above never posts anything, so it's safe to redo on every retry;
+  // only threads_publish actually matters.
+  const claim = await claimPublicationForSending(pool, id, projectId)
+  if (!claim.claimed) return publicationClaimConflictResult(claim.currentStatus)
+
+  let mediaId: string | null = null
+  let permalink: string | null = null
+  let sendOutcomeUnknown = false
+  try {
+    const publishParams = new URLSearchParams({ creation_id: containerId, access_token: token })
+    const publishRes = await fetch(`${THREADS_API_BASE}/${userId}/threads_publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: publishParams.toString(),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    })
+    // A response was received — Threads definitively answered either way. But a 2xx status is
+    // only a PARTIAL confirmation: if the body itself then fails to read (the connection drops
+    // mid-stream), we genuinely don't know whether the post went out — a 2xx strongly suggests it
+    // did, so this must NOT be treated as a confirmed failure (which would wrongly allow a retry
+    // that could call threads_publish, and post the same content, a second time). A non-2xx
+    // status is still a confirmed rejection regardless of whether its body can be read.
+    let publishData: { error?: { message?: string }; id?: string } | null = null
+    let bodyReadFailed = false
+    try {
+      publishData = await publishRes.json()
+    } catch {
+      bodyReadFailed = true
+    }
+    if (publishRes.ok && bodyReadFailed) {
+      threadsError = 'Threads returned a success status but the response body could not be read'
+      sendOutcomeUnknown = true
+    } else if (!publishRes.ok || publishData?.error) {
+      threadsError = publishData?.error?.message || `Threads API request failed (${publishRes.status})`
+    } else {
+      mediaId = (publishData?.id as string) || null
+      if (!mediaId) {
+        threadsError = 'Threads did not return a published post id'
+      } else {
+        // Best-effort only: the post already published successfully above, so a permalink
+        // lookup failure here must not turn a successful publish into a reported failure.
+        try {
+          const permaParams = new URLSearchParams({ fields: 'permalink', access_token: token })
+          const permaRes = await fetch(`${THREADS_API_BASE}/${mediaId}?${permaParams.toString()}`)
+          const permaData = await permaRes.json().catch(() => null)
+          if (permaRes.ok && !permaData?.error) {
+            permalink = (permaData?.permalink as string) || null
+          }
+        } catch {
+          // Best-effort — a network failure here doesn't change anything either (mediaId is
+          // already set, so the outcome below is 'published' regardless).
+        }
+      }
+    }
+  } catch (err) {
+    // fetch() itself threw on threads_publish specifically — a timeout (AbortSignal above) or a
+    // dropped connection. Threads never sent a response at all, so the content may or may not have
+    // actually been posted. Not a confirmed failure.
+    threadsError = err instanceof Error ? err.message : String(err)
+    sendOutcomeUnknown = true
+  }
+
+  if (sendOutcomeUnknown) {
+    // Deliberately no DB write — the row stays 'publishing' from the claim above.
+    return {
+      error: `Could not confirm whether Threads received the publish request: ${threadsError}. The publication is left as "publishing" — check Threads directly before retrying manually.`,
+      status: 503,
+    }
   }
 
   if (threadsError || !mediaId) {

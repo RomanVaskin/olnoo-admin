@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { StatusPill } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
-import { shouldShowThreadsPublishButton, shouldShowPublishSelectedButton } from '@/lib/social-publications-ui'
+import { shouldShowPublishButton, shouldShowThreadsPublishButton, shouldShowPublishSelectedButton } from '@/lib/social-publications-ui'
 
 const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
 type SocialChannel = (typeof CHANNELS)[number]
 
-type PublicationStatus = 'draft' | 'ready' | 'published' | 'failed'
+type PublicationStatus = 'draft' | 'ready' | 'publishing' | 'published' | 'failed'
 
 type Publication = {
   id: string
@@ -48,7 +48,7 @@ function fromApiAccount(row: Record<string, unknown>): Account {
   }
 }
 
-type BulkOutcome = 'published' | 'failed' | 'already_published'
+type BulkOutcome = 'published' | 'failed' | 'already_published' | 'unknown'
 
 type BulkResult = {
   id: string
@@ -246,7 +246,7 @@ function PublicationRow({
       {actionError && <span className="text-sm text-destructive">{actionError}</span>}
 
       <div className="flex items-center gap-2 pt-1">
-        {publication.status !== 'published' && publication.platform === 'telegram' ? (
+        {shouldShowPublishButton(publication.status) && publication.platform === 'telegram' ? (
           <button
             onClick={publishToTelegram}
             disabled={saving}
@@ -254,7 +254,7 @@ function PublicationRow({
           >
             {t.socialPublications.publishToTelegram}
           </button>
-        ) : publication.status !== 'published' && publication.platform === 'vk' ? (
+        ) : shouldShowPublishButton(publication.status) && publication.platform === 'vk' ? (
           <button
             onClick={publishToVk}
             disabled={saving}
@@ -262,7 +262,7 @@ function PublicationRow({
           >
             {t.socialPublications.publishToVk}
           </button>
-        ) : publication.status !== 'published' && publication.platform === 'instagram' ? (
+        ) : shouldShowPublishButton(publication.status) && publication.platform === 'instagram' ? (
           <button
             onClick={publishToInstagram}
             disabled={saving}
@@ -278,7 +278,7 @@ function PublicationRow({
           >
             {t.socialPublications.publishToThreads}
           </button>
-        ) : publication.status !== 'published' ? (
+        ) : shouldShowPublishButton(publication.status) ? (
           <button
             onClick={() => save({ status: 'published', externalUrl })}
             disabled={saving}
@@ -286,14 +286,18 @@ function PublicationRow({
           >
             {t.socialPublications.markPublished}
           </button>
+        ) : publication.status === 'publishing' ? (
+          <span className="label-mono text-muted-foreground">{t.socialPublications.publishingInProgress}</span>
         ) : null}
-        {/* Once a publication is 'published', there is deliberately no UI control to move it back
-            to any other status (e.g. a former "Back to ready" button) — the platform (Telegram/VK/
-            Instagram/Threads) already has the real post, and every publisher's own duplicate guard
-            is "status === 'published'"; erasing that status from here would silently re-enable a
-            next publish attempt to create a second, duplicate post. The API refuses the same
-            published→ready transition independently (see isForbiddenPublicationStatusTransition in
-            lib/social-publication-status-transition.ts, wired into updateSocialPublication). */}
+        {/* Once a publication is 'published' or 'publishing', there is deliberately no UI control
+            to move it back to 'ready' (e.g. a former "Back to ready" button) — every publisher's
+            own duplicate guard, and lib/social-publication-claim.ts's atomic claim, both key off
+            exactly those two statuses; erasing either from here would silently re-enable a next
+            publish attempt to create a second, duplicate post. The API refuses the same
+            transitions independently (see isForbiddenPublicationStatusTransition in
+            lib/social-publication-status-transition.ts, wired into updateSocialPublication). A
+            stuck 'publishing' row can only be resolved directly (PATCH to 'failed' or 'published'
+            after checking the platform) — there is no "retry" affordance for it here on purpose. */}
         {saving && <span className="label-mono text-muted-foreground">{t.common.saving}</span>}
       </div>
     </div>
@@ -310,9 +314,16 @@ function BulkResultRow({ result }: { result: BulkResult }) {
         <StatusPill status={result.outcome === 'already_published' ? 'published' : result.outcome} />
       </div>
       {/* StatusPill already shows Published/Failed — this line only adds information for the
-          one outcome the pill can't distinguish on its own: already published before this run. */}
+          two outcomes the pill can't distinguish on its own. */}
       {result.outcome === 'already_published' && (
         <span className="text-muted-foreground">{t.socialPublications.alreadyPublished}</span>
+      )}
+      {/* 'unknown': the platform never confirmed or denied receiving the send (a timeout, a
+          dropped connection) — the row was deliberately left at 'publishing' rather than written
+          to 'failed', so it is never auto-retried. A human needs to check the real platform
+          before doing anything further with this channel. */}
+      {result.outcome === 'unknown' && (
+        <span className="text-muted-foreground">{t.socialPublications.outcomeUnknown}</span>
       )}
       {result.externalUrl && (
         <a href={result.externalUrl} target="_blank" rel="noopener noreferrer" className="truncate text-foreground underline">

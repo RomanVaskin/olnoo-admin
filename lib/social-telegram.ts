@@ -2,6 +2,7 @@ import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
+import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
 
 // Server-side only. TELEGRAM_BOT_TOKEN must never be sent to the browser — it is read here and
 // only here, inside a function called exclusively from a server route handler.
@@ -11,6 +12,11 @@ export type SocialTelegramResult = { error: string; status: number } | { row: Re
 // Overridable the same way AI_ROUTER_URL overrides lib/ai-router.ts's base URL — not a secret,
 // just lets a non-production environment point at a mock Telegram Bot API for verification.
 const TELEGRAM_API_BASE = process.env.TELEGRAM_API_BASE_URL || 'https://api.telegram.org'
+
+// Bounds how long the one, irreversible sendMessage call may hang before this is treated as an
+// unconfirmable ("unknown") outcome rather than left to hang the request indefinitely. Only this
+// specific call gets a timeout — every earlier query/check is a safe-to-retry local read.
+const SEND_TIMEOUT_MS = 20_000
 
 /** Telegram's sendMessage chat_id accepts "@channelusername" or a numeric chat id — anything
  * else stored in social_accounts.username (e.g. a bare handle without "@") gets the "@" added. */
@@ -32,10 +38,20 @@ function externalUrlFor(username: string, messageId: number): string {
  * first active telegram account. Project-scoped like the rest of the Social module — a
  * publication id from another project resolves as not-found.
  *
- * Never re-sends an already-published publication (duplicate protection: rejected before any
- * Telegram API call). A Telegram API error or network failure is not thrown — it is written to
- * the row as status='failed' with the error message, so a later retry is just calling this again
- * (the 'published' guard is the only thing that ever blocks a call, and 'failed' doesn't trip it).
+ * Never re-sends an already-published publication, and never sends it twice concurrently: right
+ * before sendMessage, `claimPublicationForSending` atomically transitions the row to 'publishing'
+ * — only one caller can ever win that (see lib/social-publication-claim.ts); every other caller
+ * (a concurrent click, the scheduler, a stuck row from a previous attempt) is refused with 409
+ * before any Telegram API call.
+ *
+ * A definitive Telegram API rejection (a response was received, just not a success one) is
+ * written to the row as status='failed' with the error message, so a later retry is just calling
+ * this again. A send whose outcome is genuinely UNKNOWN — sendMessage's own fetch() never got a
+ * response at all (a timeout, a dropped connection) — is deliberately NOT written as 'failed': the
+ * message may or may not have actually reached Telegram, so the row is left at 'publishing'
+ * (nothing further is written) and a 503 is returned instead, so it is never auto-retried either
+ * (see lib/social-publish-selected-targets.ts) — only a human who has checked Telegram directly
+ * can resolve it.
  */
 export async function publishSocialPublicationToTelegram(
   pool: Pool,
@@ -110,22 +126,60 @@ export async function publishSocialPublicationToTelegram(
 
   const chatId = chatIdFor(account.username)
 
+  // Atomic claim, right before the one irreversible call — see claimPublicationForSending's own
+  // comment. Every pre-flight check above is a safe-to-repeat local read; only sendMessage itself
+  // can actually cause a duplicate, so only it needs to be guarded.
+  const claim = await claimPublicationForSending(pool, id, projectId)
+  if (!claim.claimed) return publicationClaimConflictResult(claim.currentStatus)
+
   let telegramError: string | null = null
   let messageId: number | null = null
+  let sendOutcomeUnknown = false
   try {
     const res = await fetch(`${TELEGRAM_API_BASE}/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     })
-    const data = await res.json().catch(() => null)
-    if (!res.ok || !data?.ok) {
-      telegramError = (data && typeof data.description === 'string' && data.description) || `Telegram API request failed (${res.status})`
+    // A response was received — a success or a rejection, Telegram definitively answered either
+    // way. But a 2xx status is only a PARTIAL confirmation: if the body itself then fails to read
+    // (the connection drops mid-stream, after the status line but before the full response), we
+    // genuinely don't know whether the message went out — Telegram's 2xx strongly suggests it did,
+    // so this must NOT be treated as a confirmed failure (which would wrongly allow a retry that
+    // could send the same message twice). A non-2xx status is still a confirmed rejection
+    // regardless of whether its body can be read.
+    let data: unknown = null
+    let bodyReadFailed = false
+    try {
+      data = await res.json()
+    } catch {
+      bodyReadFailed = true
+    }
+    if (res.ok && bodyReadFailed) {
+      telegramError = 'Telegram returned a success status but the response body could not be read'
+      sendOutcomeUnknown = true
+    } else if (!res.ok || !(data as { ok?: boolean } | null)?.ok) {
+      const errorData = data as { description?: unknown } | null
+      telegramError = (errorData && typeof errorData.description === 'string' && errorData.description) || `Telegram API request failed (${res.status})`
     } else {
-      messageId = data.result?.message_id ?? null
+      messageId = (data as { result?: { message_id?: number } }).result?.message_id ?? null
     }
   } catch (err) {
+    // fetch() itself threw — a timeout (AbortSignal above) or a dropped connection before any
+    // response at all. Telegram never answered, so the message may or may not have actually gone
+    // out. This is NOT a confirmed failure.
     telegramError = err instanceof Error ? err.message : String(err)
+    sendOutcomeUnknown = true
+  }
+
+  if (sendOutcomeUnknown) {
+    // Deliberately no DB write here — the row stays 'publishing' from the claim above, which
+    // already keeps it out of every automatic retry path (see shouldAttemptPublicationTarget).
+    return {
+      error: `Could not confirm whether Telegram received the message: ${telegramError}. The publication is left as "publishing" — check Telegram directly before retrying manually.`,
+      status: 503,
+    }
   }
 
   if (telegramError || !messageId) {

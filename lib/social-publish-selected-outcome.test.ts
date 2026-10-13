@@ -32,3 +32,28 @@ test('a non-409 pre-flight error (e.g. missing Instagram image) maps to "failed"
   )
   assert.deepEqual(result, { outcome: 'failed', externalUrl: '', error: 'post has no Instagram image URL to publish' })
 })
+
+// PR-2
+test('a 409 claim conflict (lib/social-publication-claim.ts — a concurrent attempt or a stuck "publishing" row) also maps to "already_published", not "failed"', () => {
+  const result = outcomeFromPublisherResult(
+    {
+      error:
+        'this publication is already being published, or a previous attempt never finished — check the platform directly before retrying',
+      status: 409,
+    },
+    '',
+  )
+  assert.equal(result.outcome, 'already_published')
+})
+
+test('a 503 (send outcome unknown — timeout/dropped connection, never got a response from the platform) maps to "unknown", never "failed"', () => {
+  const result = outcomeFromPublisherResult(
+    { error: 'Could not confirm whether Telegram received the message: fetch failed', status: 503 },
+    '',
+  )
+  assert.deepEqual(result, {
+    outcome: 'unknown',
+    externalUrl: '',
+    error: 'Could not confirm whether Telegram received the message: fetch failed',
+  })
+})

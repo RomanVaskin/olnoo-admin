@@ -18,23 +18,39 @@
 
 export type InstagramPublishOutcome =
   | { status: 'failed'; error: string }
+  | { status: 'unknown'; error: string }
   | { status: 'published'; externalPostId: string; externalUrl: string }
 
 /**
  * `mediaId` is the id returned by a successful `media_publish` call (null if that step never
- * succeeded — the one genuine failure case). `permalink` is the best-effort result of the
- * following read-back call (null if it wasn't fetched or came back empty). `igError` is whatever
- * error message was captured during the whole attempt, from ANY step — it is only used when
- * `mediaId` is null; once `mediaId` is set, the post has already been published, so no error from
- * this point on (in particular, a permalink lookup failure) can turn that into a reported failure.
+ * succeeded). `permalink` is the best-effort result of the following read-back call (null if it
+ * wasn't fetched or came back empty). `igError` is whatever error message was captured during the
+ * whole attempt, from ANY step — it is only used when `mediaId` is null; once `mediaId` is set,
+ * the post has already been published, so no error from this point on (in particular, a permalink
+ * lookup failure) can turn that into a reported failure.
+ *
+ * PR-2: `sendOutcomeUnknown` is true ONLY when the `media_publish` call itself — the one
+ * irreversible "post it" step — never got a response from Instagram at all (its own `fetch()`
+ * threw: a timeout, a dropped connection). In that one specific case the real outcome is genuinely
+ * unknown — the content may or may not have actually been posted — so this must be reported as
+ * `'unknown'`, never `'failed'`: a `'failed'` row doesn't trip the "already published" 409 guard
+ * (or, post-PR-2, `lib/social-publication-claim.ts`'s atomic claim), so a later retry — automatic
+ * or manual — could call `media_publish` again and create a real duplicate post. A failure in an
+ * EARLIER step (container creation, the processing poll) is still safely `'failed'`, whatever its
+ * own cause — nothing has been posted yet at that point, regardless of why that step failed, so
+ * retrying is always safe.
  */
 export function resolveInstagramPublishOutcome(
   mediaId: string | null,
   permalink: string | null,
   igError: string | null,
+  sendOutcomeUnknown: boolean,
 ): InstagramPublishOutcome {
-  if (!mediaId) {
-    return { status: 'failed', error: igError || 'Instagram did not return a published media id' }
+  if (mediaId) {
+    return { status: 'published', externalPostId: mediaId, externalUrl: permalink || '' }
   }
-  return { status: 'published', externalPostId: mediaId, externalUrl: permalink || '' }
+  if (sendOutcomeUnknown) {
+    return { status: 'unknown', error: igError || 'Could not confirm whether Instagram received the publish request' }
+  }
+  return { status: 'failed', error: igError || 'Instagram did not return a published media id' }
 }

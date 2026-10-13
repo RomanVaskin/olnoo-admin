@@ -5,7 +5,7 @@ import { publishSocialPublicationToTelegram } from '@/lib/social-telegram'
 import { publishSocialPublicationToVk } from '@/lib/social-vk'
 import { publishSocialPublicationToInstagram } from '@/lib/social-instagram'
 import { publishSocialPublicationToThreads } from '@/lib/social-threads'
-import { outcomeFromPublisherResult, type PublisherCallResult } from '@/lib/social-publish-selected-outcome'
+import { outcomeFromPublisherResult, type ChannelOutcome, type PublisherCallResult } from '@/lib/social-publish-selected-outcome'
 import { shouldAttemptPublicationTarget } from '@/lib/social-publish-selected-targets'
 
 // Fan-out only — no new publish logic of its own. Every channel below already has its own
@@ -16,7 +16,7 @@ import { shouldAttemptPublicationTarget } from '@/lib/social-publish-selected-ta
 export type ChannelPublishOutcome = {
   id: string
   platform: SocialChannel
-  outcome: 'published' | 'failed' | 'already_published'
+  outcome: ChannelOutcome
   externalUrl: string
   error: string
 }
