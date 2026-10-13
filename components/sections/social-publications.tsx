@@ -286,15 +286,14 @@ function PublicationRow({
           >
             {t.socialPublications.markPublished}
           </button>
-        ) : (
-          <button
-            onClick={() => save({ status: 'ready' })}
-            disabled={saving}
-            className="label-mono border border-hairline px-3 py-2 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
-          >
-            {t.socialPublications.backToReady}
-          </button>
-        )}
+        ) : null}
+        {/* Once a publication is 'published', there is deliberately no UI control to move it back
+            to any other status (e.g. a former "Back to ready" button) — the platform (Telegram/VK/
+            Instagram/Threads) already has the real post, and every publisher's own duplicate guard
+            is "status === 'published'"; erasing that status from here would silently re-enable a
+            next publish attempt to create a second, duplicate post. The API refuses the same
+            published→ready transition independently (see isForbiddenPublicationStatusTransition in
+            lib/social-publication-status-transition.ts, wired into updateSocialPublication). */}
         {saving && <span className="label-mono text-muted-foreground">{t.common.saving}</span>}
       </div>
     </div>

@@ -2,6 +2,7 @@ import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { decryptAccountSecret } from '@/lib/social-account-crypto'
+import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
 
 // Server-side only. A VK community's access token must never be sent to the browser — it is
 // decrypted here and only here, inside a function called exclusively from a server route handler.
@@ -110,7 +111,9 @@ export async function publishSocialPublicationToVk(
   if (!publication) return { error: 'not found', status: 404 }
 
   if (publication.platform !== 'vk') {
-    return { error: 'only VK publications can be published through this endpoint', status: 400 }
+    const error = 'only VK publications can be published through this endpoint'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
   if (publication.status === 'published') {
     return { error: 'this publication is already published', status: 409 }
@@ -122,7 +125,11 @@ export async function publishSocialPublicationToVk(
   )
   const post = postRows[0]
   const text = post?.vk_text?.trim() || post?.body?.trim() || ''
-  if (!text) return { error: 'post has no content to publish', status: 400 }
+  if (!text) {
+    const error = 'post has no content to publish'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
+  }
 
   type VkAccountRow = {
     username: string
@@ -140,7 +147,9 @@ export async function publishSocialPublicationToVk(
     )
     account = rows[0]
     if (!account || account.platform !== 'vk') {
-      return { error: 'linked account is not a VK account', status: 400 }
+      const error = 'linked account is not a VK account'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 400 }
     }
   } else {
     const { rows } = await pool.query<VkAccountRow>(
@@ -150,28 +159,36 @@ export async function publishSocialPublicationToVk(
     account = rows[0]
   }
   if (!account) {
-    return { error: 'no VK account configured for this project', status: 400 }
+    const error = 'no VK account configured for this project'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
   if (!account.active) {
-    return { error: 'the linked VK account is not active', status: 400 }
+    const error = 'the linked VK account is not active'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
 
   if (!account.vk_access_token_encrypted) {
-    return {
-      error: 'this VK community has not connected its own access token yet — connect it from Social → Accounts before publishing',
-      status: 400,
-    }
+    const error =
+      'this VK community has not connected its own access token yet — connect it from Social → Accounts before publishing'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
   let token: string
   try {
     token = decryptAccountSecret(account.vk_access_token_encrypted)
   } catch (err) {
-    return { error: `Could not decrypt the stored VK token: ${err instanceof Error ? err.message : String(err)}`, status: 500 }
+    const error = `Could not decrypt the stored VK token: ${err instanceof Error ? err.message : String(err)}`
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 500 }
   }
 
   const fallbackIdentifier = account.username?.trim() || screenNameFromPublicUrl(account.public_url || '')
   if (!account.vk_group_id?.trim() && !fallbackIdentifier) {
-    return { error: 'the VK account has no resolved group id, username, or public URL to identify the community', status: 400 }
+    const error = 'the VK account has no resolved group id, username, or public URL to identify the community'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
 
   let vkError: string | null = null

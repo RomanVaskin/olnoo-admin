@@ -1,6 +1,7 @@
 import type { Pool } from 'pg'
 import { publishSelectedChannels, type ChannelPublishOutcome } from '@/lib/social-publish-selected'
 import { isPublishDue } from '@/lib/social-scheduler-due'
+import { withSchedulerLock } from '@/lib/social-scheduler-lock'
 
 // The scheduler sweep itself — no new publish logic, no queue, no worker process. It only finds
 // which posts are due and hands each one to the exact same publishSelectedChannels fan-out the
@@ -20,17 +21,6 @@ export type SchedulerRunResult =
   | { skipped: true; reason: string }
   | { skipped: false; processed: SchedulerPostResult[] }
 
-// A single, fixed Postgres advisory lock key for the whole scheduler sweep (not per-post, not
-// per-project — only one sweep needs to run at a time on this one server). pg_try_advisory_lock
-// is the simplest overlap guard the current Postgres already offers: no new table, no queue, no
-// row to clean up if the process crashes (the lock is tied to the DB session/connection and is
-// released automatically if that connection drops). If two scheduler runs are ever triggered close
-// together (e.g. a slow run still in flight when the next per-minute timer fires), the second one
-// finds the lock held, does nothing, and returns immediately — it does not wait or queue up.
-// Arbitrary but must stay stable across deploys/restarts (advisory lock keys are just int8 values,
-// not tied to any schema).
-const SCHEDULER_LOCK_KEY = 727142001
-
 /**
  * Finds every social_posts row that is status='ready', has at least one selected channel, has a
  * publish_date that has arrived, and still has at least one non-'published' social_publications
@@ -39,18 +29,20 @@ const SCHEDULER_LOCK_KEY = 727142001
  * downtime). A post with no publish_date set at all is never picked up here — that's unchanged,
  * intentional manual-publish behavior for posts that were never given a schedule.
  *
+ * `retryFailed: false` — this is the one thing that makes a scheduler sweep different from a
+ * human clicking "Publish selected channels": a publication already marked 'failed' from a
+ * previous attempt (a durable, known failure — bad credentials, missing content, a platform
+ * rejecting the content outright) is never automatically retried again here. Without it, every
+ * sweep (once a minute) would re-attempt the exact same doomed-to-fail call forever, with no way
+ * to stop short of a human intervening. A human can still retry a failed channel explicitly
+ * (the manual bulk-publish route/button and the individual "Publish to X" buttons both keep
+ * publishSelectedChannels's/each publisher's own default, which does retry).
+ *
  * One post's unexpected failure (a thrown exception, not just a failed channel — those are already
  * handled inside publishSelectedChannels) never stops the sweep over the remaining due posts.
  */
 export async function runSocialScheduler(pool: Pool, now: Date = new Date()): Promise<SchedulerRunResult> {
-  const { rows: lockRows } = await pool.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1) AS locked', [
-    SCHEDULER_LOCK_KEY,
-  ])
-  if (!lockRows[0]?.locked) {
-    return { skipped: true, reason: 'another scheduler run is already in progress' }
-  }
-
-  try {
+  const outcome = await withSchedulerLock(pool, async () => {
     const { rows: candidates } = await pool.query<{ id: string; slug: string; publish_date: string }>(
       `SELECT sp.id, pr.slug, sp.publish_date
        FROM social_posts sp
@@ -69,7 +61,7 @@ export async function runSocialScheduler(pool: Pool, now: Date = new Date()): Pr
     const processed: SchedulerPostResult[] = []
     for (const post of due) {
       try {
-        const result = await publishSelectedChannels(pool, post.id, post.slug)
+        const result = await publishSelectedChannels(pool, post.id, post.slug, { retryFailed: false })
         if ('error' in result) {
           processed.push({ postId: post.id, projectSlug: post.slug, outcomes: [], error: result.error })
         } else {
@@ -85,8 +77,11 @@ export async function runSocialScheduler(pool: Pool, now: Date = new Date()): Pr
       }
     }
 
-    return { skipped: false, processed }
-  } finally {
-    await pool.query('SELECT pg_advisory_unlock($1)', [SCHEDULER_LOCK_KEY])
+    return processed
+  })
+
+  if (outcome.skipped) {
+    return { skipped: true, reason: 'another scheduler run is already in progress' }
   }
+  return { skipped: false, processed: outcome.result }
 }
