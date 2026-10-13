@@ -3,6 +3,7 @@ import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { THREADS_TEXT_MAX_LENGTH, resolveThreadsText } from '@/lib/social-threads-text'
 import { compareAccountOwnership, resolveOwnerProjectSlug, verifyProjectIsAllowed } from '@/lib/social-account-ownership'
+import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
 
 // Server-side only. THREADS_ACCESS_TOKEN and THREADS_USER_ID must never be sent to the browser —
 // they are read here and only here, inside a function called exclusively from a server route
@@ -99,7 +100,10 @@ export async function publishSocialPublicationToThreads(
   // user-editable and not unique, so it cannot be the thing that decides this.
   const ownerProject = resolveOwnerProjectSlug(process.env.THREADS_OWNER_PROJECT)
   const projectGate = verifyProjectIsAllowed('Threads', 'THREADS_OWNER_PROJECT', ownerProject, projectSlug)
-  if (!projectGate.ok) return { error: projectGate.error, status: 403 }
+  if (!projectGate.ok) {
+    await recordPublicationPreflightFailure(pool, id, projectId, projectGate.error)
+    return { error: projectGate.error, status: 403 }
+  }
 
   const { rows: pubRows } = await pool.query<{
     id: string
@@ -112,7 +116,9 @@ export async function publishSocialPublicationToThreads(
   if (!publication) return { error: 'not found', status: 404 }
 
   if (publication.platform !== 'threads') {
-    return { error: 'only Threads publications can be published through this endpoint', status: 400 }
+    const error = 'only Threads publications can be published through this endpoint'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
   if (publication.status === 'published') {
     return { error: 'this publication is already published', status: 409 }
@@ -126,7 +132,9 @@ export async function publishSocialPublicationToThreads(
     )
     account = rows[0]
     if (!account || account.platform !== 'threads') {
-      return { error: 'linked account is not a Threads account', status: 400 }
+      const error = 'linked account is not a Threads account'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 400 }
     }
   } else {
     const { rows } = await pool.query<{ active: boolean; username: string }>(
@@ -136,10 +144,14 @@ export async function publishSocialPublicationToThreads(
     account = rows[0]
   }
   if (!account) {
-    return { error: 'no Threads account configured for this project', status: 400 }
+    const error = 'no Threads account configured for this project'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
   if (!account.active) {
-    return { error: 'the linked Threads account is not active', status: 400 }
+    const error = 'the linked Threads account is not active'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
 
   const { rows: postRows } = await pool.query<{ threads_text: string; body: string }>(
@@ -148,15 +160,23 @@ export async function publishSocialPublicationToThreads(
   )
   const post = postRows[0]
   const text = resolveThreadsText(post?.threads_text, post?.body)
-  if (!text) return { error: 'post has no content to publish', status: 400 }
+  if (!text) {
+    const error = 'post has no content to publish'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
+  }
   if (text.length > THREADS_TEXT_MAX_LENGTH) {
-    return { error: `Threads posts are limited to ${THREADS_TEXT_MAX_LENGTH} characters (this one is ${text.length})`, status: 400 }
+    const error = `Threads posts are limited to ${THREADS_TEXT_MAX_LENGTH} characters (this one is ${text.length})`
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
 
   const userId = process.env.THREADS_USER_ID
   const token = process.env.THREADS_ACCESS_TOKEN
   if (!userId || !token) {
-    return { error: 'THREADS_ACCESS_TOKEN/THREADS_USER_ID is not configured on the server', status: 500 }
+    const error = 'THREADS_ACCESS_TOKEN/THREADS_USER_ID is not configured on the server'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 500 }
   }
 
   // Ownership guard: the global credentials above are shared across every project. Confirm they
@@ -166,13 +186,15 @@ export async function publishSocialPublicationToThreads(
   const identityRes = await fetch(`${THREADS_API_BASE}/${userId}?${identityParams.toString()}`)
   const identityData = await identityRes.json().catch(() => null)
   if (!identityRes.ok || identityData?.error) {
-    return {
-      error: (identityData?.error?.message as string) || `Threads API request failed (${identityRes.status})`,
-      status: 502,
-    }
+    const error = (identityData?.error?.message as string) || `Threads API request failed (${identityRes.status})`
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 502 }
   }
   const ownership = compareAccountOwnership('Threads', account.username, identityData?.username as string | undefined)
-  if (!ownership.ok) return { error: ownership.error, status: 403 }
+  if (!ownership.ok) {
+    await recordPublicationPreflightFailure(pool, id, projectId, ownership.error)
+    return { error: ownership.error, status: 403 }
+  }
 
   let threadsError: string | null = null
   let mediaId: string | null = null

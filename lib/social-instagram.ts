@@ -2,6 +2,8 @@ import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { compareAccountOwnership, resolveOwnerProjectSlug, verifyProjectIsAllowed } from '@/lib/social-account-ownership'
+import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
+import { resolveInstagramPublishOutcome } from '@/lib/social-instagram-publish-outcome'
 
 // Server-side only. INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_ACCOUNT_ID must never be sent to the
 // browser — they are read here and only here, inside a function called exclusively from a server
@@ -89,7 +91,10 @@ export async function publishSocialPublicationToInstagram(
   // user-editable and not unique, so it cannot be the thing that decides this.
   const ownerProject = resolveOwnerProjectSlug(process.env.INSTAGRAM_OWNER_PROJECT)
   const projectGate = verifyProjectIsAllowed('Instagram', 'INSTAGRAM_OWNER_PROJECT', ownerProject, projectSlug)
-  if (!projectGate.ok) return { error: projectGate.error, status: 403 }
+  if (!projectGate.ok) {
+    await recordPublicationPreflightFailure(pool, id, projectId, projectGate.error)
+    return { error: projectGate.error, status: 403 }
+  }
 
   const { rows: pubRows } = await pool.query<{
     id: string
@@ -102,7 +107,9 @@ export async function publishSocialPublicationToInstagram(
   if (!publication) return { error: 'not found', status: 404 }
 
   if (publication.platform !== 'instagram') {
-    return { error: 'only Instagram publications can be published through this endpoint', status: 400 }
+    const error = 'only Instagram publications can be published through this endpoint'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
   if (publication.status === 'published') {
     return { error: 'this publication is already published', status: 409 }
@@ -116,7 +123,9 @@ export async function publishSocialPublicationToInstagram(
     )
     account = rows[0]
     if (!account || account.platform !== 'instagram') {
-      return { error: 'linked account is not an Instagram account', status: 400 }
+      const error = 'linked account is not an Instagram account'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 400 }
     }
   } else {
     const { rows } = await pool.query<{ active: boolean; username: string }>(
@@ -126,10 +135,14 @@ export async function publishSocialPublicationToInstagram(
     account = rows[0]
   }
   if (!account) {
-    return { error: 'no Instagram account configured for this project', status: 400 }
+    const error = 'no Instagram account configured for this project'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
   if (!account.active) {
-    return { error: 'the linked Instagram account is not active', status: 400 }
+    const error = 'the linked Instagram account is not active'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
 
   const { rows: postRows } = await pool.query<{ instagram_text: string; body: string; instagram_image_url: string }>(
@@ -138,14 +151,24 @@ export async function publishSocialPublicationToInstagram(
   )
   const post = postRows[0]
   const caption = post?.instagram_text?.trim() || post?.body?.trim() || ''
-  if (!caption) return { error: 'post has no content to publish', status: 400 }
+  if (!caption) {
+    const error = 'post has no content to publish'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
+  }
   const imageUrl = post?.instagram_image_url?.trim() || ''
-  if (!imageUrl) return { error: 'post has no Instagram image URL to publish', status: 400 }
+  if (!imageUrl) {
+    const error = 'post has no Instagram image URL to publish'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
+  }
 
   const accountId = process.env.INSTAGRAM_ACCOUNT_ID
   const token = process.env.INSTAGRAM_ACCESS_TOKEN
   if (!accountId || !token) {
-    return { error: 'INSTAGRAM_ACCESS_TOKEN/INSTAGRAM_ACCOUNT_ID is not configured on the server', status: 500 }
+    const error = 'INSTAGRAM_ACCESS_TOKEN/INSTAGRAM_ACCOUNT_ID is not configured on the server'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 500 }
   }
 
   // Ownership guard: the global credentials above are shared across every project. Confirm they
@@ -155,13 +178,15 @@ export async function publishSocialPublicationToInstagram(
   const identityRes = await fetch(`${IG_API_BASE}/${accountId}?${identityParams.toString()}`)
   const identityData = await identityRes.json().catch(() => null)
   if (!identityRes.ok || identityData?.error) {
-    return {
-      error: (identityData?.error?.message as string) || `Instagram API request failed (${identityRes.status})`,
-      status: 502,
-    }
+    const error = (identityData?.error?.message as string) || `Instagram API request failed (${identityRes.status})`
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 502 }
   }
   const ownership = compareAccountOwnership('Instagram', account.username, identityData?.username as string | undefined)
-  if (!ownership.ok) return { error: ownership.error, status: 403 }
+  if (!ownership.ok) {
+    await recordPublicationPreflightFailure(pool, id, projectId, ownership.error)
+    return { error: ownership.error, status: 403 }
+  }
 
   let igError: string | null = null
   let mediaId: string | null = null
@@ -199,14 +224,16 @@ export async function publishSocialPublicationToInstagram(
             if (!mediaId) {
               igError = 'Instagram did not return a published media id'
             } else {
+              // Best-effort only: media_publish above already succeeded, so the post is already
+              // live on Instagram — a permalink lookup failure here must not turn that into a
+              // reported failure (see resolveInstagramPublishOutcome for why: a 'failed' row would
+              // no longer trip the "already published" 409 guard, so a retry would call
+              // media_publish a second time and create a duplicate post).
               const permaParams = new URLSearchParams({ fields: 'permalink', access_token: token })
               const permaRes = await fetch(`${IG_API_BASE}/${mediaId}?${permaParams.toString()}`)
               const permaData = await permaRes.json().catch(() => null)
-              if (!permaRes.ok || permaData?.error) {
-                igError = (permaData?.error?.message as string) || `Instagram API request failed (${permaRes.status})`
-              } else {
+              if (permaRes.ok && !permaData?.error) {
                 permalink = (permaData?.permalink as string) || null
-                if (!permalink) igError = 'Instagram did not return a permalink'
               }
             }
           }
@@ -217,10 +244,12 @@ export async function publishSocialPublicationToInstagram(
     igError = err instanceof Error ? err.message : String(err)
   }
 
-  if (igError || !mediaId || !permalink) {
+  const outcome = resolveInstagramPublishOutcome(mediaId, permalink, igError)
+
+  if (outcome.status === 'failed') {
     const { rows } = await pool.query(
       `UPDATE social_publications SET status = 'failed', error = $1, updated_at = now() WHERE id = $2 AND project_id = $3 RETURNING *`,
-      [igError || 'Instagram did not return a permalink', id, projectId],
+      [outcome.error, id, projectId],
     )
     return { row: rows[0] }
   }
@@ -230,7 +259,7 @@ export async function publishSocialPublicationToInstagram(
      SET status = 'published', external_post_id = $1, external_url = $2, error = '',
          published_at = coalesce(published_at, now()), updated_at = now()
      WHERE id = $3 AND project_id = $4 RETURNING *`,
-    [mediaId, permalink, id, projectId],
+    [outcome.externalPostId, outcome.externalUrl, id, projectId],
   )
   await syncPostStatusFromPublications(publication.social_post_id, projectId)
   return { row: rows[0] }

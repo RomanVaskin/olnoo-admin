@@ -27,18 +27,31 @@ function assertGuardedBeforeFirstCall(source: string, firstPublishCall: string, 
   assert.match(source, /verifyProjectIsAllowed/, `${label}: must import verifyProjectIsAllowed`)
 
   // The real authorization: a project_id/slug pin, checked before the username sanity check and
-  // before anything else touches the database or an external API.
+  // before anything else touches the database or an external API. Each guard now also persists
+  // the failure onto the publication row first (lib/social-publication-preflight-failure.ts, see
+  // lib/social-publisher-reliability-wiring.test.ts) — still an immediate `return`, just via a
+  // short `{ await ...; return ... }` block instead of a bare one-line `return`.
   const projectGateIdx = source.indexOf('verifyProjectIsAllowed(')
   assert.ok(projectGateIdx > importIdx, `${label}: must call verifyProjectIsAllowed`)
-  const projectBlockIdx = source.indexOf('if (!projectGate.ok) return', projectGateIdx)
+  const projectBlockIdx = source.indexOf('if (!projectGate.ok) {', projectGateIdx)
   assert.ok(projectBlockIdx > projectGateIdx, `${label}: a failed project-authorization check must return immediately`)
+  assert.match(
+    source.slice(projectBlockIdx, projectBlockIdx + 200),
+    /return \{ error: projectGate\.error, status: 403 \}/,
+    `${label}: the project-authorization block must still return the same error/status`,
+  )
   assert.ok(source.includes(envVarName), `${label}: must reference its own owner-project env var (${envVarName})`)
 
   const ownershipCallIdx = source.indexOf('compareAccountOwnership(')
   assert.ok(ownershipCallIdx > projectGateIdx, `${label}: the project gate must run before the username sanity check`)
 
-  const blockIdx = source.indexOf('if (!ownership.ok) return', ownershipCallIdx)
+  const blockIdx = source.indexOf('if (!ownership.ok) {', ownershipCallIdx)
   assert.ok(blockIdx > ownershipCallIdx, `${label}: a failed ownership check must return immediately`)
+  assert.match(
+    source.slice(blockIdx, blockIdx + 200),
+    /return \{ error: ownership\.error, status: 403 \}/,
+    `${label}: the ownership block must still return the same error/status`,
+  )
 
   const firstCallIdx = source.indexOf(firstPublishCall)
   assert.ok(firstCallIdx > 0, `${label}: expected to find the first publish-affecting API call`)

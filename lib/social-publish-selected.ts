@@ -6,6 +6,7 @@ import { publishSocialPublicationToVk } from '@/lib/social-vk'
 import { publishSocialPublicationToInstagram } from '@/lib/social-instagram'
 import { publishSocialPublicationToThreads } from '@/lib/social-threads'
 import { outcomeFromPublisherResult, type PublisherCallResult } from '@/lib/social-publish-selected-outcome'
+import { shouldAttemptPublicationTarget } from '@/lib/social-publish-selected-targets'
 
 // Fan-out only — no new publish logic of its own. Every channel below already has its own
 // automated publisher (Telegram/VK/Instagram/Threads); this just calls the same function the
@@ -45,12 +46,20 @@ const PUBLISHERS: Record<SocialChannel, Publisher> = {
  * Instagram image, a real platform API error, …) is reported as 'failed' with that channel's own
  * message, exactly as it already reads on the individual publication row — this function changes
  * none of that per-platform behavior.
+ *
+ * `retryFailed` (default `true`, so every existing caller's behavior is unchanged unless it opts
+ * out) decides whether a target already marked 'failed' from a previous attempt is attempted again
+ * by THIS call. The scheduler (lib/social-scheduler.ts) passes `false` so a durable, known failure
+ * is never automatically retried forever; the manual "Publish selected channels" button keeps the
+ * default so a human can still deliberately retry one.
  */
 export async function publishSelectedChannels(
   pool: Pool,
   postId: string,
   projectSlug: string | null,
+  options: { retryFailed?: boolean } = {},
 ): Promise<PublishSelectedResult> {
+  const retryFailed = options.retryFailed ?? true
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
 
@@ -66,7 +75,12 @@ export async function publishSelectedChannels(
     [postId, projectId],
   )
 
-  const targets = pubRows.filter((p) => channels.includes(p.platform as SocialChannel) && isSocialChannel(p.platform))
+  const targets = pubRows.filter(
+    (p) =>
+      channels.includes(p.platform as SocialChannel) &&
+      isSocialChannel(p.platform) &&
+      shouldAttemptPublicationTarget(p.status, retryFailed),
+  )
 
   const results = await Promise.all(
     targets.map(async (pub): Promise<ChannelPublishOutcome> => {

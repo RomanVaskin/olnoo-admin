@@ -1,6 +1,7 @@
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { getSocialPost, syncPostStatusFromPublications } from '@/lib/social'
+import { isForbiddenPublicationStatusTransition } from '@/lib/social-publication-status-transition'
 
 const KNOWN_STATUSES = ['draft', 'ready', 'published', 'failed'] as const
 export type SocialPublicationStatus = (typeof KNOWN_STATUSES)[number]
@@ -55,6 +56,21 @@ export async function updateSocialPublication(
 
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
+
+  if (input.status) {
+    const { rows: currentRows } = await pool.query<{ status: string }>(
+      'SELECT status FROM social_publications WHERE id = $1 AND project_id = $2',
+      [id, projectId],
+    )
+    const currentStatus = currentRows[0]?.status
+    if (currentStatus && isForbiddenPublicationStatusTransition(currentStatus, input.status)) {
+      return {
+        error:
+          'a published publication cannot be moved back to "ready" — this platform already has the real post; publishing again would create a duplicate',
+        status: 400,
+      }
+    }
+  }
 
   const sets: string[] = []
   const params: unknown[] = []

@@ -753,7 +753,6 @@ export const ru: Messages = {
     externalUrl: 'Внешняя ссылка',
     publishedAt: 'Опубликовано',
     markPublished: 'Отметить как опубликовано',
-    backToReady: 'Вернуть в Ready',
     publishToTelegram: 'Опубликовать в Telegram',
     publishToVk: 'Опубликовать в VK',
     publishToInstagram: 'Опубликовать в Instagram',

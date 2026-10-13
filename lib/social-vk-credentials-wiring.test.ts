@@ -42,8 +42,14 @@ test('lib/social-vk.ts: a missing per-account token blocks publishing with a cle
   const source = await sourceOf('./social-vk.ts')
   const idx = source.indexOf('!account.vk_access_token_encrypted')
   assert.ok(idx > 0, 'must check for a connected token before anything else credential-related')
-  const returnIdx = source.indexOf('return {', idx)
-  assert.ok(returnIdx > idx && returnIdx < idx + 200, 'the missing-token check must return immediately')
+  // The block now also persists the failure onto the publication row first (see
+  // lib/social-publication-preflight-failure.ts / lib/social-publisher-reliability-wiring.test.ts)
+  // before its `return` — still the very next `if` block's own return, just no longer a
+  // one-line `return {...}` immediately after the condition.
+  const nextIfIdx = source.indexOf('if (', idx + '!account.vk_access_token_encrypted'.length + 5)
+  const block = source.slice(idx, nextIfIdx > 0 ? nextIfIdx : idx + 400)
+  assert.match(block, /return \{ error, status: 400 \}/, 'the missing-token check must return immediately after persisting the failure')
+  assert.match(block, /await recordPublicationPreflightFailure\(pool, id, projectId, error\)/)
 })
 
 test('lib/social-accounts-vk-connection.ts: a failed replacement-token attempt never overwrites a working connection', async () => {

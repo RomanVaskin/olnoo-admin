@@ -1,6 +1,7 @@
 import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
+import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
 
 // Server-side only. TELEGRAM_BOT_TOKEN must never be sent to the browser — it is read here and
 // only here, inside a function called exclusively from a server route handler.
@@ -55,7 +56,9 @@ export async function publishSocialPublicationToTelegram(
   if (!publication) return { error: 'not found', status: 404 }
 
   if (publication.platform !== 'telegram') {
-    return { error: 'only Telegram publications can be published through this endpoint', status: 400 }
+    const error = 'only Telegram publications can be published through this endpoint'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
   if (publication.status === 'published') {
     return { error: 'this publication is already published', status: 409 }
@@ -67,7 +70,11 @@ export async function publishSocialPublicationToTelegram(
   )
   const post = postRows[0]
   const text = post?.telegram_text?.trim() || post?.body?.trim() || ''
-  if (!text) return { error: 'post has no content to publish', status: 400 }
+  if (!text) {
+    const error = 'post has no content to publish'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
+  }
 
   let account: { username: string; platform?: string } | undefined
   if (publication.social_account_id) {
@@ -77,7 +84,9 @@ export async function publishSocialPublicationToTelegram(
     )
     account = rows[0]
     if (!account || account.platform !== 'telegram') {
-      return { error: 'linked account is not a Telegram account', status: 400 }
+      const error = 'linked account is not a Telegram account'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 400 }
     }
   } else {
     const { rows } = await pool.query<{ username: string }>(
@@ -87,12 +96,16 @@ export async function publishSocialPublicationToTelegram(
     account = rows[0]
   }
   if (!account || !account.username.trim()) {
-    return { error: 'no Telegram account with a username is configured for this project', status: 400 }
+    const error = 'no Telegram account with a username is configured for this project'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
 
   const token = process.env.TELEGRAM_BOT_TOKEN
   if (!token) {
-    return { error: 'TELEGRAM_BOT_TOKEN is not configured on the server', status: 500 }
+    const error = 'TELEGRAM_BOT_TOKEN is not configured on the server'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 500 }
   }
 
   const chatId = chatIdFor(account.username)
