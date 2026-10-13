@@ -655,6 +655,7 @@ export const ru: Messages = {
     uploadingImage: 'Загрузка…',
     replaceImage: 'Заменить изображение',
     uploadImageError: 'Не удалось загрузить изображение. Попробуйте ещё раз.',
+    uploadImageProjectRequired: 'Выберите проект перед загрузкой изображения.',
     generateVariants: 'Сгенерировать версии',
     generatingVariants: 'Генерация…',
     generateVariantsError: 'Не удалось сгенерировать версии. Попробуйте ещё раз.',
