@@ -143,17 +143,32 @@ export async function publishSocialPublicationToTelegram(
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     })
     // A response was received — a success or a rejection, Telegram definitively answered either
-    // way, so whatever happens from here on is a confirmed outcome, never "unknown".
-    const data = await res.json().catch(() => null)
-    if (!res.ok || !data?.ok) {
-      telegramError = (data && typeof data.description === 'string' && data.description) || `Telegram API request failed (${res.status})`
+    // way. But a 2xx status is only a PARTIAL confirmation: if the body itself then fails to read
+    // (the connection drops mid-stream, after the status line but before the full response), we
+    // genuinely don't know whether the message went out — Telegram's 2xx strongly suggests it did,
+    // so this must NOT be treated as a confirmed failure (which would wrongly allow a retry that
+    // could send the same message twice). A non-2xx status is still a confirmed rejection
+    // regardless of whether its body can be read.
+    let data: unknown = null
+    let bodyReadFailed = false
+    try {
+      data = await res.json()
+    } catch {
+      bodyReadFailed = true
+    }
+    if (res.ok && bodyReadFailed) {
+      telegramError = 'Telegram returned a success status but the response body could not be read'
+      sendOutcomeUnknown = true
+    } else if (!res.ok || !(data as { ok?: boolean } | null)?.ok) {
+      const errorData = data as { description?: unknown } | null
+      telegramError = (errorData && typeof errorData.description === 'string' && errorData.description) || `Telegram API request failed (${res.status})`
     } else {
-      messageId = data.result?.message_id ?? null
+      messageId = (data as { result?: { message_id?: number } }).result?.message_id ?? null
     }
   } catch (err) {
-    // fetch() itself threw — a timeout (AbortSignal above) or a dropped connection. Telegram never
-    // sent a response at all, so the message may or may not have actually gone out. This is NOT a
-    // confirmed failure.
+    // fetch() itself threw — a timeout (AbortSignal above) or a dropped connection before any
+    // response at all. Telegram never answered, so the message may or may not have actually gone
+    // out. This is NOT a confirmed failure.
     telegramError = err instanceof Error ? err.message : String(err)
     sendOutcomeUnknown = true
   }

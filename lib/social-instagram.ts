@@ -262,11 +262,24 @@ export async function publishSocialPublicationToInstagram(
       body: publishParams.toString(),
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     })
-    // A response was received — Instagram definitively answered either way, so whatever happens
-    // from here on (including the permalink lookup below) is a confirmed outcome, never "unknown".
-    const publishData = await publishRes.json().catch(() => null)
-    if (!publishRes.ok || publishData?.error) {
-      igError = (publishData?.error?.message as string) || `Instagram API request failed (${publishRes.status})`
+    // A response was received — Instagram definitively answered either way. But a 2xx status is
+    // only a PARTIAL confirmation: if the body itself then fails to read (the connection drops
+    // mid-stream), we genuinely don't know whether the post went out — a 2xx strongly suggests it
+    // did, so this must NOT be treated as a confirmed failure (which would wrongly allow a retry
+    // that could call media_publish, and post the same content, a second time). A non-2xx status
+    // is still a confirmed rejection regardless of whether its body can be read.
+    let publishData: { error?: { message?: string }; id?: string } | null = null
+    let bodyReadFailed = false
+    try {
+      publishData = await publishRes.json()
+    } catch {
+      bodyReadFailed = true
+    }
+    if (publishRes.ok && bodyReadFailed) {
+      igError = 'Instagram returned a success status but the response body could not be read'
+      sendOutcomeUnknown = true
+    } else if (!publishRes.ok || publishData?.error) {
+      igError = publishData?.error?.message || `Instagram API request failed (${publishRes.status})`
     } else {
       mediaId = (publishData?.id as string) || null
       if (!mediaId) {

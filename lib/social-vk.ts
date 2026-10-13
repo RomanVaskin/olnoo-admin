@@ -250,17 +250,31 @@ export async function publishSocialPublicationToVk(
       body: params.toString(),
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     })
-    // A response was received — VK definitively answered either way, so whatever happens from
-    // here on is a confirmed outcome, never "unknown".
-    const data = await res.json().catch(() => null)
-    if (!res.ok || data?.error) {
+    // A response was received — VK definitively answered either way. But a 2xx status is only a
+    // PARTIAL confirmation: if the body itself then fails to read (the connection drops
+    // mid-stream), we genuinely don't know whether the post went out — a 2xx strongly suggests it
+    // did, so this must NOT be treated as a confirmed failure (which would wrongly allow a retry
+    // that could post the same content twice). A non-2xx status is still a confirmed rejection
+    // regardless of whether its body can be read.
+    let data: { error?: { error_msg?: string }; response?: { post_id?: number } } | null = null
+    let bodyReadFailed = false
+    try {
+      data = await res.json()
+    } catch {
+      bodyReadFailed = true
+    }
+    if (res.ok && bodyReadFailed) {
+      vkError = 'VK returned a success status but the response body could not be read'
+      sendOutcomeUnknown = true
+    } else if (!res.ok || data?.error) {
       vkError = (data && typeof data.error?.error_msg === 'string' && data.error.error_msg) || `VK API request failed (${res.status})`
     } else {
       postId = data?.response?.post_id ?? null
     }
   } catch (err) {
-    // fetch() itself threw — a timeout (AbortSignal above) or a dropped connection. VK never sent
-    // a response at all, so the post may or may not have actually gone out. Not a confirmed failure.
+    // fetch() itself threw — a timeout (AbortSignal above) or a dropped connection before any
+    // response at all. VK never answered, so the post may or may not have actually gone out. Not
+    // a confirmed failure.
     vkError = err instanceof Error ? err.message : String(err)
     sendOutcomeUnknown = true
   }

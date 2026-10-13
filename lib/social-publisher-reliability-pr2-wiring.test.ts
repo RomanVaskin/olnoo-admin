@@ -94,12 +94,15 @@ test('Telegram and VK: a thrown send-call exception sets a distinct "unknown" fl
   }
 })
 
-test('Instagram and Threads: the inner send-call try/catch is the only place sendOutcomeUnknown is set', async () => {
+test('Instagram and Threads: sendOutcomeUnknown is only ever set within the send-call block (its own catch, or a 2xx-but-unreadable-body branch)', async () => {
   for (const file of ['./social-instagram.ts', './social-threads.ts']) {
     const source = await sourceOf(file)
     assert.match(source, /let sendOutcomeUnknown = false/, `${file}: must track whether the outcome is unknown`)
+    // Two set sites, both within the send try/catch: (1) a 2xx response whose body couldn't be
+    // read (review follow-up — see lib/social-publisher-reliability-pr2-review-wiring.test.ts),
+    // (2) the send call's own fetch() throwing outright.
     const setCount = (source.match(/sendOutcomeUnknown = true/g) ?? []).length
-    assert.equal(setCount, 1, `${file}: sendOutcomeUnknown must be set in exactly one place (the media_publish/threads_publish catch)`)
+    assert.equal(setCount, 2, `${file}: expected exactly 2 sendOutcomeUnknown = true sites`)
   }
 })
 
@@ -134,9 +137,9 @@ test('lib/social-publish-selected-targets.ts: "publishing" is excluded from ever
   assert.match(source, /if \(status === 'publishing'\) return false/)
 })
 
-test('lib/social-publication-status-transition.ts: publishing -> ready is forbidden, same as published -> ready', async () => {
+test('lib/social-publication-status-transition.ts: every transition out of "publishing" is forbidden (tightened by review follow-up — see lib/social-publisher-reliability-pr2-review-wiring.test.ts)', async () => {
   const source = await sourceOf('./social-publication-status-transition.ts')
-  assert.match(source, /currentStatus === 'published' \|\| currentStatus === 'publishing'/)
+  assert.match(source, /if \(currentStatus === 'publishing'\) return true/)
 })
 
 // --- Requirement 7: project_id isolation preserved, all four platforms still wired ---

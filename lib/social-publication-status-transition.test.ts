@@ -18,13 +18,15 @@ test('"ready" reached from draft/failed/ready is allowed (not a blanket lock on 
   assert.equal(isForbiddenPublicationStatusTransition('ready', 'ready'), false)
 })
 
-// PR-2
-test('publishing -> ready is forbidden (same duplication risk: it erases the one guard — status !== \'published\'/\'publishing\' — that keeps a retry from re-sending)', () => {
+// PR-2 (review follow-up): 'publishing' is now immutable through this generic status PATCH in
+// EVERY direction, not just -> ready. A plain PATCH has no way to tell "genuinely stuck" apart
+// from "a send is actively in flight right now" — allowing ANY exit (even -> failed) risked a
+// second, independent claim succeeding and sending a real duplicate while the first attempt was
+// still running, which is exactly the race lib/social-publication-claim.ts exists to prevent.
+test('every transition OUT of "publishing" is forbidden, not just -> ready', () => {
   assert.equal(isForbiddenPublicationStatusTransition('publishing', 'ready'), true)
-})
-
-test('every other transition out of "publishing" is allowed — a human resolving a stuck row must still be able to set it to failed/published directly', () => {
-  assert.equal(isForbiddenPublicationStatusTransition('publishing', 'failed'), false)
-  assert.equal(isForbiddenPublicationStatusTransition('publishing', 'published'), false)
-  assert.equal(isForbiddenPublicationStatusTransition('publishing', 'publishing'), false)
+  assert.equal(isForbiddenPublicationStatusTransition('publishing', 'failed'), true)
+  assert.equal(isForbiddenPublicationStatusTransition('publishing', 'published'), true)
+  assert.equal(isForbiddenPublicationStatusTransition('publishing', 'draft'), true)
+  assert.equal(isForbiddenPublicationStatusTransition('publishing', 'publishing'), true)
 })
