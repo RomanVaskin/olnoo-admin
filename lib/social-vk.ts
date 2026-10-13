@@ -3,6 +3,7 @@ import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { decryptAccountSecret } from '@/lib/social-account-crypto'
 import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
+import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
 
 // Server-side only. A VK community's access token must never be sent to the browser — it is
 // decrypted here and only here, inside a function called exclusively from a server route handler.
@@ -25,6 +26,12 @@ const VK_API_BASE = process.env.VK_API_BASE_URL || 'https://api.vk.com'
 
 // https://dev.vk.com/en/method/wall.post — current stable API version as of this integration.
 const VK_API_VERSION = '5.199'
+
+// Bounds how long the one, irreversible wall.post call may hang before this is treated as an
+// unconfirmable ("unknown") outcome rather than left to hang the request indefinitely. Only this
+// specific call gets a timeout — resolveOwnerId and every earlier check are safe to retry (nothing
+// has been posted yet, whatever their own outcome).
+const SEND_TIMEOUT_MS = 20_000
 
 function screenNameFromPublicUrl(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, '')
@@ -86,11 +93,20 @@ async function resolveOwnerId(identifier: string, token: string): Promise<{ owne
  * for some reason blank despite a token being present, the old username/public_url resolution via
  * VK's utils.resolveScreenName still runs as a fallback, using that same per-account token.
  *
- * Never re-sends an already-published publication (duplicate protection: rejected before any VK
- * API call). A VK API error or network failure is not thrown — it is written to the row as
- * status='failed' with the error message, leaving external_post_id/external_url untouched, so a
- * later retry is just calling this again (the 'published' guard is the only thing that ever blocks
- * a call, and 'failed' doesn't trip it).
+ * Never re-sends an already-published publication, and never sends it twice concurrently: right
+ * before wall.post, `claimPublicationForSending` atomically transitions the row to 'publishing' —
+ * only one caller can ever win that (see lib/social-publication-claim.ts); every other caller (a
+ * concurrent click, the scheduler, a stuck row from a previous attempt) is refused with 409 before
+ * any wall.post call. Resolving the owner id (above) happens BEFORE the claim — it's a read, never
+ * posts anything, so it's always safe to redo on a retry.
+ *
+ * A definitive VK API rejection (a response was received, just not a success one) is written to
+ * the row as status='failed' with the error message, leaving external_post_id/external_url
+ * untouched, so a later retry is just calling this again. A send whose outcome is genuinely
+ * UNKNOWN — wall.post's own fetch() never got a response at all (a timeout, a dropped connection)
+ * — is deliberately NOT written as 'failed': the row is left at 'publishing' and a 503 is returned
+ * instead, so it is never auto-retried either — only a human who has checked VK directly can
+ * resolve it.
  */
 export async function publishSocialPublicationToVk(
   pool: Pool,
@@ -191,41 +207,73 @@ export async function publishSocialPublicationToVk(
     return { error, status: 400 }
   }
 
-  let vkError: string | null = null
-  let postId: number | null = null
+  // Resolving the owner id is a read — nothing is posted yet, so any failure here (a definitive
+  // VK rejection or a network error reaching utils.resolveScreenName) is safely a normal,
+  // retriable 'failed', persisted the same way every other pre-flight problem already is. No
+  // claim needed yet.
   let ownerId: number | null = null
   try {
     const resolved = account.vk_group_id?.trim()
       ? { ownerId: -Math.abs(Number(account.vk_group_id.trim())) }
       : await resolveOwnerId(fallbackIdentifier, token)
     if ('error' in resolved) {
-      vkError = resolved.error
-    } else {
-      ownerId = resolved.ownerId
-      const params = new URLSearchParams({
-        owner_id: String(ownerId),
-        message: text,
-        from_group: '1',
-        access_token: token,
-        v: VK_API_VERSION,
-      })
-      const res = await fetch(`${VK_API_BASE}/method/wall.post`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: params.toString(),
-      })
-      const data = await res.json().catch(() => null)
-      if (!res.ok || data?.error) {
-        vkError = (data && typeof data.error?.error_msg === 'string' && data.error.error_msg) || `VK API request failed (${res.status})`
-      } else {
-        postId = data?.response?.post_id ?? null
-      }
+      const error = resolved.error
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 400 }
     }
+    ownerId = resolved.ownerId
   } catch (err) {
-    vkError = err instanceof Error ? err.message : String(err)
+    const error = err instanceof Error ? err.message : String(err)
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
 
-  if (vkError || !postId || !ownerId) {
+  // Atomic claim, right before the one irreversible call — see claimPublicationForSending's own
+  // comment.
+  const claim = await claimPublicationForSending(pool, id, projectId)
+  if (!claim.claimed) return publicationClaimConflictResult(claim.currentStatus)
+
+  let vkError: string | null = null
+  let postId: number | null = null
+  let sendOutcomeUnknown = false
+  try {
+    const params = new URLSearchParams({
+      owner_id: String(ownerId),
+      message: text,
+      from_group: '1',
+      access_token: token,
+      v: VK_API_VERSION,
+    })
+    const res = await fetch(`${VK_API_BASE}/method/wall.post`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    })
+    // A response was received — VK definitively answered either way, so whatever happens from
+    // here on is a confirmed outcome, never "unknown".
+    const data = await res.json().catch(() => null)
+    if (!res.ok || data?.error) {
+      vkError = (data && typeof data.error?.error_msg === 'string' && data.error.error_msg) || `VK API request failed (${res.status})`
+    } else {
+      postId = data?.response?.post_id ?? null
+    }
+  } catch (err) {
+    // fetch() itself threw — a timeout (AbortSignal above) or a dropped connection. VK never sent
+    // a response at all, so the post may or may not have actually gone out. Not a confirmed failure.
+    vkError = err instanceof Error ? err.message : String(err)
+    sendOutcomeUnknown = true
+  }
+
+  if (sendOutcomeUnknown) {
+    // Deliberately no DB write — the row stays 'publishing' from the claim above.
+    return {
+      error: `Could not confirm whether VK received the post: ${vkError}. The publication is left as "publishing" — check VK directly before retrying manually.`,
+      status: 503,
+    }
+  }
+
+  if (vkError || !postId) {
     const { rows } = await pool.query(
       `UPDATE social_publications SET status = 'failed', error = $1, updated_at = now() WHERE id = $2 AND project_id = $3 RETURNING *`,
       [vkError || 'VK did not return a post id', id, projectId],

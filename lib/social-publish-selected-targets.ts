@@ -22,7 +22,17 @@
  * a known failure), while the scheduler passes `false` so it never automatically re-attempts a
  * publication already marked 'failed'. An already-'published' target is unaffected either way —
  * it's filtered out separately, upstream, as 'already_published'.
+ *
+ * `'publishing'` is NEVER attempted here, by either caller, regardless of `retryFailed` — a row in
+ * that status is either a genuinely concurrent attempt already in flight, or a stuck one left over
+ * from a previous attempt whose real-world outcome is unknown (a timeout, a dropped connection, a
+ * crashed process before its own final write). Filtering it out here is a cheap optimization, not
+ * the actual safety boundary: `lib/social-publication-claim.ts`'s atomic claim is what makes this
+ * safe even if a caller somehow attempted it anyway (the claim would simply refuse it, 409). Only a
+ * human, after confirming the real outcome on the platform itself, can move a `'publishing'` row
+ * out of this state — there is no automatic unstick path.
  */
 export function shouldAttemptPublicationTarget(status: string, retryFailed: boolean): boolean {
+  if (status === 'publishing') return false
   return retryFailed || status !== 'failed'
 }

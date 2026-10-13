@@ -92,7 +92,8 @@ test('lib/social-instagram.ts and lib/social-threads.ts: the project-ownership g
 test('lib/social-instagram.ts: uses resolveInstagramPublishOutcome instead of the old igError||!mediaId||!permalink check', async () => {
   const source = await sourceOf('./social-instagram.ts')
   assert.match(source, /import \{ resolveInstagramPublishOutcome \} from '@\/lib\/social-instagram-publish-outcome'/)
-  assert.match(source, /const outcome = resolveInstagramPublishOutcome\(mediaId, permalink, igError\)/)
+  // PR-2 added a 4th argument (sendOutcomeUnknown) — see lib/social-publisher-reliability-pr2-wiring.test.ts.
+  assert.match(source, /const outcome = resolveInstagramPublishOutcome\(mediaId, permalink, igError, sendOutcomeUnknown\)/)
   assert.ok(!source.includes('igError || !mediaId || !permalink'), 'the old all-or-nothing condition must be gone')
 })
 

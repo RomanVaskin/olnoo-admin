@@ -21,3 +21,12 @@ test('"published" is not specially excluded by this function either way', () => 
   assert.equal(shouldAttemptPublicationTarget('published', true), true)
   assert.equal(shouldAttemptPublicationTarget('published', false), true)
 })
+
+// PR-2: 'publishing' (a concurrent attempt in flight, or a stuck row with an unknown real-world
+// outcome) must never be auto- OR manually-attempted through this filter, regardless of
+// retryFailed — only a human directly resolving the row (not via publishSelectedChannels at all)
+// can move it out of this state.
+test('"publishing" is never attempted, by either caller, regardless of retryFailed', () => {
+  assert.equal(shouldAttemptPublicationTarget('publishing', true), false)
+  assert.equal(shouldAttemptPublicationTarget('publishing', false), false)
+})

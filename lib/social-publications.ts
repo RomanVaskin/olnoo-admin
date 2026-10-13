@@ -66,7 +66,9 @@ export async function updateSocialPublication(
     if (currentStatus && isForbiddenPublicationStatusTransition(currentStatus, input.status)) {
       return {
         error:
-          'a published publication cannot be moved back to "ready" — this platform already has the real post; publishing again would create a duplicate',
+          currentStatus === 'published'
+            ? 'a published publication cannot be moved back to "ready" — this platform already has the real post; publishing again would create a duplicate'
+            : 'a publication that is currently "publishing" cannot be moved to "ready" — its real outcome is not yet confirmed; check the platform directly, then set it to "failed" or "published" instead',
         status: 400,
       }
     }

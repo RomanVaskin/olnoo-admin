@@ -1,6 +1,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { shouldShowThreadsPublishButton, shouldShowPublishSelectedButton } from './social-publications-ui.ts'
+import {
+  shouldShowPublishButton,
+  shouldShowThreadsPublishButton,
+  shouldShowPublishSelectedButton,
+} from './social-publications-ui.ts'
+
+test('shouldShowPublishButton: true for every status except published/publishing', () => {
+  assert.equal(shouldShowPublishButton('draft'), true)
+  assert.equal(shouldShowPublishButton('ready'), true)
+  assert.equal(shouldShowPublishButton('failed'), true)
+  assert.equal(shouldShowPublishButton('published'), false)
+  // PR-2: a 'publishing' row is always gated by the atomic claim anyway — showing a button that's
+  // always refused with 409 would just invite a pointless, confusing click.
+  assert.equal(shouldShowPublishButton('publishing'), false)
+})
 
 test('shows the Publish to Threads button for an unpublished Threads publication', () => {
   assert.equal(shouldShowThreadsPublishButton('threads', 'draft'), true)
@@ -8,8 +22,9 @@ test('shows the Publish to Threads button for an unpublished Threads publication
   assert.equal(shouldShowThreadsPublishButton('threads', 'failed'), true)
 })
 
-test('hides the button once the Threads publication is already published', () => {
+test('hides the button once the Threads publication is already published or is publishing', () => {
   assert.equal(shouldShowThreadsPublishButton('threads', 'published'), false)
+  assert.equal(shouldShowThreadsPublishButton('threads', 'publishing'), false)
 })
 
 test('never shows the Threads button for another platform', () => {

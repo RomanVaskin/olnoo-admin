@@ -13,11 +13,21 @@
 // UI's own "Back to ready" button (components/sections/social-publications.tsx) was the only
 // reachable path to this transition; it's removed in the same change, and this is the
 // corresponding server-side refusal so the API itself can't be used to do the same thing.
+//
+// PR-2 extends the same reasoning to `'publishing'`: `lib/social-publication-claim.ts`'s atomic
+// claim is what keeps a 'publishing' row from ever being auto- or manually re-attempted while it's
+// genuinely in flight or stuck — moving it to 'ready' via a plain PATCH would erase that guard
+// exactly the same way `published → ready` did, re-enabling an attempt on a row whose real-world
+// outcome is still unconfirmed. There is still no UI path to this — PR-2 doesn't add one — so this
+// is a server-side-only refusal, for the same defense-in-depth reason as the `published` case.
 
-/** True exactly for the one transition this app must never allow: a publication that is already
- * `'published'` moving to `'ready'`. Every other transition (draft→ready, ready→published,
- * published→failed, failed→ready, …) is unaffected — this is not a blanket lock on `published`
- * rows, only on the specific transition that would silently re-enable a duplicate publish. */
+/** True exactly for the two transitions this app must never allow: a publication that is already
+ * `'published'`, or one that is `'publishing'` (a concurrent attempt in flight, or a stuck row
+ * whose real outcome is unknown), moving to `'ready'`. Every other transition (draft→ready,
+ * ready→published, published→failed, failed→ready, publishing→failed, publishing→published, …) is
+ * unaffected — this is not a blanket lock on either status, only on the specific transition that
+ * would silently re-enable a duplicate publish attempt. */
 export function isForbiddenPublicationStatusTransition(currentStatus: string, nextStatus: string): boolean {
-  return currentStatus === 'published' && nextStatus === 'ready'
+  if (nextStatus !== 'ready') return false
+  return currentStatus === 'published' || currentStatus === 'publishing'
 }
