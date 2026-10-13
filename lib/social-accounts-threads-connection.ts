@@ -27,8 +27,10 @@ const ACCOUNT_COLUMNS =
  * Connects (new/replacement token) or re-checks (no token given) a Threads account's connection.
  * Mirrors connectOrRecheckInstagramAccount exactly, including the refresh-then-verify order on a
  * recheck (Threads' own refresh endpoint has the same 24h-minimum-age/not-yet-expired eligibility
- * as Instagram's — see lib/social-meta-token-refresh.ts) and the same failure-handling split
- * between a recheck (persists status='error') and a bad new/replacement token (does not).
+ * as Instagram's — see lib/social-meta-token-refresh.ts), the same failure-handling split between
+ * a recheck (persists status='error') and a bad new/replacement token (does not), and the same
+ * username rule: always set from Meta's verified identity, never left as a stale/mistyped value
+ * from before — see connectOrRecheckInstagramAccount's own comment for why.
  */
 export async function connectOrRecheckThreadsAccount(
   id: string,
@@ -92,7 +94,7 @@ export async function connectOrRecheckThreadsAccount(
   }
 
   const encrypted = encryptAccountSecret(tokenForVerify)
-  const nextUsername = account.username?.trim() || verified.identity.username
+  const nextUsername = verified.identity.username || account.username?.trim() || ''
 
   const { rows: updated } = await pool.query(
     `UPDATE social_accounts

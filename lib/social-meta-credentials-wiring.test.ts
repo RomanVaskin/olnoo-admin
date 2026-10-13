@@ -14,6 +14,10 @@ import { readFile } from 'node:fs/promises'
 //      account has none.
 //   3. An expired per-account token blocks publishing with a clear error instead of being used, or
 //      silently falling back to the global (wrong-account) credentials.
+//   4. A successful connect/recheck always writes Meta's own verified username onto the account
+//      row — never keeps a stale/mistyped `username` that was typed in before a DIFFERENT real
+//      identity was confirmed (review fix: the UI's displayed account must never diverge from the
+//      one the publisher actually holds a token for).
 // lib/social-instagram-verify.ts / lib/social-threads-verify.ts / lib/social-meta-token-refresh.ts
 // have their own direct unit tests; lib/social-account-ownership-wiring.test.ts already covers the
 // unchanged env-fallback gate's own ordering guarantees.
@@ -69,5 +73,25 @@ for (const [file, platformLabel, tokenColumn, idColumn, expiresColumn, ownerEnvV
     assert.match(block, /has expired/i)
     assert.match(block, /await recordPublicationPreflightFailure\(pool, id, projectId, error\)/)
     assert.match(block, /return \{ error, status: 403 \}/)
+  })
+}
+
+// --- Review fix: username always trusts Meta's verified identity, never a stale manual value ---
+
+for (const [file, platformLabel] of [
+  ['./social-accounts-instagram-connection.ts', 'Instagram'],
+  ['./social-accounts-threads-connection.ts', 'Threads'],
+] as const) {
+  test(`${file}: nextUsername prefers verified.identity.username over the pre-existing account.username`, async () => {
+    const source = await sourceOf(file)
+    assert.match(
+      source,
+      /const nextUsername = verified\.identity\.username \|\| account\.username\?\.trim\(\) \|\| ''/,
+      `${platformLabel}: a successful connect/recheck must always prefer Meta's verified identity over whatever username was there before`,
+    )
+    assert.ok(
+      !source.includes("account.username?.trim() || verified.identity.username"),
+      `${platformLabel}: must not fall back to the old "keep the existing value, only fill if empty" order`,
+    )
   })
 }

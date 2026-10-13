@@ -44,7 +44,12 @@ const ACCOUNT_COLUMNS =
  * young, already expired, revoked), this falls back to verifying the existing token as-is — a
  * refresh failure alone is never treated as a connection failure, since the stored token may still
  * be perfectly valid.
- * `username` is auto-filled from Instagram's own answer only if it was empty, never overwritten.
+ * `username` is always set from Meta's own verified answer (`verified.identity.username`), never
+ * kept as whatever was typed into the field before — a stale or manually-mistyped `username` must
+ * never survive a successful connect/recheck against a DIFFERENT real identity, since the Accounts
+ * UI shows this field as "which account this is," and the publisher must never look connected to
+ * one account while actually holding a token for another. Falls back to the existing value only in
+ * the (never observed, but handled) case where Meta's own answer carries no username at all.
  */
 export async function connectOrRecheckInstagramAccount(
   id: string,
@@ -111,7 +116,7 @@ export async function connectOrRecheckInstagramAccount(
   }
 
   const encrypted = encryptAccountSecret(tokenForVerify)
-  const nextUsername = account.username?.trim() || verified.identity.username
+  const nextUsername = verified.identity.username || account.username?.trim() || ''
 
   const { rows: updated } = await pool.query(
     `UPDATE social_accounts
