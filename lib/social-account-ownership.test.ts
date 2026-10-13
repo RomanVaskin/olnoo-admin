@@ -70,6 +70,29 @@ test('verifyProjectIsAllowed: a different project is blocked even though it is a
   assert.ok(!result.ok && result.error.includes('driveset'))
 })
 
+// Regression: a real support case reported the error as just
+// `(configured owner project: "olnoo")` with no visibility into what was actually requested —
+// looking identical whether the real cause was a genuine wrong project, a slug that merely
+// differs by a trailing character/typo, or (in theory) something other than a slug being passed.
+// The error must always name BOTH sides so a mismatch is diagnosable from the message alone,
+// without reading source or server logs — and never by guessing.
+test('verifyProjectIsAllowed: the error names the actual requested slug, not just the configured owner (diagnosability)', () => {
+  const ownerProject = resolveOwnerProjectSlug('olnoo')
+
+  const closeButNotEqual = verifyProjectIsAllowed('Instagram', 'INSTAGRAM_OWNER_PROJECT', ownerProject, 'olnoo-com')
+  assert.equal(closeButNotEqual.ok, false)
+  assert.ok(!closeButNotEqual.ok && closeButNotEqual.error.includes('requested project: "olnoo-com"'))
+  assert.ok(!closeButNotEqual.ok && closeButNotEqual.error.includes('configured owner project: "olnoo"'))
+
+  const genuinelyDifferent = verifyProjectIsAllowed('Instagram', 'INSTAGRAM_OWNER_PROJECT', ownerProject, 'driveset')
+  assert.ok(!genuinelyDifferent.ok && genuinelyDifferent.error.includes('requested project: "driveset"'))
+
+  // A null/empty requested slug (e.g. an unresolved project) is named explicitly too, never left
+  // blank or omitted.
+  const noProject = verifyProjectIsAllowed('Instagram', 'INSTAGRAM_OWNER_PROJECT', ownerProject, null)
+  assert.ok(!noProject.ok && noProject.error.includes('requested project: "(none)"'))
+})
+
 // The exact scenario this patch exists for: two projects whose social_accounts.username happens
 // to be identical (editable, not unique) must not both be allowed to publish through one global
 // token -- only the one project named by the owner-project env var ever passes.
