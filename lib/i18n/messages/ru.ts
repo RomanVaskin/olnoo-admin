@@ -748,6 +748,7 @@ export const ru: Messages = {
     replySent: 'Ответ отправлен',
     replyFailed: 'Ответ не отправлен',
     replyUnknown: 'Не удалось подтвердить доставку — проверьте в Telegram',
+    retry: 'Повторить',
     noThreadToReply: 'У этого комментария пока нет обсуждения, в которое можно ответить.',
   },
   adsChannel: {

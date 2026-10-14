@@ -207,25 +207,43 @@ export type SendCommentReplyResult = { error: string; status: number } | { row: 
  * is the comment's own `external_comment_id` (requirement 6).
  *
  * No automatic send ever happens anywhere in this file — this is only ever called after a human
- * clicks "Отправить" in the UI.
+ * clicks "Отправить" (or the manual "Повторить" retry after a confirmed failure) in the UI.
  *
- * Never sends twice, including under a double click or two concurrent requests: right before the
- * Telegram call, this atomically claims the ONE row this comment is ever allowed to have in
- * `social_comment_replies` via `INSERT ... ON CONFLICT (social_comment_id) DO NOTHING` — see that
- * migration's own comment for the full argument. Only the caller that wins the insert ever reaches
- * the Telegram call; every other caller is refused with 409 before any Telegram API call is made.
+ * Never sends twice, including under a double click or two concurrent requests — for EITHER the
+ * first-ever attempt or a manual retry after a confirmed failure: right before the Telegram call,
+ * this atomically claims the ONE row this comment is ever allowed to have in
+ * `social_comment_replies`:
  *
- * A definitive Telegram rejection (a response was received, just not success) is written as
- * `status = 'failed'` with the error — a later retry is simply calling this again... except it
- * can't: the UNIQUE index means a `'failed'` row can never be retried through this same function.
- * This mirrors the Publisher's own "no automatic retry" posture (see
- * lib/social-publication-claim.ts) one level down — correcting a failed reply means handling it
- * directly in Telegram, not through this MVP.
+ *   INSERT ... VALUES (..., 'sending', ...)
+ *   ON CONFLICT (social_comment_id) DO UPDATE SET status = 'sending', ...
+ *   WHERE social_comment_replies.status = 'failed'
+ *   RETURNING id
+ *
+ * No row yet → the INSERT itself claims it. A row already exists:
+ *   - `status = 'failed'` (a CONFIRMED, definitive rejection) → the `DO UPDATE ... WHERE` clause
+ *     matches, atomically flipping it back to `'sending'` — a manual retry, never a second row.
+ *     Postgres takes a row lock for this conflict path (same mechanism
+ *     `claimPublicationForSending` in lib/social-publication-claim.ts relies on for the Publisher,
+ *     one level down), so two concurrent retries for the same comment still serialize: only one
+ *     ever sees `status = 'failed'` still true when its own turn comes and wins the claim: the
+ *     other's WHERE no longer matches (the winner already moved it to `'sending'`) and its insert
+ *     is silently discarded — `RETURNING` gives it no row, so it is refused with 409 before any
+ *     Telegram call, exactly like a genuine double click.
+ *   - `status = 'sending'` (a prior attempt's outcome is UNKNOWN — requirement 2) or `'sent'`
+ *     (already delivered) → the WHERE clause never matches either state, so the conflict is always
+ *     discarded and the claim always fails — retry is categorically refused for both, with no
+ *     exception, by construction of the WHERE clause itself, not by an extra check layered on top.
+ *
+ * A definitive Telegram rejection is written as `status = 'failed'` with the error — this is what
+ * actually enables the manual retry above, and is reported by the caller as a clear failure (never
+ * presented as a successful send merely because the HTTP call to THIS route succeeded — the row's
+ * own `status`/`error` are what the UI must show, see components/sections/social-comments-view.tsx).
  *
  * A send whose outcome is genuinely UNKNOWN (the fetch() never got a response at all — a timeout,
  * a dropped connection) is deliberately NOT written as `'failed'`: the row is left at `'sending'`
- * (requirement 8 — never auto-retried; the UNIQUE index guarantees nothing else ever can be,
- * either) and a 503 is returned so only a human who has checked Telegram directly can resolve it.
+ * (requirement 2 — retry strictly forbidden while unresolved) and a 503 is returned so only a
+ * human who has checked Telegram directly can resolve it (by hand, outside this function — there
+ * is no code path here that ever moves a `'sending'` row forward on its own).
  */
 export async function sendCommentReply(pool: Pool, projectId: number, commentId: string, text: string): Promise<SendCommentReplyResult> {
   const trimmed = text.trim()
@@ -242,9 +260,11 @@ export async function sendCommentReply(pool: Pool, projectId: number, commentId:
 
   const id = randomUUID()
   const { rows: claimedRows } = await pool.query<{ id: string }>(
-    `INSERT INTO social_comment_replies (id, project_id, social_comment_id, status, body)
-     VALUES ($1, $2, $3, 'sending', $4)
-     ON CONFLICT (social_comment_id) DO NOTHING
+    `INSERT INTO social_comment_replies (id, project_id, social_comment_id, status, body, error)
+     VALUES ($1, $2, $3, 'sending', $4, '')
+     ON CONFLICT (social_comment_id) DO UPDATE
+       SET status = 'sending', body = excluded.body, error = '', updated_at = now()
+     WHERE social_comment_replies.status = 'failed'
      RETURNING id`,
     [id, projectId, commentId, trimmed],
   )
@@ -255,11 +275,20 @@ export async function sendCommentReply(pool: Pool, projectId: number, commentId:
     )
     const status = existingRows[0]?.status
     if (status === 'sent') return { error: 'a reply has already been sent for this comment', status: 409 }
-    return {
-      error: 'a reply attempt is already in progress or unresolved for this comment — check Telegram directly before retrying',
-      status: 409,
+    if (status === 'sending') {
+      return {
+        error: 'a reply attempt for this comment is unresolved — its outcome with Telegram is unknown, so it cannot be retried automatically; check Telegram directly',
+        status: 409,
+      }
     }
+    // status === 'failed' here only in the race case: a concurrent retry already won the claim
+    // (flipped it to 'sending') between our SELECT above and now — never a normal first-time case.
+    return { error: 'another retry for this comment is already in progress — please wait and check its status', status: 409 }
   }
+  // `claimedRows[0].id` is this comment's one row — freshly created (`id` generated above) on a
+  // first-ever attempt, or the SAME pre-existing row's own id on a retry (the UPDATE never
+  // touches the primary key) — either way, never a second row for this comment.
+  const claimedId = claimedRows[0].id
 
   let telegramError: string | null = null
   let replyMessageId: number | null = null
@@ -314,7 +343,7 @@ export async function sendCommentReply(pool: Pool, projectId: number, commentId:
     const { rows } = await pool.query<{ id: string; status: string; body: string; external_reply_message_id: string; error: string }>(
       `UPDATE social_comment_replies SET status = 'failed', error = $1, updated_at = now() WHERE id = $2
        RETURNING id, status, body, external_reply_message_id, error`,
-      [telegramError || 'Telegram did not return a message id', id],
+      [telegramError || 'Telegram did not return a message id', claimedId],
     )
     return { row: rowToReply(rows[0]) }
   }
@@ -322,7 +351,7 @@ export async function sendCommentReply(pool: Pool, projectId: number, commentId:
   const { rows } = await pool.query<{ id: string; status: string; body: string; external_reply_message_id: string; error: string }>(
     `UPDATE social_comment_replies SET status = 'sent', external_reply_message_id = $1, error = '', updated_at = now() WHERE id = $2
      RETURNING id, status, body, external_reply_message_id, error`,
-    [String(replyMessageId), id],
+    [String(replyMessageId), claimedId],
   )
   return { row: rowToReply(rows[0]) }
 }

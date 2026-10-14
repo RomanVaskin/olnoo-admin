@@ -738,6 +738,7 @@ export const en = {
     replySent: 'Reply sent',
     replyFailed: 'Reply failed',
     replyUnknown: 'Could not confirm delivery — check Telegram directly',
+    retry: 'Retry',
     noThreadToReply: 'This comment has no discussion thread to reply into yet.',
   },
   adsChannel: {

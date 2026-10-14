@@ -314,7 +314,7 @@ test('an unknown Telegram outcome (network failure) leaves the row at "sending",
   })
 })
 
-test('a definitive Telegram rejection is recorded as "failed", with the error — and is also never retried through this function', async (t) => {
+test('a definitive Telegram rejection is recorded as "failed", with the error', async (t) => {
   await withDb(t, async (pool, { makeCommentWithThread }) => {
     const { projectId, commentId } = await makeCommentWithThread()
     const result = await withFetch(
@@ -326,9 +326,119 @@ test('a definitive Telegram rejection is recorded as "failed", with the error �
       assert.equal(result.row.status, 'failed')
       assert.ok(result.row.error.includes('message to be replied not found'))
     }
+  })
+})
 
-    const second = await sendCommentReply(pool, projectId, commentId, 'Second attempt')
-    assert.equal('error' in second && second.status, 409)
+// --- Manual retry after a CONFIRMED failure (requirement 1): atomic failed -> sending, same row,
+// no second reply, no parallel-retry double send. ---
+
+test('requirement 1: a manual retry after a CONFIRMED failure is allowed, reuses the SAME row, and succeeds', async (t) => {
+  await withDb(t, async (pool, { makeCommentWithThread }) => {
+    const { projectId, commentId } = await makeCommentWithThread()
+
+    const first = await withFetch(
+      () => telegramError('Bad Request: message to be replied not found', 400),
+      () => sendCommentReply(pool, projectId, commentId, 'First attempt — will fail'),
+    )
+    assert.ok('row' in first && first.row.status === 'failed')
+    const firstRowId = 'row' in first ? first.row.id : ''
+
+    const retried = await withFetch(() => telegramOk(888), () => sendCommentReply(pool, projectId, commentId, 'Retried attempt — will succeed'))
+    assert.ok('row' in retried)
+    if ('row' in retried) {
+      assert.equal(retried.row.status, 'sent')
+      assert.equal(retried.row.externalReplyMessageId, '888')
+      assert.equal(retried.row.id, firstRowId, 'the retry must reuse the SAME row — never create a second reply')
+    }
+
+    const { rows } = await pool.query('SELECT count(*)::int AS n FROM social_comment_replies WHERE social_comment_id = $1', [commentId])
+    assert.equal(rows[0].n, 1, 'exactly one reply row must ever exist, even after a retry')
+  })
+})
+
+test('requirement 1: a retry can itself fail again and be retried again — repeated confirmed failures never create extra rows', async (t) => {
+  await withDb(t, async (pool, { makeCommentWithThread }) => {
+    const { projectId, commentId } = await makeCommentWithThread()
+
+    await withFetch(() => telegramError('First rejection', 400), () => sendCommentReply(pool, projectId, commentId, 'Attempt 1'))
+    await withFetch(() => telegramError('Second rejection', 400), () => sendCommentReply(pool, projectId, commentId, 'Attempt 2'))
+    const third = await withFetch(() => telegramOk(42), () => sendCommentReply(pool, projectId, commentId, 'Attempt 3 — succeeds'))
+
+    assert.ok('row' in third && third.row.status === 'sent')
+    const { rows } = await pool.query('SELECT count(*)::int AS n FROM social_comment_replies WHERE social_comment_id = $1', [commentId])
+    assert.equal(rows[0].n, 1, 'repeated confirmed failures and retries must never create a second row')
+  })
+})
+
+test('parallel retries after a confirmed failure: two simultaneous retry attempts — exactly one reaches Telegram, exactly one row ever exists', async (t) => {
+  await withDb(t, async (pool, { makeCommentWithThread }) => {
+    const { projectId, commentId } = await makeCommentWithThread()
+    await withFetch(() => telegramError('Initial rejection', 400), () => sendCommentReply(pool, projectId, commentId, 'Initial attempt'))
+
+    let telegramCalls = 0
+    const [first, second] = await withFetch(
+      () => {
+        telegramCalls++
+        return telegramOk(123)
+      },
+      () =>
+        Promise.all([
+          sendCommentReply(pool, projectId, commentId, 'Concurrent retry 1'),
+          sendCommentReply(pool, projectId, commentId, 'Concurrent retry 2'),
+        ]),
+    )
+    const results = [first, second]
+    const winners = results.filter((r) => 'row' in r && r.row.status === 'sent')
+    const losers = results.filter((r) => 'error' in r && r.status === 409)
+    assert.equal(winners.length, 1, 'exactly one concurrent retry must win')
+    assert.equal(losers.length, 1, 'exactly one concurrent retry must be refused with 409')
+    assert.equal(telegramCalls, 1, 'Telegram must only ever be called once, regardless of the race')
+
+    const { rows } = await pool.query('SELECT count(*)::int AS n FROM social_comment_replies WHERE social_comment_id = $1', [commentId])
+    assert.equal(rows[0].n, 1, 'exactly one reply row must ever exist, even after a concurrent retry race')
+  })
+})
+
+// --- Requirement 2: retry is strictly forbidden for "sending" (unknown) and "sent" — never, under
+// any circumstance, reclaimable through this function. ---
+
+test('requirement 2: retry is strictly forbidden while a prior outcome is unresolved ("sending") — the retry attempt never reaches Telegram, and status is left untouched', async (t) => {
+  await withDb(t, async (pool, { makeCommentWithThread }) => {
+    const { projectId, commentId } = await makeCommentWithThread()
+    const unresolved = await withFetch(() => new Error('socket hang up'), () => sendCommentReply(pool, projectId, commentId, 'Will this send?'))
+    assert.equal('error' in unresolved && unresolved.status, 503)
+
+    let telegramCalls = 0
+    const retry = await withFetch(
+      () => {
+        telegramCalls++
+        return telegramOk(1)
+      },
+      () => sendCommentReply(pool, projectId, commentId, 'Attempted retry while unresolved'),
+    )
+    assert.equal('error' in retry && retry.status, 409, 'a retry while unresolved must be refused, never silently accepted')
+    assert.equal(telegramCalls, 0, 'a retry while the outcome is unknown must never reach Telegram')
+
+    const context = await getCommentForReply(pool, projectId, commentId)
+    assert.equal(context?.existingReply?.status, 'sending', 'the row must stay exactly as it was — a refused retry must never move it')
+  })
+})
+
+test('requirement 2: retry is strictly forbidden once a reply has already been sent', async (t) => {
+  await withDb(t, async (pool, { makeCommentWithThread }) => {
+    const { projectId, commentId } = await makeCommentWithThread()
+    await withFetch(() => telegramOk(1), () => sendCommentReply(pool, projectId, commentId, 'First, successful attempt'))
+
+    let telegramCalls = 0
+    const retry = await withFetch(
+      () => {
+        telegramCalls++
+        return telegramOk(2)
+      },
+      () => sendCommentReply(pool, projectId, commentId, 'An attempted retry after success'),
+    )
+    assert.equal('error' in retry && retry.status, 409)
+    assert.equal(telegramCalls, 0, 'a retry after a successful send must never reach Telegram')
   })
 })
 

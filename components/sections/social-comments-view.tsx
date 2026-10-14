@@ -107,7 +107,17 @@ function ReplyCell({
     onDraftChange(undefined)
   }
 
-  // 1. Already sent — show the actual reply that went out, nothing editable, no actions.
+  /** Opens the SAME edit-and-confirm flow "Предложить ответ" uses, pre-filled with the failed
+   * attempt's own text — a manual retry is a human re-confirming (and possibly editing) the reply
+   * before it goes out again, never an instant silent resend of the identical text. The server
+   * enforces the actual rule (only a CONFIRMED `'failed'` row is ever reclaimable — see
+   * lib/social-comment-reply.ts's atomic claim); this button is just the entry point into that. */
+  function retry() {
+    onDraftChange({ draft: comment.replyBody, suggesting: false, sending: false, error: '' })
+  }
+
+  // 1. Already sent — show the actual reply that went out, nothing editable, no actions. Terminal:
+  // the server's own atomic claim (lib/social-comment-reply.ts) never allows retrying a 'sent' row.
   if (comment.replyStatus === 'sent') {
     return (
       <div className="flex flex-col gap-1">
@@ -117,22 +127,35 @@ function ReplyCell({
     )
   }
 
-  // 2. A previous attempt definitively failed, or its outcome was never confirmed — both are
-  // terminal from this UI's point of view (requirement 8: no automatic retry; the server-side
-  // UNIQUE constraint also refuses a second attempt through this same flow either way).
-  if (comment.replyStatus === 'failed') {
-    return (
-      <div className="flex flex-col gap-1">
-        <span className="label-mono text-destructive">{t.socialCommentsView.replyFailed}</span>
-        {comment.replyError && <p className="text-xs text-muted-foreground">{comment.replyError}</p>}
-      </div>
-    )
-  }
+  // 2. The outcome of a previous attempt was never confirmed (Telegram timeout/dropped
+  // connection) — requirement 2: retry is strictly forbidden while this is unresolved, by
+  // construction of the server's own atomic claim, not merely by this UI hiding a button. There is
+  // no retry affordance here on purpose; a human must check Telegram directly.
   if (comment.replyStatus === 'sending') {
     return <span className="label-mono text-muted-foreground">{t.socialCommentsView.replyUnknown}</span>
   }
 
-  // 3. Nothing sent yet — the "Suggest a reply" entry point, or the editable draft once suggested.
+  // 3. A previous attempt was CONFIRMED to have failed — this is the one state a manual retry is
+  // allowed from (requirement 1). Showing the edit form (below) once "Повторить" is clicked, with
+  // the draft pre-filled, keeps this on the exact same human-confirmation path as a fresh
+  // suggestion — never an automatic resend.
+  if (comment.replyStatus === 'failed' && !draft) {
+    return (
+      <div className="flex flex-col gap-2">
+        <span className="label-mono text-destructive">{t.socialCommentsView.replyFailed}</span>
+        {comment.replyError && <p className="text-xs text-muted-foreground">{comment.replyError}</p>}
+        <button
+          onClick={retry}
+          className="label-mono self-start border border-hairline px-3 py-1.5 text-foreground transition-colors hover:bg-muted/60"
+        >
+          {t.socialCommentsView.retry}
+        </button>
+      </div>
+    )
+  }
+
+  // 4. Nothing sent yet (or a confirmed failure's manual retry was just started) — the "Suggest a
+  // reply" entry point, or the editable draft once suggested/retried.
   if (!draft) {
     return (
       <button
