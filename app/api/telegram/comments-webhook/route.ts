@@ -45,7 +45,7 @@ async function publicationUrlForThread(discussionChatId: string, threadId: strin
 
 const deps: TelegramCommentsDeps = {
   linkAutoForward: (event) => linkAutoForward(pool, event),
-  resolveThread: (chatId, threadId) => resolveThread(pool, chatId, threadId),
+  resolveThread: (chatId, threadId, event) => resolveThread(pool, chatId, threadId, event),
   insertCommentIfNew: (projectId, publicationId, event) => insertCommentIfNew(pool, projectId, publicationId, event),
   // Only ever marks the comment notified once the send itself reports success — a failed/
   // unconfigured attempt leaves `notified_at` NULL so retryUnnotifiedComments below (run at the
