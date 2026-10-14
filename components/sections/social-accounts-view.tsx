@@ -6,6 +6,19 @@ import { SectionHeader, HeaderActions, StatusPill, TableShell, Th, Td } from '@/
 import { ProjectSelector } from '@/components/project-selector'
 import { useProjects } from '@/components/sections/seo-project-picker'
 import { useI18n } from '@/components/i18n-provider'
+import { REFRESH_WINDOW_DAYS } from '@/lib/social-meta-token-refresh-window'
+
+/** Purely derived from the stored expiry — never a separate persisted status (no schema change
+ * needed for this). `warn` once within the same REFRESH_WINDOW_DAYS the daily refresh sweep
+ * itself uses (lib/social-meta-token-refresh-sweep.ts), so the UI's warning and the sweep's own
+ * selection window can never silently drift apart. */
+function tokenExpiryLabel(expiresAt: string): { daysLeft: number; warn: boolean } | null {
+  if (!expiresAt) return null
+  const ms = new Date(expiresAt).getTime() - Date.now()
+  if (Number.isNaN(ms)) return null
+  const daysLeft = Math.ceil(ms / (24 * 60 * 60 * 1000))
+  return { daysLeft, warn: daysLeft <= REFRESH_WINDOW_DAYS }
+}
 
 const PLATFORMS = ['telegram', 'instagram', 'threads', 'vk'] as const
 const STATUSES = ['created', 'connected', 'error'] as const
@@ -416,6 +429,18 @@ function AccountDetail({
                   {account.status === 'connected' ? t.socialAccountsView.instagramConnected : t.socialAccountsView.instagramNotConnected}
                 </span>
               </div>
+              {account.status === 'connected' &&
+                (() => {
+                  const expiry = tokenExpiryLabel(account.instagramTokenExpiresAt)
+                  if (!expiry) return null
+                  return (
+                    <p className={`text-xs ${expiry.warn ? 'text-destructive' : 'text-muted-foreground'}`}>
+                      {expiry.daysLeft > 0
+                        ? t.socialAccountsView.tokenExpiresInDays.replace('{days}', String(expiry.daysLeft))
+                        : t.socialAccountsView.tokenExpired}
+                    </p>
+                  )
+                })()}
               {account.connectionError && <p className="text-sm text-destructive">{account.connectionError}</p>}
               <p className="text-xs text-muted-foreground">{t.socialAccountsView.instagramTokenHint}</p>
               <input
@@ -456,6 +481,18 @@ function AccountDetail({
                   {account.status === 'connected' ? t.socialAccountsView.threadsConnected : t.socialAccountsView.threadsNotConnected}
                 </span>
               </div>
+              {account.status === 'connected' &&
+                (() => {
+                  const expiry = tokenExpiryLabel(account.threadsTokenExpiresAt)
+                  if (!expiry) return null
+                  return (
+                    <p className={`text-xs ${expiry.warn ? 'text-destructive' : 'text-muted-foreground'}`}>
+                      {expiry.daysLeft > 0
+                        ? t.socialAccountsView.tokenExpiresInDays.replace('{days}', String(expiry.daysLeft))
+                        : t.socialAccountsView.tokenExpired}
+                    </p>
+                  )
+                })()}
               {account.connectionError && <p className="text-sm text-destructive">{account.connectionError}</p>}
               <p className="text-xs text-muted-foreground">{t.socialAccountsView.threadsTokenHint}</p>
               <input

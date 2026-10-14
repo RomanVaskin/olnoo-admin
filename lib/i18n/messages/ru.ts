@@ -722,6 +722,8 @@ export const ru: Messages = {
     threadsConnecting: 'Подключение…',
     threadsConnected: 'Подключено',
     threadsNotConnected: 'Пока не подключено',
+    tokenExpiresInDays: 'Токен истекает через {days} дн. — обновится автоматически до истечения',
+    tokenExpired: 'Токен истёк — переподключите этот аккаунт',
   },
   adsChannel: {
     yandex_direct: 'Яндекс Директ',
