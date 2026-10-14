@@ -569,6 +569,90 @@ function CreateForm({
   )
 }
 
+/** OLNOO Social AI Agent MVP: turns one free-text task into several real draft posts via
+ * POST /api/social/agent-task (lib/social-agent.ts), then asks the parent to reload the posts
+ * list so the new drafts show up in the existing table/PostDetail below — no separate UI, no
+ * auto-publish, nothing persisted here beyond what the API itself creates. Rendered only for a
+ * specific project (see SocialView below); the agent always needs one known project to work in. */
+function SocialAgentBlock({ project, onCreated }: { project: string; onCreated: () => void }) {
+  const { t } = useI18n()
+  const [task, setTask] = useState('')
+  // Minted once per logical "run" and reused across retries of that SAME attempt (the Run button
+  // clicked again after an error) so a resend never creates a second batch — see
+  // lib/social-agent.ts's claimAgentRun. Cleared whenever the task text itself changes, which is a
+  // genuinely new attempt and must get a fresh id.
+  const [runId, setRunId] = useState<string | null>(null)
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<
+    | { replayed: false; posts: { id: string; topic: string; channels: string[] }[] }
+    | { replayed: true; postIds: string[] }
+    | null
+  >(null)
+
+  function handleTaskChange(value: string) {
+    setTask(value)
+    setRunId(null)
+    setResult(null)
+    setError('')
+  }
+
+  async function run() {
+    const trimmed = task.trim()
+    if (!trimmed || running) return
+    setRunning(true)
+    setError('')
+    const useRunId = runId ?? crypto.randomUUID()
+    setRunId(useRunId)
+    try {
+      const res = await fetch('/api/social/agent-task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, task: trimmed, runId: useRunId }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setError((data && typeof data.error === 'string' && data.error) || t.socialView.agentError)
+        return
+      }
+      setResult(data)
+      onCreated()
+    } catch {
+      setError(t.socialView.agentError)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-3 border border-hairline bg-card p-5">
+      <span className="label-mono text-muted-foreground">{t.socialView.agentTitle}</span>
+      <textarea
+        value={task}
+        onChange={(e) => handleTaskChange(e.target.value)}
+        placeholder={t.socialView.agentPlaceholder}
+        rows={2}
+        className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+      />
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          onClick={run}
+          disabled={running || !task.trim()}
+          className="label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
+        >
+          {running ? t.socialView.agentRunning : t.socialView.agentRun}
+        </button>
+        <span className="text-xs text-muted-foreground">{t.socialView.agentHint}</span>
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {result && !result.replayed && (
+        <p className="text-sm text-muted-foreground">{t.socialView.agentCreated.replace('{count}', String(result.posts.length))}</p>
+      )}
+      {result && result.replayed && <p className="text-sm text-muted-foreground">{t.socialView.agentReplayed}</p>}
+    </section>
+  )
+}
+
 export function SocialView({
   project,
   onProjectChange,
@@ -629,6 +713,21 @@ export function SocialView({
     setPosts((current) => [post, ...current])
   }
 
+  /** Re-fetches the full posts list for the current project — used after the AI Agent creates
+   * drafts, since its own response only carries {id, topic, channels} and not every field
+   * PostDetail needs (body, per-channel overrides, etc.), unlike the single-post create form's
+   * onCreated above which already gets a full row back from POST /api/social. */
+  async function reloadPosts() {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/social?project=${encodeURIComponent(project)}`)
+      const rows = await res.json()
+      setPosts((rows as Record<string, unknown>[]).map(fromApiPost))
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-10">
       <SectionHeader
@@ -654,6 +753,8 @@ export function SocialView({
         <Metric label={t.status.ready} value={counts.ready} />
         <Metric label={t.status.published} value={counts.published} />
       </section>
+
+      {project !== 'all' && <SocialAgentBlock project={project} onCreated={reloadPosts} />}
 
       <div className="flex flex-wrap items-center gap-2">
         <input
