@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the OLNOO Admin Instagram/Threads token refresh sweep once a day
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+AccuracySec=5min
+Persistent=true
+Unit=olnoo-social-token-refresh.service
+
+[Install]
+WantedBy=timers.target

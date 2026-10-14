@@ -712,6 +712,8 @@ export const en = {
     threadsConnecting: 'Connecting…',
     threadsConnected: 'Connected',
     threadsNotConnected: 'Not connected yet',
+    tokenExpiresInDays: 'Token expires in {days} day(s) — refreshed automatically before it expires',
+    tokenExpired: 'Token has expired — reconnect this account',
   },
   adsChannel: {
     yandex_direct: 'Yandex Direct',
