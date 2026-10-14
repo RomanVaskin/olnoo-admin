@@ -1,6 +1,32 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeTelegramChatIdentifier, verifyTelegramChannelAccess } from './social-telegram-verify.ts'
+import { normalizeTelegramChatIdentifier, telegramIdentifiersMatch, verifyTelegramChannelAccess } from './social-telegram-verify.ts'
+
+test('telegramIdentifiersMatch: a bare handle matches its "@handle" form', () => {
+  assert.equal(telegramIdentifiersMatch('olnoo_channel', '@olnoo_channel'), true)
+})
+
+test('telegramIdentifiersMatch: case-insensitive', () => {
+  assert.equal(telegramIdentifiersMatch('@Olnoo_Channel', 'olnoo_channel'), true)
+})
+
+test('telegramIdentifiersMatch: matches a numeric chat id against itself regardless of which side has it', () => {
+  assert.equal(telegramIdentifiersMatch('-1009876543210', '-1009876543210'), true)
+})
+
+test('telegramIdentifiersMatch: different channels never match', () => {
+  assert.equal(telegramIdentifiersMatch('@olnoo_channel', '@some_other_channel'), false)
+  assert.equal(telegramIdentifiersMatch('-1009876543210', '-1001111111111'), false)
+})
+
+test('telegramIdentifiersMatch: a username never matches a numeric chat id (not the same channel representation)', () => {
+  assert.equal(telegramIdentifiersMatch('@olnoo_channel', '-1009876543210'), false)
+})
+
+test('telegramIdentifiersMatch: two blank identifiers never match — unset must never equal unset', () => {
+  assert.equal(telegramIdentifiersMatch('', ''), false)
+  assert.equal(telegramIdentifiersMatch('  ', ''), false)
+})
 
 /** Scripted global fetch (same approach as yandex-direct.test.ts / social-vk-verify.test.ts). */
 async function withFetch<T>(handler: (url: string) => Response | Error, fn: () => Promise<T>): Promise<T> {

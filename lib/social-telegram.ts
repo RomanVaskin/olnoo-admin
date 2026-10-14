@@ -3,6 +3,7 @@ import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
 import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
 import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
+import { resolvePendingAutoForwardForPublication } from '@/lib/social-comments'
 
 // Server-side only. TELEGRAM_BOT_TOKEN must never be sent to the browser — it is read here and
 // only here, inside a function called exclusively from a server route handler.
@@ -199,5 +200,19 @@ export async function publishSocialPublicationToTelegram(
     [String(messageId), externalUrl, id, projectId],
   )
   await syncPostStatusFromPublications(publication.social_post_id, projectId)
+
+  // The other half of the Social Community comments race fix (db/migrations/
+  // 0024_social_telegram_pending_auto_forwards.sql): Telegram's automatic-forward webhook for THIS
+  // exact post can arrive before the UPDATE above commits — external_post_id didn't exist yet when
+  // the webhook handler looked for a matching publication, so it stored the event as pending
+  // instead of losing it. Now that external_post_id is committed, check for exactly that. Never
+  // lets a failure here affect the publish result itself, which has already fully succeeded —
+  // same "never risk already-committed state" contract as lib/social-comment-notify.ts.
+  try {
+    await resolvePendingAutoForwardForPublication(pool, projectId, id, account.username, String(messageId))
+  } catch (err) {
+    console.error('[social-telegram] resolving a pending discussion-thread link failed (publish itself still succeeded):', err instanceof Error ? err.message : err)
+  }
+
   return { row: rows[0] }
 }

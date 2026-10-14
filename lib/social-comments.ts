@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Pool } from 'pg'
-import { normalizeTelegramChatIdentifier } from './social-telegram-verify.ts'
+import { telegramIdentifiersMatch } from './social-telegram-verify.ts'
 import type { TelegramAutoForwardEvent, TelegramCommentEvent } from './social-telegram-comments.ts'
 
 // No `@/` imports — `pool` is passed in by the caller, same convention as
@@ -19,46 +19,180 @@ import type { TelegramAutoForwardEvent, TelegramCommentEvent } from './social-te
 
 export type ThreadMatch = { projectId: number; publicationId: string }
 
-/**
- * An automatic-forward event means a channel post just appeared in its linked discussion group.
- * Resolves the one project whose connected Telegram channel matches `forwardFromChatId`/
- * `forwardFromChatUsername` AND whose `social_publications` row has `external_post_id =
- * forwardFromMessageId` within THAT project — never across projects, since the join below is
- * scoped by the matched account's own `project_id`. Returns `null` (never guessed) if no
- * connected project's channel matches, or no publication matches within it (e.g. a post made
- * directly in the channel, outside OLNOO Admin's own publish flow).
- *
- * Idempotent: if the matched publication already carries this EXACT (chat, thread) pair, the
- * UPDATE is a harmless no-op (redelivery of the same auto-forward event); if it already carries a
- * DIFFERENT one, the existing mapping is left alone rather than silently overwritten — the match
- * is still reported, since the project/publication identity doesn't depend on which mapping won.
- */
-export async function linkAutoForward(pool: Pool, event: TelegramAutoForwardEvent): Promise<ThreadMatch | null> {
-  const candidates = [
-    event.forwardFromChatUsername ? normalizeTelegramChatIdentifier(event.forwardFromChatUsername) : null,
-    event.forwardFromChatId,
-  ].filter((v): v is string => !!v)
-  if (!candidates.length) return null
-
-  const { rows } = await pool.query<{ project_id: number; publication_id: string }>(
-    `SELECT sa.project_id AS project_id, sp.id AS publication_id
-     FROM social_accounts sa
-     JOIN social_publications sp ON sp.project_id = sa.project_id AND sp.platform = 'telegram' AND sp.external_post_id = $1
-     WHERE sa.platform = 'telegram' AND sa.active = true AND lower(sa.username) = ANY($2)
-     LIMIT 1`,
-    [event.forwardFromMessageId, candidates.map((c) => c.toLowerCase())],
-  )
-  const match = rows[0]
-  if (!match) return null
-
+/** Stamps the (chat, thread) pair onto a matched publication row — the one UPDATE both
+ * `linkAutoForward` and `resolvePendingAutoForwardForPublication` below need, extracted so the
+ * idempotency guard (never silently overwrite a DIFFERENT already-recorded mapping) lives in
+ * exactly one place. */
+async function stampDiscussionThread(
+  pool: Pool,
+  publicationId: string,
+  projectId: number,
+  discussionChatId: string,
+  threadId: string,
+): Promise<void> {
   await pool.query(
     `UPDATE social_publications
      SET telegram_discussion_chat_id = $1, telegram_discussion_thread_id = $2, updated_at = now()
      WHERE id = $3 AND project_id = $4
        AND (telegram_discussion_thread_id = '' OR (telegram_discussion_chat_id = $1 AND telegram_discussion_thread_id = $2))`,
-    [event.discussionChatId, event.threadId, match.publication_id, match.project_id],
+    [discussionChatId, threadId, publicationId, projectId],
   )
-  return { projectId: match.project_id, publicationId: match.publication_id }
+}
+
+/** Finds the one connected, active Telegram account whose `username` refers to the same channel
+ * as `forwardFromChatUsername`/`forwardFromChatId` — via `telegramIdentifiersMatch`, which
+ * normalizes BOTH sides before comparing (see that function's own comment for why a raw/un-
+ * normalized comparison of the stored column, as an earlier version of this file did, could fail
+ * to match a validly-connected channel depending on which of the three equivalent text forms
+ * happened to be stored). The account list is small by construction — one row per project's
+ * connected Telegram channel — so matching in application code rather than a more complex SQL
+ * normalization expression is the simpler, equally correct choice here. */
+async function findAccountForChannel(
+  pool: Pool,
+  forwardFromChatUsername: string,
+  forwardFromChatId: string,
+): Promise<{ projectId: number; username: string } | null> {
+  if (!forwardFromChatUsername && !forwardFromChatId) return null
+  const { rows } = await pool.query<{ project_id: number; username: string }>(
+    `SELECT project_id, username FROM social_accounts WHERE platform = 'telegram' AND active = true`,
+  )
+  const match = rows.find(
+    (a) =>
+      (forwardFromChatUsername && telegramIdentifiersMatch(a.username, forwardFromChatUsername)) ||
+      (forwardFromChatId && telegramIdentifiersMatch(a.username, forwardFromChatId)),
+  )
+  return match ? { projectId: match.project_id, username: match.username } : null
+}
+
+/**
+ * An automatic-forward event means a channel post just appeared in its linked discussion group.
+ * Resolves the one project whose connected Telegram channel matches `forwardFromChatId`/
+ * `forwardFromChatUsername` AND whose `social_publications` row has `external_post_id =
+ * forwardFromMessageId` within THAT project — never across projects, since the lookup below is
+ * scoped by the matched account's own `project_id`. Returns `null` (never guessed) if no
+ * connected project's channel matches, or no publication matches within it (e.g. a post made
+ * directly in the channel, outside OLNOO Admin's own publish flow, OR — see
+ * db/migrations/0024_social_telegram_pending_auto_forwards.sql — a post whose own publish call
+ * simply hasn't committed `external_post_id` yet: this is a real race, not a hypothetical one, so
+ * that second case is recorded as a pending event rather than silently discarded, and
+ * `resolvePendingAutoForwardForPublication` below completes the link once the publish side
+ * catches up).
+ *
+ * Idempotent: if the matched publication already carries this EXACT (chat, thread) pair, the
+ * stamp is a harmless no-op (redelivery of the same auto-forward event); if it already carries a
+ * DIFFERENT one, the existing mapping is left alone rather than silently overwritten — the match
+ * is still reported, since the project/publication identity doesn't depend on which mapping won.
+ */
+export async function linkAutoForward(pool: Pool, event: TelegramAutoForwardEvent): Promise<ThreadMatch | null> {
+  const account = await findAccountForChannel(pool, event.forwardFromChatUsername, event.forwardFromChatId)
+  if (!account) {
+    // No connected, active Telegram account matches this forward's channel at all — e.g. a post
+    // made directly in some other channel entirely. Diagnostic only: channel/message ids are not
+    // personal data; no author/comment content exists on an auto-forward event to begin with.
+    console.warn('[social-comments] thread_unknown: no connected Telegram account matches this channel', {
+      discussionChatId: event.discussionChatId,
+      threadId: event.threadId,
+      forwardFromChatId: event.forwardFromChatId,
+    })
+    await rememberPendingAutoForward(pool, event)
+    return null
+  }
+
+  const { rows } = await pool.query<{ id: string }>(
+    `SELECT id FROM social_publications WHERE project_id = $1 AND platform = 'telegram' AND external_post_id = $2 LIMIT 1`,
+    [account.projectId, event.forwardFromMessageId],
+  )
+  const publication = rows[0]
+  if (!publication) {
+    // The channel IS known, but no publication row has this external_post_id yet. In production
+    // this is the actual race this migration fixes: the publish call's own sendMessage response
+    // (and therefore its external_post_id UPDATE) can simply not have committed yet when Telegram
+    // already forwarded the post and called this webhook — recorded as pending rather than lost,
+    // and resolvePendingAutoForwardForPublication below completes it once the publish does land.
+    console.warn('[social-comments] thread_unknown: channel matched, no publication with this external_post_id yet — stored pending', {
+      projectId: account.projectId,
+      discussionChatId: event.discussionChatId,
+      threadId: event.threadId,
+      forwardFromMessageId: event.forwardFromMessageId,
+    })
+    await rememberPendingAutoForward(pool, event)
+    return null
+  }
+
+  await stampDiscussionThread(pool, publication.id, account.projectId, event.discussionChatId, event.threadId)
+  await forgetPendingAutoForward(pool, event.discussionChatId, event.threadId)
+  return { projectId: account.projectId, publicationId: publication.id }
+}
+
+/** Persists a not-yet-resolvable auto-forward event so it can be completed later from the publish
+ * side (`resolvePendingAutoForwardForPublication`) instead of being lost — see
+ * db/migrations/0024_social_telegram_pending_auto_forwards.sql for why this exists and why it's
+ * safe with no new queue/timer/service. A redelivery of the same auto-forward event (same
+ * discussion chat + thread) refreshes the one existing row for it rather than accumulating a
+ * second pending entry. Opportunistically prunes pending rows older than 7 days on every insert —
+ * bounded, inline cleanup, not a new scheduled job — so a post whose matching publish-side commit
+ * never arrives doesn't grow this table forever. */
+async function rememberPendingAutoForward(pool: Pool, event: TelegramAutoForwardEvent): Promise<void> {
+  await pool.query(
+    `INSERT INTO social_telegram_pending_auto_forwards
+       (id, discussion_chat_id, thread_id, forward_from_chat_id, forward_from_chat_username, forward_from_message_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (discussion_chat_id, thread_id) DO UPDATE SET
+       forward_from_chat_id = excluded.forward_from_chat_id,
+       forward_from_chat_username = excluded.forward_from_chat_username,
+       forward_from_message_id = excluded.forward_from_message_id,
+       created_at = now()`,
+    [randomUUID(), event.discussionChatId, event.threadId, event.forwardFromChatId, event.forwardFromChatUsername, event.forwardFromMessageId],
+  )
+  await pool.query(`DELETE FROM social_telegram_pending_auto_forwards WHERE created_at < now() - interval '7 days'`)
+}
+
+async function forgetPendingAutoForward(pool: Pool, discussionChatId: string, threadId: string): Promise<void> {
+  await pool.query(`DELETE FROM social_telegram_pending_auto_forwards WHERE discussion_chat_id = $1 AND thread_id = $2`, [
+    discussionChatId,
+    threadId,
+  ])
+}
+
+/**
+ * The publish side's half of the race fix: called right after `social_publications.external_post_id`
+ * is actually committed (lib/social-telegram.ts, immediately after its own success UPDATE) — looks
+ * for a pending auto-forward event (recorded by `linkAutoForward` above, because the webhook had
+ * arrived first) whose `forward_from_message_id` matches `externalPostId` AND whose channel
+ * identity matches the account this publication was just sent through. If found, stamps the
+ * thread onto this publication and consumes (deletes) the pending row — this is what makes linking
+ * succeed regardless of which side wins the race. Returns `null`, never throws, when there is
+ * nothing pending to resolve (the normal case: the webhook simply hasn't arrived yet, or never
+ * will for a post made outside OLNOO Admin) — the caller treats this as a no-op, not an error.
+ */
+export async function resolvePendingAutoForwardForPublication(
+  pool: Pool,
+  projectId: number,
+  publicationId: string,
+  accountUsername: string,
+  externalPostId: string,
+): Promise<ThreadMatch | null> {
+  const { rows } = await pool.query<{
+    discussion_chat_id: string
+    thread_id: string
+    forward_from_chat_id: string
+    forward_from_chat_username: string
+  }>(
+    `SELECT discussion_chat_id, thread_id, forward_from_chat_id, forward_from_chat_username
+     FROM social_telegram_pending_auto_forwards
+     WHERE forward_from_message_id = $1`,
+    [externalPostId],
+  )
+  const pending = rows.find(
+    (r) =>
+      (r.forward_from_chat_username && telegramIdentifiersMatch(accountUsername, r.forward_from_chat_username)) ||
+      (r.forward_from_chat_id && telegramIdentifiersMatch(accountUsername, r.forward_from_chat_id)),
+  )
+  if (!pending) return null
+
+  await stampDiscussionThread(pool, publicationId, projectId, pending.discussion_chat_id, pending.thread_id)
+  await forgetPendingAutoForward(pool, pending.discussion_chat_id, pending.thread_id)
+  return { projectId, publicationId }
 }
 
 /** Resolves a comment's (discussionChatId, threadId) pair to the project/publication a prior
@@ -75,7 +209,14 @@ export async function resolveThread(pool: Pool, discussionChatId: string, thread
     [discussionChatId, threadId],
   )
   const match = rows[0]
-  return match ? { projectId: match.project_id, publicationId: match.id } : null
+  if (!match) {
+    // comment_unattributed: this thread was never linked by a prior linkAutoForward call — the
+    // comment itself (author name/username/body) is never logged here, only the chat/thread ids,
+    // which identify a post's discussion thread, not a person.
+    console.warn('[social-comments] comment_unattributed: no publication has recorded this thread', { discussionChatId, threadId })
+    return null
+  }
+  return { projectId: match.project_id, publicationId: match.id }
 }
 
 export type InsertCommentResult = { inserted: true; commentId: string } | { inserted: false }

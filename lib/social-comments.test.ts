@@ -9,6 +9,7 @@ import {
   listCommentsForProject,
   markCommentNotified,
   listUnnotifiedComments,
+  resolvePendingAutoForwardForPublication,
 } from './social-comments.ts'
 import type { TelegramAutoForwardEvent, TelegramCommentEvent } from './social-telegram-comments.ts'
 
@@ -24,6 +25,8 @@ async function withDb(
     ctx: {
       makeProject: (channelUsername: string) => Promise<number>
       makePublication: (projectId: number, externalPostId: string) => Promise<string>
+      makeDraftPublication: (projectId: number) => Promise<string>
+      setExternalPostId: (publicationId: string, externalPostId: string) => Promise<void>
     },
   ) => Promise<void>,
 ) {
@@ -31,6 +34,7 @@ async function withDb(
   try {
     await pool.query('SELECT telegram_discussion_chat_id FROM social_publications LIMIT 1')
     await pool.query('SELECT id FROM social_comments LIMIT 1')
+    await pool.query('SELECT id FROM social_telegram_pending_auto_forwards LIMIT 1')
   } catch (err) {
     t.skip(`No reachable Postgres with the social_comments schema — skipping (${(err as Error).message})`)
     await pool.end()
@@ -76,8 +80,34 @@ async function withDb(
     return publicationId
   }
 
+  /** A publication row still mid-publish — same shape as the moment right before
+   * lib/social-telegram.ts's own success UPDATE commits external_post_id, used to reproduce the
+   * webhook-before-commit race. */
+  const makeDraftPublication = async (projectId: number) => {
+    const postId = randomUUID()
+    await pool.query(
+      `INSERT INTO social_posts (id, project_id, topic, category, body, channels, publish_date, status)
+       VALUES ($1, $2, 'test post', '', '', 'telegram', '', 'ready')`,
+      [postId, projectId],
+    )
+    const publicationId = randomUUID()
+    await pool.query(
+      `INSERT INTO social_publications (id, project_id, social_post_id, platform, status)
+       VALUES ($1, $2, $3, 'telegram', 'publishing')`,
+      [publicationId, projectId, postId],
+    )
+    return publicationId
+  }
+
+  const setExternalPostId = async (publicationId: string, externalPostId: string) => {
+    await pool.query(
+      `UPDATE social_publications SET status = 'published', external_post_id = $1, updated_at = now() WHERE id = $2`,
+      [externalPostId, publicationId],
+    )
+  }
+
   try {
-    await fn(pool, { makeProject, makePublication })
+    await fn(pool, { makeProject, makePublication, makeDraftPublication, setExternalPostId })
   } finally {
     for (const clientId of clientIds) {
       await pool.query('DELETE FROM clients WHERE id = $1', [clientId]) // cascades to projects -> everything
@@ -143,6 +173,96 @@ test('linkAutoForward is idempotent — redelivering the same auto-forward event
 test('resolveThread returns null for a thread nothing has ever linked', async (t) => {
   await withDb(t, async (pool) => {
     assert.equal(await resolveThread(pool, '-100111', '999'), null)
+  })
+})
+
+// --- Race fix: the auto-forward webhook arriving BEFORE the publish call commits external_post_id ---
+// (requirement 6 / the real production bug — external_post_id stayed committed-but-unlinked for a
+// real publication because this exact order was never handled before.)
+
+test('webhook arrives before external_post_id is committed: linkAutoForward does not lose the event, resolvePendingAutoForwardForPublication completes it once the publish lands', async (t) => {
+  await withDb(t, async (pool, { makeProject, makeDraftPublication, setExternalPostId }) => {
+    const projectId = await makeProject('@olnoo_channel')
+    const publicationId = await makeDraftPublication(projectId)
+
+    // Telegram's auto-forward webhook arrives first — the channel is connected and known, but no
+    // publication has external_post_id = '8' yet (the sendMessage response hasn't come back).
+    const firstAttempt = await linkAutoForward(pool, autoForward('olnoo_channel', '8'))
+    assert.equal(firstAttempt, null, 'nothing to match yet — must not be treated as an error')
+
+    // A comment posted in the window before the thread is ever linked is correctly unattributed,
+    // not silently dropped as something else.
+    assert.equal(await resolveThread(pool, '-100111', '555'), null)
+
+    // The publish call's own response now arrives and commits external_post_id — this is exactly
+    // where lib/social-telegram.ts calls resolvePendingAutoForwardForPublication.
+    await setExternalPostId(publicationId, '8')
+    const resolved = await resolvePendingAutoForwardForPublication(pool, projectId, publicationId, '@olnoo_channel', '8')
+    assert.deepEqual(resolved, { projectId, publicationId })
+
+    // The thread is now linked exactly as if the webhook had arrived second.
+    assert.deepEqual(await resolveThread(pool, '-100111', '555'), { projectId, publicationId })
+  })
+})
+
+test('resolvePendingAutoForwardForPublication: nothing pending resolves to null, never throws', async (t) => {
+  await withDb(t, async (pool, { makeProject, makePublication }) => {
+    const projectId = await makeProject('@olnoo_channel')
+    const publicationId = await makePublication(projectId, '8')
+    assert.equal(await resolvePendingAutoForwardForPublication(pool, projectId, publicationId, '@olnoo_channel', '8'), null)
+  })
+})
+
+test('a pending event is consumed once resolved — it cannot be matched again by a second, unrelated publication', async (t) => {
+  await withDb(t, async (pool, { makeProject, makeDraftPublication, setExternalPostId }) => {
+    const projectId = await makeProject('@olnoo_channel')
+    const publicationId = await makeDraftPublication(projectId)
+
+    await linkAutoForward(pool, autoForward('olnoo_channel', '8'))
+    await setExternalPostId(publicationId, '8')
+    const first = await resolvePendingAutoForwardForPublication(pool, projectId, publicationId, '@olnoo_channel', '8')
+    assert.deepEqual(first, { projectId, publicationId })
+
+    // A second, different publication that happens to reuse external_post_id '8' (shouldn't
+    // happen in practice — Telegram message ids are not reused — but the pending row must not be
+    // reusable regardless) finds nothing left to resolve.
+    const secondPublicationId = await makeDraftPublication(projectId)
+    await setExternalPostId(secondPublicationId, '8')
+    const second = await resolvePendingAutoForwardForPublication(pool, projectId, secondPublicationId, '@olnoo_channel', '8')
+    assert.equal(second, null)
+  })
+})
+
+// --- Normalization fix (requirement 2): matching must work regardless of which of the three
+// equivalent-looking forms social_accounts.username happens to hold. ---
+
+test('linkAutoForward matches even when social_accounts.username is stored WITHOUT the "@" prefix (a bare handle)', async (t) => {
+  await withDb(t, async (pool, { makeProject, makePublication }) => {
+    // Deliberately NOT using makeProject (which stores whatever string it's given) with "@" — this
+    // simulates a row whose stored form differs from the always-"@"-normalized webhook candidate.
+    const projectId = await makeProject('olnoo_channel')
+    const publicationId = await makePublication(projectId, '42')
+
+    const match = await linkAutoForward(pool, autoForward('olnoo_channel', '42'))
+    assert.deepEqual(match, { projectId, publicationId })
+  })
+})
+
+test('linkAutoForward matches a numeric chat id stored as social_accounts.username against a forward carrying only the numeric chat id (private channel, no public username)', async (t) => {
+  await withDb(t, async (pool, { makeProject, makePublication }) => {
+    const projectId = await makeProject('-1009876543210')
+    const publicationId = await makePublication(projectId, '42')
+
+    const event: TelegramAutoForwardEvent = {
+      kind: 'auto_forward',
+      discussionChatId: '-100111',
+      threadId: '555',
+      forwardFromChatId: '-1009876543210',
+      forwardFromChatUsername: '', // private channel — no public username at all
+      forwardFromMessageId: '42',
+    }
+    const match = await linkAutoForward(pool, event)
+    assert.deepEqual(match, { projectId, publicationId })
   })
 })
 

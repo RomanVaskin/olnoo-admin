@@ -16,6 +16,26 @@ export function normalizeTelegramChatIdentifier(value: string): string {
   return `@${trimmed}`
 }
 
+/**
+ * Whether two Telegram chat identifiers (a `social_accounts.username`, a webhook's
+ * `forward_from_chat_username`/`forward_from_chat_id`, an admin-typed value, …) refer to the same
+ * chat — normalizing BOTH sides through `normalizeTelegramChatIdentifier` before comparing,
+ * case-insensitively. This matters because `social_accounts.username` can legitimately hold any
+ * of three equivalent-looking but textually different forms depending on how/when the row was
+ * connected or what the channel's own Telegram settings are: a bare handle ("olnoo_channel"), the
+ * "@handle" form (`canonicalChatIdentifier` in lib/social-accounts-telegram-connection.ts writes
+ * this one for a channel that has a public username), or a raw numeric chat id (written instead
+ * for a channel with NO public username). Comparing the raw stored string against only an
+ * already-normalized candidate — as an earlier version of lib/social-comments.ts's matching SQL
+ * did — silently fails to match a bare-handle row, since "@olnoo_channel" !== "olnoo_channel" as
+ * plain strings. Two empty/blank identifiers never match — an unset value must never be treated as
+ * equal to another unset value. */
+export function telegramIdentifiersMatch(a: string, b: string): boolean {
+  const left = normalizeTelegramChatIdentifier(a).toLowerCase()
+  const right = normalizeTelegramChatIdentifier(b).toLowerCase()
+  return !!left && left === right
+}
+
 export type TelegramChannelIdentity = { chatId: string; title: string; username: string }
 export type TelegramVerifyResult = { ok: true; identity: TelegramChannelIdentity } | { ok: false; error: string }
 
