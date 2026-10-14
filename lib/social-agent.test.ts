@@ -107,9 +107,13 @@ const SAMPLE_PLAN = [
 /** A fake `SocialAgentDeps` that tracks every post it "created" and "deleted" in-memory, so a test
  * can assert the rollback behavior precisely (every created post was also deleted) without a real
  * social_posts table. `failAtIndex`, if given, makes the Nth call to createAdaptedDraftPost throw
- * (simulating an AI Router or post-creation failure partway through the batch). */
-function makeFakeDeps(opts: { failAtIndex?: number } = {}): SocialAgentDeps & { created: string[]; deleted: string[]; calls: number } {
-  const state = { created: [] as string[], deleted: [] as string[], calls: 0 }
+ * (simulating an AI Router or post-creation failure partway through the batch). `failDeleteAtIndex`,
+ * if given, makes the Nth call to deletePost (0-based, in rollback order) throw instead of
+ * succeeding — simulating deleteSocialPost itself failing mid-rollback. */
+function makeFakeDeps(
+  opts: { failAtIndex?: number; failDeleteAtIndex?: number } = {},
+): SocialAgentDeps & { created: string[]; deleted: string[]; calls: number } {
+  const state = { created: [] as string[], deleted: [] as string[], calls: 0, deleteCalls: 0 }
   return {
     created: state.created,
     deleted: state.deleted,
@@ -127,6 +131,11 @@ function makeFakeDeps(opts: { failAtIndex?: number } = {}): SocialAgentDeps & { 
       return { id, topic: item.topic, channels: item.channels }
     },
     deletePost: async (id) => {
+      const index = state.deleteCalls
+      state.deleteCalls++
+      if (opts.failDeleteAtIndex === index) {
+        throw new Error(`simulated failure deleting draft ${id}`)
+      }
       state.deleted.push(id)
     },
   } as SocialAgentDeps & { created: string[]; deleted: string[]; calls: number }
@@ -316,6 +325,45 @@ test('requirement: a failure partway through CREATING the planned posts rolls ba
     assert.equal(deps.created.length, 2, 'the first two posts were created before the failure')
     assert.equal(deps.deleted.length, 2, 'both already-created posts must be rolled back')
     assert.deepEqual(deps.created.sort(), deps.deleted.sort(), 'exactly the posts that were created must be the ones deleted — nothing left behind')
+  })
+})
+
+test('requirement: when rolling back a partial batch itself fails, the run is left non-retryable rather than silently reusable', async (t) => {
+  await withDb(t, async (pool, { makeProjectWithChannel }) => {
+    const projectId = await makeProjectWithChannel()
+    const runId = randomUUID()
+    // Plan has 3 items; the 3rd create fails, triggering rollback of the first 2; the 1st delete
+    // in that rollback itself fails (simulating deleteSocialPost erroring), leaving one post's fate
+    // unconfirmed.
+    const deps = makeFakeDeps({ failAtIndex: 2, failDeleteAtIndex: 0 })
+
+    const result = await withFetch(() => aiRouterOk(SAMPLE_PLAN), () => runSocialAgentTask(pool, projectId, runId, 'A task', deps))
+    assert.equal('error' in result && result.status, 500, 'an unconfirmed cleanup must never be reported as a normal, retryable 422 failure')
+    assert.equal(deps.created.length, 2)
+    assert.equal(deps.deleted.length, 1, 'only the one delete that succeeded is recorded as deleted')
+
+    // A retry with the SAME runId must be refused outright — never silently allowed to run a fresh
+    // batch while the earlier run's cleanup outcome is still unconfirmed (that would risk a
+    // duplicate: the one post whose deletion failed may still exist as a real draft).
+    let fetchCalledOnRetry = false
+    const retryDeps = makeFakeDeps()
+    const retried = await withFetch(
+      () => {
+        fetchCalledOnRetry = true
+        return aiRouterOk(SAMPLE_PLAN)
+      },
+      () => runSocialAgentTask(pool, projectId, runId, 'A task', retryDeps),
+    )
+    assert.equal('error' in retried && retried.status, 409, 'a run stuck needing manual cleanup review must refuse retry, not silently proceed')
+    assert.equal(fetchCalledOnRetry, false, 'the AI Router must never be called again while cleanup is unconfirmed')
+    assert.equal(retryDeps.calls, 0, 'no new post may be created while the earlier batch\'s fate is unconfirmed')
+
+    const { rows } = await pool.query<{ status: string; post_ids: string }>(
+      'SELECT status, post_ids FROM social_agent_runs WHERE id = $1 AND project_id = $2',
+      [runId, projectId],
+    )
+    assert.equal(rows[0]?.status, 'cleanup_failed', 'the row itself must record the terminal, non-retryable status for manual review')
+    assert.ok(rows[0]?.post_ids, 'the post id whose deletion could not be confirmed must be recorded for manual review')
   })
 })
 
