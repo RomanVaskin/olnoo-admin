@@ -527,6 +527,13 @@ export type CommentListRow = {
   social_publication_id: string | null
   publication_external_url: string | null
   publication_platform: string | null
+  // AI-suggested-reply feature (lib/social-comment-reply.ts) — at most one reply per comment (see
+  // db/migrations/0026_social_comment_replies.sql), so a plain LEFT JOIN is enough; all four are
+  // null when nothing has ever been sent yet, letting the UI show "Suggest a reply" instead.
+  reply_status: string | null
+  reply_body: string | null
+  reply_external_message_id: string | null
+  reply_error: string | null
 }
 
 /** Project-scoped read for the Comments screen — newest first. No "all projects" mode, same
@@ -535,9 +542,11 @@ export type CommentListRow = {
 export async function listCommentsForProject(pool: Pool, projectId: number, limit = 200): Promise<CommentListRow[]> {
   const { rows } = await pool.query<CommentListRow>(
     `SELECT c.id, c.author_name, c.author_username, c.body, c.external_posted_at, c.created_at,
-            c.social_publication_id, sp.external_url AS publication_external_url, sp.platform AS publication_platform
+            c.social_publication_id, sp.external_url AS publication_external_url, sp.platform AS publication_platform,
+            r.status AS reply_status, r.body AS reply_body, r.external_reply_message_id AS reply_external_message_id, r.error AS reply_error
      FROM social_comments c
      LEFT JOIN social_publications sp ON sp.id = c.social_publication_id
+     LEFT JOIN social_comment_replies r ON r.social_comment_id = c.id AND r.project_id = c.project_id
      WHERE c.project_id = $1
      ORDER BY coalesce(c.external_posted_at, c.created_at) DESC
      LIMIT $2`,
