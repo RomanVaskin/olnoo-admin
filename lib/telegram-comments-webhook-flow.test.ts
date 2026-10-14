@@ -40,6 +40,7 @@ async function withDb(
     await pool.query('SELECT telegram_discussion_chat_id FROM social_publications LIMIT 1')
     await pool.query('SELECT id FROM social_comments LIMIT 1')
     await pool.query('SELECT id FROM social_telegram_pending_auto_forwards LIMIT 1')
+    await pool.query('SELECT id FROM social_telegram_pending_comments LIMIT 1')
   } catch (err) {
     t.skip(`No reachable Postgres with the social_comments schema — skipping (${(err as Error).message})`)
     await pool.end()
@@ -190,6 +191,7 @@ test('end-to-end: the auto-forward webhook Update arrives BEFORE the publish cal
   try {
     await pool.query('SELECT telegram_discussion_chat_id FROM social_publications LIMIT 1')
     await pool.query('SELECT id FROM social_telegram_pending_auto_forwards LIMIT 1')
+    await pool.query('SELECT id FROM social_telegram_pending_comments LIMIT 1')
   } catch (err) {
     t.skip(`No reachable Postgres with the social_comments schema — skipping (${(err as Error).message})`)
     await pool.end()

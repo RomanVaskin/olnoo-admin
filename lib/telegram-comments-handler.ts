@@ -30,8 +30,10 @@ export type TelegramCommentsDeps = {
    * `linkAutoForward` call already recorded for it. `threadId` alone is never looked up without
    * `discussionChatId` — thread ids are only unique within one chat. Returns `null` if this
    * thread was never linked (the comment arrived before, or without, its own post ever being
-   * observed as an automatic forward) — dropped, not attributed to a guessed project. */
-  resolveThread: (discussionChatId: string, threadId: string) => Promise<{ projectId: number; publicationId: string } | null>
+   * observed as an automatic forward) — NOT dropped: the real implementation (lib/social-comments.ts)
+   * remembers `event` so it can be replayed the moment the thread does link, since arriving this
+   * early is a real race, not only a hypothetical one (see db/migrations/0025_social_telegram_pending_comments.sql). */
+  resolveThread: (discussionChatId: string, threadId: string, event: TelegramCommentEvent) => Promise<{ projectId: number; publicationId: string } | null>
   /** Inserts the comment keyed by (projectId, platform, externalCommentId) — a second call with
    * the same id (webhook redelivery, or this handler retried after a transient failure) reports
    * `inserted: false` rather than creating a second row or re-triggering notification. */
@@ -65,7 +67,7 @@ export async function handleTelegramCommentsUpdate(update: unknown, deps: Telegr
   }
 
   // decision.kind === 'comment'
-  const resolved = await deps.resolveThread(decision.discussionChatId, decision.threadId)
+  const resolved = await deps.resolveThread(decision.discussionChatId, decision.threadId, decision)
   if (!resolved) return { action: 'comment_unattributed' }
 
   const result = await deps.insertCommentIfNew(resolved.projectId, resolved.publicationId, decision)

@@ -35,6 +35,7 @@ async function withDb(
     await pool.query('SELECT telegram_discussion_chat_id FROM social_publications LIMIT 1')
     await pool.query('SELECT id FROM social_comments LIMIT 1')
     await pool.query('SELECT id FROM social_telegram_pending_auto_forwards LIMIT 1')
+    await pool.query('SELECT id FROM social_telegram_pending_comments LIMIT 1')
   } catch (err) {
     t.skip(`No reachable Postgres with the social_comments schema — skipping (${(err as Error).message})`)
     await pool.end()
@@ -230,6 +231,113 @@ test('a pending event is consumed once resolved — it cannot be matched again b
     await setExternalPostId(secondPublicationId, '8')
     const second = await resolvePendingAutoForwardForPublication(pool, projectId, secondPublicationId, '@olnoo_channel', '8')
     assert.equal(second, null)
+  })
+})
+
+// --- Residual race (review finding on PR #62): linkAutoForward's check-then-act and
+// resolvePendingAutoForwardForPublication's own are two separate, otherwise-unsynchronized
+// statements — without serializing them against each other, they could interleave as: (1)
+// linkAutoForward checks for the publication, absent; (2) the publish call commits
+// external_post_id; (3) resolvePendingAutoForwardForPublication checks the pending table, ALSO
+// absent (step 1 hasn't written it yet); (4) linkAutoForward (only now) writes the pending row —
+// too late, nothing ever looks for it again. Fixed by running each side's whole sequence inside a
+// Postgres advisory-lock transaction keyed by (projectId, externalPostId) — see the long comment
+// in lib/social-comments.ts above `autoForwardLockKey`. The test below drives REAL concurrent
+// requests through the actual exported functions (not a hand-simulated reordering) and asserts the
+// decisive fact — the thread ends up linked, read back independently via `resolveThread` — not
+// merely that neither call threw a SQL error.
+
+test('concurrent requests: linkAutoForward and resolvePendingAutoForwardForPublication racing for the SAME post always converge on a correctly linked thread', async (t) => {
+  await withDb(t, async (pool, { makeProject, makeDraftPublication, setExternalPostId }) => {
+    // Several iterations, each with fresh, unique identifiers — real concurrency means the DB (not
+    // this test) decides which side's lock-protected transaction actually runs first on any given
+    // run, so repeating this is what gives confidence the fix holds regardless of that order, not
+    // just in whichever order happened to occur on a single run.
+    for (let i = 0; i < 8; i++) {
+      const channelUsername = `olnoo_channel_race_${i}`
+      const discussionChatId = `-100${2000 + i}`
+      const messageId = String(5000 + i)
+
+      const projectId = await makeProject(`@${channelUsername}`)
+      const publicationId = await makeDraftPublication(projectId)
+
+      // Real concurrency through two independent Postgres connections: the webhook's auto-forward
+      // handling, and the publish call's own external_post_id commit immediately followed by its
+      // resolve step — dispatched together via Promise.all, exactly the two sides that raced in
+      // production.
+      await Promise.all([
+        linkAutoForward(pool, autoForward(channelUsername, messageId, discussionChatId, '555')),
+        (async () => {
+          await setExternalPostId(publicationId, messageId)
+          return resolvePendingAutoForwardForPublication(pool, projectId, publicationId, `@${channelUsername}`, messageId)
+        })(),
+      ])
+
+      // The decisive assertion: read the end state back independently. Whichever of the two calls
+      // above "won" and whichever returned null proves nothing by itself (exactly one of them is
+      // expected to be a no-op, depending on timing this test deliberately does not control) — only
+      // the actual stored mapping does.
+      const linked = await resolveThread(pool, discussionChatId, '555')
+      assert.deepEqual(linked, { projectId, publicationId }, `iteration ${i}: the thread must be linked no matter which side's transaction committed first`)
+    }
+  })
+})
+
+test('a comment arriving before the thread links is replayed into social_comments once linkAutoForward completes the link — not lost', async (t) => {
+  await withDb(t, async (pool, { makeProject, makeDraftPublication, setExternalPostId }) => {
+    const projectId = await makeProject('@olnoo_channel')
+    const publicationId = await makeDraftPublication(projectId)
+
+    // A viewer comments before the auto-forward has even been observed. resolveThread's 4th
+    // argument is the whole point of this test: passing the event means "remember me if you can't
+    // attribute me yet", instead of the comment being silently dropped forever the moment this
+    // call returns null.
+    const earlyComment = comment('556')
+    const resolvedEarly = await resolveThread(pool, '-100111', '555', earlyComment)
+    assert.equal(resolvedEarly, null, 'still genuinely unattributed at this exact moment — expected, not itself a bug')
+    assert.equal((await listCommentsForProject(pool, projectId)).length, 0, 'not recorded as a real comment yet — only remembered as pending')
+
+    // The auto-forward webhook and the publish's own external_post_id commit now both land.
+    await setExternalPostId(publicationId, '8')
+    const linked = await linkAutoForward(pool, autoForward('olnoo_channel', '8'))
+    assert.deepEqual(linked, { projectId, publicationId })
+
+    // The early comment must now be present — recovered, not lost — even though
+    // handleTelegramCommentsUpdate reported `comment_unattributed` for its own original webhook call.
+    const rows = await listCommentsForProject(pool, projectId)
+    assert.equal(rows.length, 1, 'the comment that arrived before linking must have been replayed, not dropped forever')
+    assert.equal(rows[0].body, 'hello')
+    assert.equal(rows[0].author_username, 'tester')
+  })
+})
+
+test('a comment arriving before the thread links is replayed even when the OTHER race side (resolvePendingAutoForwardForPublication) is the one that performs the link', async (t) => {
+  await withDb(t, async (pool, { makeProject, makeDraftPublication, setExternalPostId }) => {
+    const projectId = await makeProject('@olnoo_channel')
+    const publicationId = await makeDraftPublication(projectId)
+
+    await linkAutoForward(pool, autoForward('olnoo_channel', '8')) // webhook arrives first, finds nothing yet, stores pending
+    const earlyComment = comment('556')
+    assert.equal(await resolveThread(pool, '-100111', '555', earlyComment), null)
+
+    await setExternalPostId(publicationId, '8')
+    const resolved = await resolvePendingAutoForwardForPublication(pool, projectId, publicationId, '@olnoo_channel', '8')
+    assert.deepEqual(resolved, { projectId, publicationId })
+
+    const rows = await listCommentsForProject(pool, projectId)
+    assert.equal(rows.length, 1, 'replay must happen on this path too, not only when linkAutoForward itself performs the stamp')
+    assert.equal(rows[0].body, 'hello')
+  })
+})
+
+test('a comment that arrives AFTER the thread is already linked never touches the pending-comment path at all', async (t) => {
+  await withDb(t, async (pool, { makeProject, makePublication }) => {
+    const projectId = await makeProject('@olnoo_channel')
+    const publicationId = await makePublication(projectId, '42')
+    await linkAutoForward(pool, autoForward('olnoo_channel', '42'))
+
+    const resolved = await resolveThread(pool, '-100111', '555', comment('556'))
+    assert.deepEqual(resolved, { projectId, publicationId }, 'resolves immediately — never needed to be remembered')
   })
 })
 
