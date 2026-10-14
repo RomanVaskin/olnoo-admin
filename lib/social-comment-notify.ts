@@ -52,24 +52,33 @@ async function sendTelegramMessage(chatId: string, text: string): Promise<SendRe
  * swallowed; the comment row this follows was already committed by the caller before this runs,
  * so a notification failure never loses or risks the already-received comment (requirement:
  * "ошибка Telegram API не приводит к потере уже полученных комментариев").
+ *
+ * Returns whether the send actually succeeded (`{ ok: true }` vs `{ error }`) — unlike
+ * notifyLeadCreated, this is NOT `void`: the caller (app/api/telegram/comments-webhook/route.ts)
+ * uses this to decide whether to mark the comment as notified. A transient Telegram-side failure
+ * must not be recorded as "notified" — see lib/social-comments.ts's `markCommentNotified` and the
+ * webhook route's bounded retry sweep for comments this left un-notified.
  */
 export async function notifyNewComment(
   event: TelegramCommentEvent,
   project: ProjectInfo,
   publicationExternalUrl: string | null,
   send: SendFn = sendTelegramMessage,
-): Promise<void> {
+): Promise<SendResult> {
   const chatId = process.env.CRM_NOTIFY_TELEGRAM_CHAT_ID
   if (!chatId) {
     console.warn('[comment-notify] CRM_NOTIFY_TELEGRAM_CHAT_ID is not configured — skipping comment notification')
-    return
+    return { error: 'CRM_NOTIFY_TELEGRAM_CHAT_ID is not configured' }
   }
   try {
     const result = await send(chatId, formatCommentNotification(event, project, publicationExternalUrl))
     if ('error' in result) {
       console.error('[comment-notify] failed to send Telegram notification:', result.error)
     }
+    return result
   } catch (err) {
-    console.error('[comment-notify] failed to send Telegram notification:', err instanceof Error ? err.message : String(err))
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[comment-notify] failed to send Telegram notification:', message)
+    return { error: message }
   }
 }

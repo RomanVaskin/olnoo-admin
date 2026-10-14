@@ -104,14 +104,81 @@ export async function insertCommentIfNew(
   return rows[0] ? { inserted: true, commentId: rows[0].id } : { inserted: false }
 }
 
-/** Marks a comment as having had its admin notification sent — separate from the insert itself so
- * a notification failure (see lib/social-comment-notify.ts, which never throws) never risks the
- * comment row itself; this is purely bookkeeping for "don't notify about this one again" if the
- * notify step is ever retried independently. Not currently re-read by anything — insertCommentIfNew
- * already prevents a second notify via the dedup insert itself; this column exists for visibility
- * and future use, not as the primary notify-once guard. */
+/** Marks a comment as having had its admin notification actually SENT (not just attempted) —
+ * separate from the insert itself so a notification failure (see lib/social-comment-notify.ts,
+ * which never throws) never risks the comment row itself. This is the durable signal
+ * `listUnnotifiedComments` below retries against: a comment is only ever marked notified once
+ * `notifyNewComment` reports success, never merely because it was called. */
 export async function markCommentNotified(pool: Pool, commentId: string): Promise<void> {
   await pool.query(`UPDATE social_comments SET notified_at = now() WHERE id = $1 AND notified_at IS NULL`, [commentId])
+}
+
+export type UnnotifiedComment = {
+  id: string
+  projectId: number
+  projectName: string
+  projectSlug: string
+  authorName: string
+  authorUsername: string
+  body: string
+  externalPostedAt: string | null
+  createdAt: string
+  publicationExternalUrl: string | null
+}
+
+/**
+ * Comments whose notification never durably succeeded — a Telegram API error, a missing
+ * CRM_NOTIFY_TELEGRAM_CHAT_ID at the time, or the process dying between insert and notify would
+ * otherwise lose the notification silently forever (the comment itself is always safe; only the
+ * *notification* was ever at risk). `olderThanMs` guards against racing the comment that was
+ * JUST inserted in the SAME request (its own notify attempt hasn't run yet) — the webhook route's
+ * retry sweep only looks at comments old enough that their original attempt has clearly already
+ * happened (or never will, e.g. the config was missing at the time).
+ *
+ * This is the "minimal fix, no separate queue/service" requested: the retry sweep is a plain,
+ * bounded SELECT the webhook route itself runs once per incoming update (see that route for why
+ * piggybacking on existing traffic — rather than a new timer — is enough for this), not a new
+ * scheduled job. Known limitation, stated plainly: a channel with zero further activity never
+ * triggers another retry; a stuck notification then waits for the next real comment. Acceptable
+ * for this MVP's volume — revisit with a real low-frequency timer (the same systemd-timer pattern
+ * lib/social-meta-token-refresh-sweep.ts already uses) if that ever matters in practice.
+ */
+export async function listUnnotifiedComments(pool: Pool, olderThanMs: number, limit = 5): Promise<UnnotifiedComment[]> {
+  const { rows } = await pool.query<{
+    id: string
+    project_id: number
+    project_name: string
+    project_slug: string
+    author_name: string
+    author_username: string
+    body: string
+    external_posted_at: string | null
+    created_at: string
+    publication_external_url: string | null
+  }>(
+    `SELECT c.id, c.project_id, p.name AS project_name, p.slug AS project_slug,
+            c.author_name, c.author_username, c.body, c.external_posted_at, c.created_at,
+            sp.external_url AS publication_external_url
+     FROM social_comments c
+     JOIN projects p ON p.id = c.project_id
+     LEFT JOIN social_publications sp ON sp.id = c.social_publication_id
+     WHERE c.notified_at IS NULL AND c.created_at < now() - ($1 || ' milliseconds')::interval
+     ORDER BY c.created_at ASC
+     LIMIT $2`,
+    [olderThanMs, limit],
+  )
+  return rows.map((r) => ({
+    id: r.id,
+    projectId: r.project_id,
+    projectName: r.project_name,
+    projectSlug: r.project_slug,
+    authorName: r.author_name,
+    authorUsername: r.author_username,
+    body: r.body,
+    externalPostedAt: r.external_posted_at,
+    createdAt: r.created_at,
+    publicationExternalUrl: r.publication_external_url,
+  }))
 }
 
 export type CommentListRow = {

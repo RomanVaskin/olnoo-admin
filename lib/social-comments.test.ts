@@ -2,7 +2,14 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
-import { linkAutoForward, resolveThread, insertCommentIfNew, listCommentsForProject } from './social-comments.ts'
+import {
+  linkAutoForward,
+  resolveThread,
+  insertCommentIfNew,
+  listCommentsForProject,
+  markCommentNotified,
+  listUnnotifiedComments,
+} from './social-comments.ts'
 import type { TelegramAutoForwardEvent, TelegramCommentEvent } from './social-telegram-comments.ts'
 
 // DB integration (skipped without a reachable Postgres) — same convention as
@@ -224,5 +231,51 @@ test('a comment for a project with the SAME external_comment_id as another proje
     const b = await insertCommentIfNew(pool, projectB, pubB, comment('777'))
     assert.equal(a.inserted, true)
     assert.equal(b.inserted, true, 'the dedup key is scoped by project_id — the same external id in another project is a different comment')
+  })
+})
+
+// --- Notification durability: listUnnotifiedComments / markCommentNotified ---
+
+test('listUnnotifiedComments: a comment old enough with no notified_at is returned, with its project info', async (t) => {
+  await withDb(t, async (pool, { makeProject, makePublication }) => {
+    const projectId = await makeProject('@olnoo_channel')
+    const publicationId = await makePublication(projectId, '42')
+    const inserted = await insertCommentIfNew(pool, projectId, publicationId, comment('556'))
+    assert.equal(inserted.inserted, true)
+    if (!inserted.inserted) return
+    await pool.query(`UPDATE social_comments SET created_at = now() - interval '5 minutes' WHERE id = $1`, [inserted.commentId])
+
+    const pending = await listUnnotifiedComments(pool, 2 * 60 * 1000)
+    const mine = pending.find((p) => p.id === inserted.commentId)
+    assert.ok(mine, 'an old, unnotified comment must be returned')
+    assert.equal(mine!.projectId, projectId)
+  })
+})
+
+test('listUnnotifiedComments: a comment inserted just now (within the age guard) is NOT returned yet', async (t) => {
+  await withDb(t, async (pool, { makeProject, makePublication }) => {
+    const projectId = await makeProject('@olnoo_channel')
+    const publicationId = await makePublication(projectId, '42')
+    const inserted = await insertCommentIfNew(pool, projectId, publicationId, comment('556'))
+    assert.equal(inserted.inserted, true)
+
+    const pending = await listUnnotifiedComments(pool, 2 * 60 * 1000)
+    assert.ok(!pending.some((p) => p.id === (inserted as { commentId: string }).commentId), 'a freshly-inserted comment must not race its own first notify attempt')
+  })
+})
+
+test('markCommentNotified: once marked, a comment no longer shows up as unnotified, even if old', async (t) => {
+  await withDb(t, async (pool, { makeProject, makePublication }) => {
+    const projectId = await makeProject('@olnoo_channel')
+    const publicationId = await makePublication(projectId, '42')
+    const inserted = await insertCommentIfNew(pool, projectId, publicationId, comment('556'))
+    assert.equal(inserted.inserted, true)
+    if (!inserted.inserted) return
+    await pool.query(`UPDATE social_comments SET created_at = now() - interval '5 minutes' WHERE id = $1`, [inserted.commentId])
+
+    await markCommentNotified(pool, inserted.commentId)
+
+    const pending = await listUnnotifiedComments(pool, 2 * 60 * 1000)
+    assert.ok(!pending.some((p) => p.id === inserted.commentId), 'a comment already marked notified must never be retried')
   })
 })
