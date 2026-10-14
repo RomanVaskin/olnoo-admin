@@ -22,6 +22,7 @@ import { LeadsView } from '@/components/sections/leads-view'
 import { SocialOverview } from '@/components/sections/social-overview'
 import { SocialView } from '@/components/sections/social-view'
 import { SocialAccountsView } from '@/components/sections/social-accounts-view'
+import { SocialCommentsView } from '@/components/sections/social-comments-view'
 import { AdsView } from '@/components/sections/ads-view'
 import { SettingsView } from '@/components/sections/settings-view'
 import { ClientCrm } from '@/components/sections/client-crm'
@@ -74,7 +75,7 @@ const adminGroups: NavGroup[] = [
       {
         id: 'social',
         status: 'active',
-        children: [{ id: 'social-overview' }, { id: 'social-posts' }, { id: 'social-accounts' }],
+        children: [{ id: 'social-overview' }, { id: 'social-posts' }, { id: 'social-accounts' }, { id: 'social-comments' }],
       },
       { id: 'ads', status: 'active' },
       { id: 'pr', status: 'soon' },
@@ -312,6 +313,9 @@ export function AppShell() {
           {active === 'social-posts' && <SocialView project={project} onProjectChange={setProject} />}
           {active === 'social-accounts' && (
             <SocialAccountsView project={project} onProjectChange={setProject} />
+          )}
+          {active === 'social-comments' && (
+            <SocialCommentsView project={project} onProjectChange={setProject} />
           )}
           {active === 'ads' && project !== 'all' && <AdsView project={project} />}
           {active === 'settings' && <SettingsView />}
