@@ -6,7 +6,7 @@ import { SectionHeader, HeaderActions, StatusPill, TableShell, Th, Td } from '@/
 import { ProjectSelector } from '@/components/project-selector'
 import { useProjects } from '@/components/sections/seo-project-picker'
 import { useI18n } from '@/components/i18n-provider'
-import { REFRESH_WINDOW_DAYS } from '@/lib/social-meta-token-refresh-sweep'
+import { REFRESH_WINDOW_DAYS } from '@/lib/social-meta-token-refresh-window'
 
 /** Purely derived from the stored expiry — never a separate persisted status (no schema change
  * needed for this). `warn` once within the same REFRESH_WINDOW_DAYS the daily refresh sweep

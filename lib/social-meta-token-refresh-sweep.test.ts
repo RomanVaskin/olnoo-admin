@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { encryptAccountSecret, decryptAccountSecret } from './social-account-crypto.ts'
-import { refreshExpiringMetaTokens, REFRESH_WINDOW_DAYS } from './social-meta-token-refresh-sweep.ts'
+import { refreshExpiringMetaTokens } from './social-meta-token-refresh-sweep.ts'
+import { REFRESH_WINDOW_DAYS } from './social-meta-token-refresh-window.ts'
 
 // DB integration (skipped without a reachable Postgres) — same convention as
 // lib/social-publication-claim.test.ts. Network calls to Meta are scripted (same approach as
@@ -297,5 +298,95 @@ test('refreshExpiringMetaTokens: the update statement is always scoped by id AND
     /WHERE id = \$3 AND project_id = \$4 AND \$\{cfg\.tokenColumn\} = \$5/,
     'the refresh write must be scoped by both id and project_id, pinned to the exact token snapshot read',
   )
-  assert.match(source, /WHERE id = \$2 AND project_id = \$3/, 'the error-recording write must also be scoped by both id and project_id')
+  assert.match(
+    source,
+    /WHERE id = \$2 AND project_id = \$3 AND \$\{cfg\.tokenColumn\} = \$4/,
+    'the error-recording write must also be scoped by both id and project_id, pinned to the exact token snapshot read',
+  )
+})
+
+// --- No client-UI import from this server-only module ---
+
+test('social-meta-token-refresh-sweep.ts: never imports from components/ (server-only, pulls in `pg` + network calls)', async () => {
+  const source = await (await import('node:fs/promises')).readFile(new URL('./social-meta-token-refresh-sweep.ts', import.meta.url), 'utf8')
+  assert.ok(!source.includes('components/'), 'this server-only sweep must never import a client component')
+  assert.ok(!source.includes("'use client'"), 'this module must never be a client component itself')
+})
+
+test('REFRESH_WINDOW_DAYS lives in its own zero-dependency module, imported by both the sweep and the UI', async () => {
+  const fs = await import('node:fs/promises')
+  const windowSource = await fs.readFile(new URL('./social-meta-token-refresh-window.ts', import.meta.url), 'utf8')
+  assert.match(windowSource, /export const REFRESH_WINDOW_DAYS = 7/)
+  assert.ok(!/^import /m.test(windowSource), 'the shared constant module must have zero imports of its own')
+
+  const sweepSource = await fs.readFile(new URL('./social-meta-token-refresh-sweep.ts', import.meta.url), 'utf8')
+  assert.match(sweepSource, /import \{ REFRESH_WINDOW_DAYS \} from '\.\/social-meta-token-refresh-window\.ts'/)
+  assert.ok(
+    !sweepSource.includes('export const REFRESH_WINDOW_DAYS') && !sweepSource.includes('export { REFRESH_WINDOW_DAYS }'),
+    'the sweep module must not also define or re-export the constant — one source of truth only',
+  )
+
+  const uiSource = await fs.readFile(new URL('../components/sections/social-accounts-view.tsx', import.meta.url), 'utf8')
+  assert.match(
+    uiSource,
+    /import \{ REFRESH_WINDOW_DAYS \} from '@\/lib\/social-meta-token-refresh-window'/,
+    'the client component must import the constant from the tiny shared module, never from the server-only sweep module',
+  )
+})
+
+// --- connection_error write must not clobber a connection whose token already updated ---
+
+test('refreshExpiringMetaTokens: a concurrent successful reconnect wins over a STALE refresh-error write — the error is discarded, not the fix', async (t) => {
+  await withDb(t, async (pool, { makeAccount, makeProject, readAccount }) => {
+    const projectId = await makeProject()
+    const id = await makeAccount(projectId, { platform: 'instagram', token: 'about-to-fail', expiresInDays: 2 })
+
+    // Simulate a human successfully reconnecting (a brand-new, working token) in the window
+    // between the sweep reading the old ciphertext and its own error-recording write landing —
+    // the real regression this guards against: a blind `UPDATE connection_error = ...` with no
+    // WHERE-clause pin on the old token would stamp a stale "refresh failed" error onto an
+    // account whose connection was actually just fixed by that concurrent reconnect.
+    const results = await withFetch(
+      async () => {
+        await pool.query(`UPDATE social_accounts SET instagram_access_token_encrypted = $1, connection_error = '' WHERE id = $2`, [
+          encryptAccountSecret('newer-working-token-from-manual-reconnect'),
+          id,
+        ])
+        return jsonResponse({ error: { message: 'This access token is not eligible to be refreshed at this time.' } }, 400)
+      },
+      () => refreshExpiringMetaTokens(pool),
+    )
+
+    const mine = results.find((r) => r.id === id)
+    assert.ok(mine)
+    assert.equal(mine!.outcome, 'error', 'the sweep itself still reports its own attempt as an error')
+
+    const row = await readAccount(id)
+    assert.equal(row.connection_error, '', 'the stale error must NOT overwrite the now-fixed connection’s clean state')
+    assert.equal(
+      decryptAccountSecret(row.instagram_access_token_encrypted as string),
+      'newer-working-token-from-manual-reconnect',
+      'the newer, working token must survive untouched',
+    )
+  })
+})
+
+test('refreshExpiringMetaTokens: with no concurrent change, a genuine refresh error IS recorded normally', async (t) => {
+  await withDb(t, async (pool, { makeAccount, makeProject, readAccount }) => {
+    const projectId = await makeProject()
+    const id = await makeAccount(projectId, { platform: 'threads', token: 'revoked-token', expiresInDays: 2 })
+
+    const results = await withFetch(
+      () => jsonResponse({ error: { message: 'Error validating access token: Session has expired.' } }, 400),
+      () => refreshExpiringMetaTokens(pool),
+    )
+
+    const mine = results.find((r) => r.id === id)
+    assert.ok(mine)
+    assert.equal(mine!.outcome, 'error')
+
+    const row = await readAccount(id)
+    assert.match(row.connection_error as string, /Session has expired/, 'the real error must still be recorded when nothing raced it')
+    assert.equal(row.status, 'connected', 'still never disables the connection')
+  })
 })

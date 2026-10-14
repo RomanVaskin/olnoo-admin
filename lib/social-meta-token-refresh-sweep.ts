@@ -1,6 +1,7 @@
 import type { Pool } from 'pg'
 import { decryptAccountSecret, encryptAccountSecret } from './social-account-crypto.ts'
 import { refreshInstagramLongLivedToken, refreshThreadsLongLivedToken, type MetaTokenRefreshResult } from './social-meta-token-refresh.ts'
+import { REFRESH_WINDOW_DAYS } from './social-meta-token-refresh-window.ts'
 
 // No `@/` imports — only the `pg` package's own `Pool` type plus two already-dependency-free
 // sibling modules — so this is directly testable under `node --test` against a real (or
@@ -29,11 +30,6 @@ import { refreshInstagramLongLivedToken, refreshThreadsLongLivedToken, type Meta
 // bound below — Meta's refresh endpoint cannot revive one anyway, and the existing publish-time
 // check (lib/social-instagram.ts / lib/social-threads.ts) already fails closed with a clear
 // "reconnect" error for that case; this sweep does not change that.
-
-/** How many days before expiry a token is treated as "expiring soon" — both the sweep's own
- * selection window and the Accounts UI's warning threshold (components/sections/social-accounts-
- * view.tsx imports this directly, so the two can never drift apart). */
-export const REFRESH_WINDOW_DAYS = 7
 
 type MetaPlatformConfig = {
   platform: 'instagram' | 'threads'
@@ -118,13 +114,13 @@ async function refreshOneAccount(
     plaintext = decryptAccountSecret(encryptedToken)
   } catch (err) {
     const error = `Could not decrypt the stored ${cfg.platform} token: ${err instanceof Error ? err.message : String(err)}`
-    await recordRefreshError(pool, id, projectId, error)
+    await recordRefreshError(pool, cfg, id, projectId, encryptedToken, error)
     return { id, projectId, platform: cfg.platform, outcome: 'error', error }
   }
 
   const refreshed = await cfg.refresh(plaintext)
   if (!refreshed.ok) {
-    await recordRefreshError(pool, id, projectId, refreshed.error)
+    await recordRefreshError(pool, cfg, id, projectId, encryptedToken, refreshed.error)
     return { id, projectId, platform: cfg.platform, outcome: 'error', error: refreshed.error }
   }
 
@@ -149,14 +145,22 @@ async function refreshOneAccount(
 }
 
 /** Never touches `status` — see refreshOneAccount's own comment on why a background refresh
- * failure must not disable a still-working connection. `connection_error` is a plain overwrite
- * (not optimistic-locked like the token above): it is not a secret and not safety-critical, so a
- * rare lost update against a concurrent manual recheck clearing it is an acceptable, cosmetic
- * trade-off for staying a one-line write. */
-async function recordRefreshError(pool: Pool, id: string, projectId: number, error: string): Promise<void> {
-  await pool.query(`UPDATE social_accounts SET connection_error = $1, updated_at = now() WHERE id = $2 AND project_id = $3`, [
-    error,
-    id,
-    projectId,
-  ])
+ * failure must not disable a still-working connection. Same optimistic-concurrency guard as the
+ * success path above: the WHERE clause pins the token column to the EXACT ciphertext this call
+ * read moments ago, so if a concurrent "Recheck connection" (or an overlapping sweep run) already
+ * replaced the token in between — meaning the account is fine now — this stale error is simply
+ * discarded instead of being written over that newer, working state. */
+async function recordRefreshError(
+  pool: Pool,
+  cfg: MetaPlatformConfig,
+  id: string,
+  projectId: number,
+  encryptedToken: string,
+  error: string,
+): Promise<void> {
+  await pool.query(
+    `UPDATE social_accounts SET connection_error = $1, updated_at = now()
+     WHERE id = $2 AND project_id = $3 AND ${cfg.tokenColumn} = $4`,
+    [error, id, projectId, encryptedToken],
+  )
 }
