@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import {
   createOAuthState,
   verifyOAuthState,
+  verifyStateCookieBinding,
+  isHttpsRequest,
+  escapeHtml,
   buildGoogleAdsAuthorizationUrl,
   classifyCallbackParams,
   exchangeCodeForTokens,
@@ -161,6 +164,71 @@ test('exchangeCodeForTokens: missing refresh_token in an otherwise-ok response i
   if (!result.ok) {
     assert.ok(result.error.toLowerCase().includes('refresh token'))
   }
+})
+
+// --- state-binding cookie ------------------------------------------------------------------
+
+test('verifyStateCookieBinding: cookie value equal to the query state → ok', () => {
+  const state = createOAuthState(CONFIG.clientSecret)
+  assert.deepEqual(verifyStateCookieBinding(state, state), { ok: true })
+})
+
+test('verifyStateCookieBinding: missing cookie (undefined or null) → rejected', () => {
+  const state = createOAuthState(CONFIG.clientSecret)
+  assert.equal(verifyStateCookieBinding(undefined, state).ok, false)
+  assert.equal(verifyStateCookieBinding(null, state).ok, false)
+})
+
+test('verifyStateCookieBinding: cookie value differs from the query state → rejected', () => {
+  const state = createOAuthState(CONFIG.clientSecret)
+  const otherState = createOAuthState(CONFIG.clientSecret)
+  const result = verifyStateCookieBinding(otherState, state)
+  assert.equal(result.ok, false)
+})
+
+test('verifyStateCookieBinding: this is exactly the CSRF scenario it exists for — an attacker\'s own valid state opened in a victim browser with no matching cookie', () => {
+  // The attacker started their own flow and has a perfectly valid, correctly signed state for
+  // THEIR OWN cookie-less (to the victim) browser. Tricking a victim into opening that URL must
+  // still fail, even though verifyOAuthState alone would accept the signature.
+  const attackersState = createOAuthState(CONFIG.clientSecret)
+  assert.deepEqual(verifyOAuthState(CONFIG.clientSecret, attackersState), { ok: true })
+  const victimsCookie = null // the victim's browser never visited /start for this flow
+  assert.equal(verifyStateCookieBinding(victimsCookie, attackersState).ok, false)
+})
+
+// --- HTTPS detection for the Secure cookie flag ---------------------------------------------
+
+test('isHttpsRequest: true for an https:// request URL', () => {
+  assert.equal(isHttpsRequest('https://admin.olnoo.com/api/ads/google-ads/oauth/start', null), true)
+})
+
+test('isHttpsRequest: false for a plain http:// request URL with no forwarded-proto header', () => {
+  assert.equal(isHttpsRequest('http://localhost:3000/api/ads/google-ads/oauth/start', null), false)
+})
+
+test('isHttpsRequest: true when X-Forwarded-Proto says https, even if the request URL itself is http (behind a TLS-terminating proxy)', () => {
+  assert.equal(isHttpsRequest('http://127.0.0.1:3000/api/ads/google-ads/oauth/start', 'https'), true)
+})
+
+test('isHttpsRequest: a malformed request URL never throws', () => {
+  assert.equal(isHttpsRequest('not a url', null), false)
+})
+
+// --- HTML escaping ---------------------------------------------------------------------------
+
+test('escapeHtml: escapes all five special characters', () => {
+  assert.equal(escapeHtml(`<script>alert('x')&"y"</script>`), '&lt;script&gt;alert(&#39;x&#39;)&amp;&quot;y&quot;&lt;/script&gt;')
+})
+
+test('escapeHtml: a Google error_description containing markup is neutralised', () => {
+  const malicious = '<img src=x onerror=alert(1)>'
+  const escaped = escapeHtml(malicious)
+  assert.ok(!escaped.includes('<img'))
+  assert.ok(escaped.includes('&lt;img'))
+})
+
+test('escapeHtml: plain text without special characters is unchanged', () => {
+  assert.equal(escapeHtml('access_denied'), 'access_denied')
 })
 
 test('exchangeCodeForTokens: network failure is caught and returned, not thrown', async () => {

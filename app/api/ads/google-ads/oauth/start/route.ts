@@ -1,5 +1,12 @@
-import { NextResponse } from 'next/server'
-import { resolveGoogleAdsOAuthConfig, createOAuthState, buildGoogleAdsAuthorizationUrl } from '@/lib/google-ads-oauth'
+import { NextRequest, NextResponse } from 'next/server'
+import {
+  resolveGoogleAdsOAuthConfig,
+  createOAuthState,
+  buildGoogleAdsAuthorizationUrl,
+  OAUTH_STATE_COOKIE_NAME,
+  oauthStateCookieOptions,
+  isHttpsRequest,
+} from '@/lib/google-ads-oauth'
 
 export const runtime = 'nodejs'
 
@@ -12,8 +19,10 @@ export const runtime = 'nodejs'
 // from, say, the Ads campaigns list in that respect.
 //
 // GET only, meant to be opened directly by an admin's browser (a real page navigation, not a
-// fetch() call) — it responds with a 302 redirect straight to Google's consent screen.
-export async function GET() {
+// fetch() call) — it responds with a 302 redirect straight to Google's consent screen, and sets
+// the short-lived state-binding cookie the callback checks (see lib/google-ads-oauth.ts's comment
+// on `verifyStateCookieBinding` for what this does and does not protect against).
+export async function GET(req: NextRequest) {
   const config = resolveGoogleAdsOAuthConfig()
   if (!config) {
     return NextResponse.json(
@@ -26,5 +35,8 @@ export async function GET() {
   }
   const state = createOAuthState(config.clientSecret)
   const authorizationUrl = buildGoogleAdsAuthorizationUrl(config, state)
-  return NextResponse.redirect(authorizationUrl)
+  const response = NextResponse.redirect(authorizationUrl)
+  const secure = isHttpsRequest(req.url, req.headers.get('x-forwarded-proto'))
+  response.cookies.set(OAUTH_STATE_COOKIE_NAME, state, oauthStateCookieOptions(secure))
+  return response
 }

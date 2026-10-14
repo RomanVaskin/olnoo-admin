@@ -25,7 +25,13 @@ export type SaveTokenResult = { ok: true; path: string } | { ok: false; error: s
 /** Writes `{ refreshToken, scope, obtainedAt }` to `filePath` as JSON, creating its parent
  * directory if needed, with owner-only file permissions (0600) — never throws; a filesystem error
  * is returned, not thrown, so the callback route can still answer with a clear error instead of a
- * generic 500. The refresh token itself is never included in the returned result, only `path`. */
+ * generic 500. The refresh token itself is never included in the returned result, only `path`.
+ *
+ * Uses the `wx` open flag (create, fail if it already exists) so a leftover bootstrap file from a
+ * previous run can never be silently overwritten with a different refresh token — this file is a
+ * one-time handoff, not something a second OAuth run should clobber unattended. If the file
+ * already exists, the admin must delete it by hand (after promoting its value, if not already
+ * done) before retrying. */
 export async function saveRefreshTokenToLocalFile(
   refreshToken: string,
   scope: string,
@@ -34,9 +40,15 @@ export async function saveRefreshTokenToLocalFile(
   try {
     await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
     const payload = JSON.stringify({ refreshToken, scope, obtainedAt: new Date().toISOString() }, null, 2)
-    await writeFile(filePath, payload, { mode: 0o600 })
+    await writeFile(filePath, payload, { mode: 0o600, flag: 'wx' })
     return { ok: true, path: filePath }
   } catch (err) {
+    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'EEXIST') {
+      return {
+        ok: false,
+        error: 'a refresh token file already exists at this path from a previous run — promote its value (if not already done), delete it, then retry',
+      }
+    }
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }

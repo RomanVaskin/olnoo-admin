@@ -22,6 +22,28 @@ test('saveRefreshTokenToLocalFile: writes the refresh token, scope and a timesta
   }
 })
 
+test('saveRefreshTokenToLocalFile: refuses to overwrite an existing file (atomic create, no clobber)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'google-ads-oauth-test-'))
+  const filePath = join(dir, 'google-ads-refresh-token.json')
+  try {
+    const first = await saveRefreshTokenToLocalFile('first-refresh-token', 'scope-a', filePath)
+    assert.equal(first.ok, true)
+
+    const second = await saveRefreshTokenToLocalFile('second-refresh-token', 'scope-b', filePath)
+    assert.equal(second.ok, false)
+    if (!second.ok) {
+      assert.ok(!second.error.includes('second-refresh-token'))
+    }
+
+    // The original file's contents must be untouched by the rejected second write.
+    const raw = await readFile(filePath, 'utf8')
+    const parsed = JSON.parse(raw)
+    assert.equal(parsed.refreshToken, 'first-refresh-token')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('saveRefreshTokenToLocalFile: returns ok:false with a generic error (never throws) when the path cannot be written', async () => {
   // A path nested under a file (not a directory) can never be created as a directory.
   const dir = await mkdtemp(join(tmpdir(), 'google-ads-oauth-test-'))

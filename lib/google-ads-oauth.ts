@@ -36,10 +36,28 @@ export function resolveGoogleAdsOAuthConfig(): GoogleAdsOAuthConfig | null {
 // wouldn't even survive this app's own server restarts, let alone work across multiple
 // instances): the state value is a nonce + timestamp, signed with an HMAC keyed by the OAuth
 // client secret the server already holds. The callback re-derives the same HMAC and compares in
-// constant time; a mismatched signature (tampered/forged) or a stale timestamp (replayed from an
-// old, possibly-leaked authorization URL) is rejected. The client secret is used only as HMAC key
-// material here — its bytes never appear in the state value itself, and this derived use doesn't
-// weaken the secret for its own, actual purpose (the token exchange call).
+// constant time; a mismatched signature (tampered/forged) is rejected, and so is a state older
+// than STATE_MAX_AGE_MS.
+//
+// What this does NOT provide on its own: the state value is not single-use — nothing here
+// records that a given state was already consumed, so a captured valid state+code pair (e.g. from
+// browser history, a proxy log, or a shared link) remains replayable by whoever has it until it
+// expires. Two things narrow that gap without a DB: (1) the short max-age bounds the window: (2)
+// `verifyStateCookieBinding` below additionally requires the browser presenting the callback to
+// be the SAME browser that started the flow (via a short-lived HttpOnly cookie set in /start) —
+// this is what actually stops the classic OAuth CSRF attack, where an attacker starts their own
+// flow and tricks a victim into opening the attacker's resulting callback URL: the victim's
+// browser never received the attacker's cookie, so the binding check fails even though the
+// `state` value itself is perfectly well-signed. Neither mechanism makes a same-browser replay
+// (e.g. re-opening/refreshing the exact callback URL while the cookie and signature are both
+// still valid) impossible — the backstop for that is Google's own authorization `code`, which
+// Google itself only accepts once and expires quickly; this app does not separately enforce
+// single-use on its side. Do not describe this as full replay protection in code or docs — it is
+// time-bounded CSRF protection, not single-use.
+//
+// The client secret is used only as HMAC key material for the signature — its bytes never appear
+// in the state value itself, and this derived use doesn't weaken the secret for its own, actual
+// purpose (the token exchange call).
 
 const STATE_MAX_AGE_MS = 10 * 60 * 1000 // 10 minutes — long enough for a human to complete Google's consent screen, short enough to make a leaked/old authorize URL useless quickly.
 
@@ -74,6 +92,77 @@ export function verifyOAuthState(clientSecret: string, state: string | null, now
     return { ok: false, error: 'state has expired — please start the authorization flow again' }
   }
   return { ok: true }
+}
+
+// --- Browser-binding cookie -------------------------------------------------------------------
+//
+// Ties the signed `state` above to the specific browser that started the flow, via a short-lived
+// HttpOnly cookie set by /start and checked (then deleted) by /callback — see the long comment
+// above `verifyOAuthState` for exactly what this does and does not protect against. No DB: the
+// cookie IS the only place this binding is recorded, and it expires with the same STATE_MAX_AGE_MS
+// window as the signed state itself.
+
+export const OAUTH_STATE_COOKIE_NAME = 'google_ads_oauth_state'
+export const OAUTH_STATE_COOKIE_PATH = '/api/ads/google-ads/oauth'
+
+/** Cookie attributes for the state-binding cookie: HttpOnly (never readable by page JS — it is
+ * only ever compared server-side), Secure only when the request actually arrived over HTTPS
+ * (forcing it unconditionally would silently break plain-HTTP local dev), SameSite=Lax (sent on
+ * Google's top-level GET redirect back to us, but never on a cross-site subrequest), scoped to
+ * this feature's own path, and capped at the same max-age as the signed state. */
+export function oauthStateCookieOptions(secure: boolean): {
+  httpOnly: true
+  secure: boolean
+  sameSite: 'lax'
+  path: string
+  maxAge: number
+} {
+  return { httpOnly: true, secure, sameSite: 'lax', path: OAUTH_STATE_COOKIE_PATH, maxAge: Math.floor(STATE_MAX_AGE_MS / 1000) }
+}
+
+/** Whether to mark the state cookie Secure: true for an https:// request, or when a trusted
+ * reverse proxy (this app always sits behind one in production — see "Access to
+ * admin.olnoo.com") says the original request was https via the standard `X-Forwarded-Proto`
+ * header. `requestUrl`'s own protocol is checked first since that's trustworthy without a proxy
+ * (e.g. local dev). */
+export function isHttpsRequest(requestUrl: string, forwardedProto: string | null): boolean {
+  if (forwardedProto?.trim().toLowerCase() === 'https') return true
+  try {
+    return new URL(requestUrl).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+export type StateCookieCheckResult = { ok: true } | { ok: false; error: string }
+
+/** Compares the state-binding cookie's value against the `state` query parameter the callback
+ * received. Must be called IN ADDITION to `verifyOAuthState`, not instead of it — this only
+ * proves "the same browser that started the flow is presenting this callback", not that the
+ * state itself is a genuine, unexpired, server-signed value. */
+export function verifyStateCookieBinding(cookieState: string | null | undefined, queryState: string): StateCookieCheckResult {
+  if (!cookieState) {
+    return { ok: false, error: 'missing or expired state cookie — the authorization flow must be completed in the same browser it was started in' }
+  }
+  const a = Buffer.from(cookieState)
+  const b = Buffer.from(queryState)
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return { ok: false, error: 'this callback does not match the browser that started the authorization flow — possible CSRF' }
+  }
+  return { ok: true }
+}
+
+// --- HTML escaping for the callback's plain HTML responses -----------------------------------
+//
+// Every value interpolated into the callback route's HTML (Google's `error`/`error_description`,
+// our own classification/verification error strings, the token-exchange error, the token-store
+// error and path) must go through this first — several of those originate from the query string
+// or from Google's own response body, both outside this app's control.
+
+const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+
+export function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch])
 }
 
 // --- Authorization URL ------------------------------------------------------------------------
