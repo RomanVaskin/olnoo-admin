@@ -592,6 +592,83 @@ this code. No migration or production change has been executed by this preparati
 Ranvio explicitly opts into inbound via its server-side proxy, with project `ranvio`
 (which must exist) and the existing server-only `OLNOO_CRM_API_KEY` authorization.
 
+## Social Community — Telegram channel comments (MVP; not yet connected)
+
+**Goal:** surface new comments on a project's Telegram channel posts inside Social → Comments, and notify the owner — read-only for now, no reply, no AI generation, no CRM lead. Reuses the existing posting bot (`TELEGRAM_BOT_TOKEN`) and the existing owner-notification channel (`CRM_NOTIFY_TELEGRAM_CHAT_ID`); no new bot, no new service, no queue, no Redis.
+
+### How Telegram comments actually work (researched before building this — do not assume otherwise)
+
+A channel's comments are **not** part of the channel itself. Enabling "Discussion" on a channel links it to a separate **supergroup**: every channel post is auto-forwarded into that group as an ordinary message (`is_automatic_forward: true`, `forward_from_chat` = the channel, `forward_from_message_id` = that post's own id in the channel), and every viewer comment is a plain `message` in that same group with `message_thread_id` set to the auto-forwarded message's own `message_id` (the thread root). `message_thread_id` is only unique **within one chat** — never globally — so a comment event alone never says which project it belongs to; it has to be resolved through which `social_publications` row owns that specific `(chat_id, thread_id)` pair.
+
+A bot only receives these group messages at all if it is a **member of the discussion group** and either (a) added as an **administrator** there (bypasses privacy mode entirely), or (b) has privacy mode disabled via `@BotFather` → `/setprivacy` (then removed and re-added to the group for the change to take effect). Being merely an admin of the **channel** is not enough — the discussion group is a separate chat with its own membership.
+
+### What is NOT verified here, and the exact manual action needed
+
+**This PR could not verify, from this environment, whether `@olnoo_channel` currently has a linked discussion group, or whether `@olnoo_social_bot` is a member (let alone an admin) of it** — there is no production Telegram access from here, and no prior code in this repo ever registered a webhook or called `getUpdates` for `TELEGRAM_BOT_TOKEN` (confirmed by reading every existing use of that token — only outbound `sendMessage`/`getChat`/`getChatMember` calls for autoposting and channel verification). **Nothing here simulates a working integration** — if the precondition below isn't met, the webhook will simply receive nothing and the Comments screen will stay empty; it fails silent-and-honest, not fake-successful.
+
+Before this can work at all, a channel admin must, once:
+1. In `@olnoo_channel`'s own settings, confirm "Discussion" is enabled and linked to a group (Telegram creates one automatically the first time this is turned on, if none exists yet).
+2. Add `@olnoo_social_bot` to that **discussion group** (not just the channel) as an **administrator** — the simplest way to guarantee it receives every comment regardless of privacy-mode settings. (Equivalently: `/setprivacy` → disabled on `@BotFather`, then remove and re-add the bot as a plain member — administrator is simpler and also future-proof if replies are ever added.)
+3. Verify with `getChat`: `curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getChat?chat_id=@olnoo_channel"` — a successful response with a `linked_chat_id` field confirms step 1. `getChatMember` on that `linked_chat_id` with the bot's own id (from `getMe`) confirms step 2 (`status` must be `administrator` or `creator`).
+
+### Schema
+
+Migration `db/migrations/0023_social_comments.sql` (additive, idempotent, not yet applied to production):
+- `social_publications.telegram_discussion_chat_id` / `telegram_discussion_thread_id` (TEXT, default `''`) — **learned reactively, never configured by hand.** Stamped onto a publication row the first time its own auto-forward event is observed (see `linkAutoForward` below); empty until then. A partial unique index on `(telegram_discussion_chat_id, telegram_discussion_thread_id)` guards against two different publications ever claiming the same thread.
+- `social_comments` — one row per distinct Telegram comment: `project_id`, `social_publication_id` (nullable, `ON DELETE SET NULL` — deleting the post never deletes its comment history), `platform` (`'telegram'` for now), `external_comment_id`, `author_name`, `author_username`, `body`, `external_posted_at`, `notified_at`, `created_at`. Unique index on `(project_id, platform, external_comment_id)` — the dedup key: a webhook redelivery, or this app's own retry after a transient failure, can never create a second row for the same real comment.
+
+### Project isolation, without a per-client registry
+
+No new "which chat belongs to which project" table. Two **already-existing, already-verified** facts resolve it entirely: (1) `social_accounts.username` is the project's own real, Bot-API-confirmed Telegram channel identity (see "Telegram channel connection" above); (2) `social_publications.external_post_id` is the exact Telegram message id a post was published with (`lib/social-telegram.ts`). An auto-forward event carries both the channel's identity and that same message id, so matching against these two existing columns — never a new mapping — is enough to say which project a discussion thread belongs to, and the lookup is naturally scoped to one project's own data; a project's comments can never be attributed to another project's channel.
+
+### Webhook vs. polling — why webhook, and why this doesn't conflict with anything
+
+Requirement weighed explicitly: `getUpdates` and `setWebhook` are mutually exclusive for one bot (setting one disables the other), and `getUpdates` additionally has no safe way to run from more than one independent consumer — each marks updates "read" by advancing a shared offset, so two independent pollers lose events between them. **Webhook was chosen**: `TELEGRAM_BOT_TOKEN` had neither a webhook nor any `getUpdates` polling registered anywhere before this change (confirmed above), so there is nothing to conflict with — this is the bot's first and only webhook registration, mirroring `/api/telegram/business-webhook`'s own pattern (a *different* bot/token) exactly.
+
+- Route: `POST /api/telegram/comments-webhook` (`app/api/telegram/comments-webhook/route.ts`) — wires the real DB pool into `lib/telegram-comments-handler.ts`'s `handleTelegramCommentsUpdate`, kept free of `@/` imports (same reasoning as `lib/telegram-business.ts`) so it runs directly under `node --test` with fake deps. Auth: header `X-Telegram-Bot-Api-Secret-Token` compared in constant time to `TELEGRAM_COMMENTS_WEBHOOK_SECRET` (a new env var; unset → 503, wrong secret → 401).
+- `lib/social-telegram-comments.ts` (pure): classifies one Telegram update as `auto_forward`, `comment`, or `ignore` — never guesses (edits, non-message updates, the bot's own messages, and messages with no thread at all are all `ignore`).
+- `lib/social-comments.ts` (DB-backed, `pool` injected, `@/`-free): `linkAutoForward` (resolves + stamps the thread mapping, idempotent), `resolveThread`, `insertCommentIfNew` (the dedup insert, `ON CONFLICT ... DO NOTHING` — atomic under concurrency by construction, no advisory lock needed), `listCommentsForProject`.
+- `lib/social-comment-notify.ts` — reuses the EXISTING owner-notification mechanism (requirement: "используй существующий механизм уведомлений, если он подходит"): same `TELEGRAM_BOT_TOKEN`/`CRM_NOTIFY_TELEGRAM_CHAT_ID` `sendMessage` pattern as `lib/lead-notify.ts`, no new env var for the notification itself. Called **at most once per genuinely new comment** — `handleTelegramCommentsUpdate` only calls it immediately after `insertCommentIfNew` reports a real insert, never for a redelivered/duplicate update. Never throws; a Telegram API failure here is logged and swallowed, and never risks the comment row already committed before it runs (requirement: "ошибка Telegram API не приводит к потере уже полученных комментариев").
+- A transient failure (DB error) returns 500 so Telegram redelivers; redelivery is always safe (the dedup insert, and the idempotent thread-link update, both tolerate it).
+
+### UI
+
+`Social → Comments` (`?screen=social-comments&project=<slug>`), `components/sections/social-comments-view.tsx` — read-only list (author, comment text, a link to the post if resolved, time), newest first. `GET /api/social-comments?project=<slug>` (project-scoped, no "All projects" mode — same deliberate simplicity as `/api/ads`). Renders its own `ProjectSelector`; choosing "All projects" shows a prompt rather than a cross-project list (unlike `/api/ads`'s own screen, which renders nothing at all for "all" with no way to switch back from within it).
+
+### Manual KZ install steps (not applied by this PR)
+
+1. Apply the migration: `psql "$DATABASE_URL" -f db/migrations/0023_social_comments.sql`.
+2. Set `TELEGRAM_COMMENTS_WEBHOOK_SECRET` in `/opt/olnoo/projects/olnoo-admin/.env.local` (e.g. `openssl rand -hex 32`) and restart `olnoo-admin`.
+3. Open the path in nginx's `admin.olnoo.com` server block (same `location =` pattern as `/api/mcp`):
+   ```nginx
+   location = /api/telegram/comments-webhook {
+       auth_basic off;
+       limit_except POST { deny all; }
+       client_max_body_size 1m;
+       proxy_pass http://127.0.0.1:3140;
+       proxy_http_version 1.1;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto $scheme;
+   }
+   ```
+   Then `nginx -t && systemctl reload nginx`.
+4. Complete the channel-admin steps above (link/confirm the discussion group, add the bot as its administrator) — **do this before step 5**, or the webhook will simply receive nothing to classify.
+5. Register the webhook (once):
+   ```bash
+   curl -F "url=https://admin.olnoo.com/api/telegram/comments-webhook" \
+        -F "secret_token=$TELEGRAM_COMMENTS_WEBHOOK_SECRET" \
+        -F 'allowed_updates=["message"]' \
+        "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook"
+   ```
+6. Verify: `curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo"` should show the registered URL with no `last_error_message`.
+7. Post once in `@olnoo_channel` through Social Publisher as normal, then post a test comment on it in the discussion group from a second account — it should appear in Social → Comments within a few seconds, and a Telegram notification should arrive at `CRM_NOTIFY_TELEGRAM_CHAT_ID`.
+
+### Not in this MVP
+
+Replies/auto-replies to comments (no `sendMessage` into the discussion group anywhere in this flow), AI-generated responses, CRM lead creation from a comment, any platform other than Telegram, comments on a post made outside OLNOO Admin's own publish flow (no matching `external_post_id` to link against — dropped, not guessed), moderation/deletion, "All projects" aggregate view.
+
 ## Telegram Business intake (DriveSet-only lead creation — Patch D; not yet connected)
 
 Patch A disabled lead creation for every Telegram Business connection. **Patch D (this entry) re-enables it, but only for the one connection belonging to @driveset** — every other connection (including no connection configured at all) still ends `ignored`, exactly as Patch A left it. There is still no auto-reply/chatbot either way: no code path calls `sendMessage` or any other chat-writing Bot API method; a manager replies to the client personally in Telegram.
