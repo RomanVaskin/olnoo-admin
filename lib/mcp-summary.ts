@@ -1,4 +1,4 @@
-// OLNOO Agent v1: one read-only MCP tool, `get_driveset_summary(period)`, on top of Unified Analytics.
+// OLNOO Agent v1: read-only MCP tools for DriveSet (`get_driveset_summary`, `get_direct_queries`), all behind OAuth.
 // Pure module (no `@/` imports): runs under `node --test`. The Unified numbers are NOT recomputed here — the route hands
 // in the existing Unified payload and this file only whitelists a small DTO and serves the MCP protocol.
 
@@ -6,6 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
 import type { UnifiedPayload } from './unified-analytics.ts'
+import { QUERIES_TOOL_DESCRIPTION, QUERIES_TOOL_NAME, type DirectQueriesDto } from './mcp-direct-queries.ts'
 
 export const SUMMARY_PERIODS = ['today', 'yesterday', 'last7'] as const
 export type SummaryPeriod = (typeof SUMMARY_PERIODS)[number]
@@ -68,32 +69,71 @@ export function toSummaryDto(payload: Pick<UnifiedPayload, 'period' | 'direct' |
 
 const JSON_HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', Pragma: 'no-cache' }
 
-function createServer(getSummary: (period: SummaryPeriod) => Promise<SummaryDto>): McpServer {
+export type QueriesLoader = (period: SummaryPeriod) => Promise<DirectQueriesDto>
+
+/**
+ * The whole MCP is OAuth-protected (one scope, one Auth0 flow). `authorize` answers for THIS request ('ok' | 'denied' |
+ * 'unconfigured') and is the single check every tool call goes through; `challenge` is the `WWW-Authenticate` value that makes
+ * ChatGPT start the sign-in flow (null when OAuth is not configured). Tools are listed (ChatGPT needs their `oauth2` scheme) but
+ * return no data before `authorize` says 'ok'.
+ */
+export type McpAuth = { authorize: () => Promise<'ok' | 'denied' | 'unconfigured'>; challenge: (() => string) | null; scope: string }
+export type McpLoaders = { getSummary: (period: SummaryPeriod) => Promise<SummaryDto>; getQueries: QueriesLoader }
+
+function createServer(loaders: McpLoaders, auth: McpAuth): McpServer {
   const server = new McpServer({ name: 'olnoo', version: '1.0.0' })
-  server.registerTool(
-    SUMMARY_TOOL_NAME,
-    { description: SUMMARY_TOOL_DESCRIPTION, inputSchema: SUMMARY_INPUT_SHAPE, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
-    async ({ period }) => {
-      try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(await getSummary(period)) }] }
-      } catch {
-        // Kind only: no upstream message, token, URL or row ever reaches the client.
-        return { isError: true, content: [{ type: 'text' as const, text: 'DriveSet summary is temporarily unavailable.' }] }
+  const securitySchemes = [{ type: 'oauth2', scopes: [auth.scope] }]
+
+  /** One shared guard + error handling for every tool: no business data before the access check passes. */
+  const guarded = (load: (period: SummaryPeriod) => Promise<unknown>, unavailable: string) => async ({ period }: { period: SummaryPeriod }) => {
+    const access = await auth.authorize()
+    if (access !== 'ok') {
+      // OAuth challenge: with `_meta["mcp/www_authenticate"]` ChatGPT opens the account-linking (Auth0 login + consent) flow.
+      const challenge = access === 'denied' && auth.challenge ? auth.challenge() : null
+      return {
+        isError: true,
+        content: [{ type: 'text' as const, text: challenge ? 'Authentication required.' : 'Not available (OAuth is not configured).' }],
+        ...(challenge ? { _meta: { 'mcp/www_authenticate': [challenge] } } : {}),
       }
-    },
-  )
+    }
+    try {
+      return { content: [{ type: 'text' as const, text: JSON.stringify(await load(period)) }] }
+    } catch {
+      // Kind only: no upstream message, token, URL or row ever reaches the client.
+      return { isError: true, content: [{ type: 'text' as const, text: unavailable }] }
+    }
+  }
+
+  const meta = { annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: { securitySchemes } }
+  server.registerTool(SUMMARY_TOOL_NAME, { description: SUMMARY_TOOL_DESCRIPTION, inputSchema: SUMMARY_INPUT_SHAPE, ...meta }, guarded(loaders.getSummary, 'DriveSet summary is temporarily unavailable.'))
+  server.registerTool(QUERIES_TOOL_NAME, { description: QUERIES_TOOL_DESCRIPTION, inputSchema: SUMMARY_INPUT_SHAPE, ...meta }, guarded(loaders.getQueries, 'Direct search queries are temporarily unavailable.'))
   return server
 }
 
+/** ChatGPT reads `securitySchemes` at the tool's top level; the SDK only emits `_meta`, so tools/list answers get a top-level mirror. */
+async function withTopLevelSecuritySchemes(res: Response): Promise<Response> {
+  try {
+    const body = (await res.clone().json()) as { result?: { tools?: { _meta?: { securitySchemes?: unknown }; securitySchemes?: unknown }[] } }
+    for (const tool of body.result?.tools ?? []) if (tool._meta?.securitySchemes) tool.securitySchemes = tool._meta.securitySchemes
+    const headers = new Headers(res.headers)
+    headers.delete('content-length')
+    return new Response(JSON.stringify(body), { status: res.status, headers })
+  } catch {
+    return res
+  }
+}
+
 /** POST only (405 for everything else). A fresh server + transport per request: nothing is shared between calls. */
-export async function handleMcpRequest(req: Request, getSummary: (period: SummaryPeriod) => Promise<SummaryDto>): Promise<Response> {
+export async function handleMcpRequest(req: Request, loaders: McpLoaders, auth: McpAuth): Promise<Response> {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'method not allowed' }), { status: 405, headers: { ...JSON_HEADERS, Allow: 'POST' } })
   }
-  const server = createServer(getSummary)
+  const isToolsList = ((await req.clone().json().catch(() => null)) as { method?: string } | null)?.method === 'tools/list'
+  const server = createServer(loaders, auth)
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
   await server.connect(transport)
-  const res = await transport.handleRequest(req)
+  let res = await transport.handleRequest(req)
+  if (isToolsList) res = await withTopLevelSecuritySchemes(res)
   const headers = new Headers(res.headers)
   for (const [k, v] of Object.entries(JSON_HEADERS)) headers.set(k, v)
   return new Response(res.body, { status: res.status, headers })
