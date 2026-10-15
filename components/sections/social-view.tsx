@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, HeaderActions, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
@@ -8,6 +8,7 @@ import { useProjects } from '@/components/sections/seo-project-picker'
 import { useI18n } from '@/components/i18n-provider'
 import { SocialPublications, type PublicationSummary } from '@/components/sections/social-publications'
 import { toDatetimeLocalInputValue, formatPublishDate } from '@/lib/social-publish-date-format'
+import { isEditorResultStillValid } from '@/lib/social-ai-editor-staleness'
 
 const STATUSES = ['idea', 'draft', 'ready', 'published'] as const
 const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
@@ -110,6 +111,15 @@ function PostDetail({
   const [editorError, setEditorError] = useState('')
   const [editorProposal, setEditorProposal] = useState<string | null>(null)
   const [editorCustomInstruction, setEditorCustomInstruction] = useState('')
+  // Always mirrors the latest Content/post id, read from inside runEditor's async continuation
+  // (after an `await`) where a plain closure over `body`/`post.id` would still hold whatever they
+  // were at the moment the request was FIRED, not what's on screen once it resolves. Assigning
+  // directly during render (not via useEffect) keeps both refs in sync with every commit, including
+  // the one that resets `body` itself when `post` changes below — see lib/social-ai-editor-staleness.ts.
+  const latestBodyRef = useRef(body)
+  latestBodyRef.current = body
+  const latestPostIdRef = useRef(post.id)
+  latestPostIdRef.current = post.id
 
   useEffect(() => {
     setTopic(post.topic)
@@ -126,6 +136,10 @@ function PostDetail({
     setEditorProposal(null)
     setEditorError('')
     setEditorCustomInstruction('')
+    // A request already in flight for the post being left behind must never leave this screen
+    // looking busy for the newly-opened post — its own result is discarded by the staleness guard
+    // in runEditor below regardless, via latestPostIdRef.
+    setEditorBusyAction(null)
   }, [post])
 
   function toggleChannel(channel: SocialChannel) {
@@ -193,28 +207,38 @@ function PostDetail({
    * possibly unsaved, Content for one preset action or a free-text custom instruction. The result
    * is held as a PROPOSAL only (editorProposal) — Content itself (`body`) is never touched until
    * the user explicitly clicks "Apply" below, and a failure here never clears or changes `body`
-   * either, so the original text can never be lost to an AI Router error. */
+   * either, so the original text can never be lost to an AI Router error.
+   *
+   * Staleness guard (requirement): the request snapshots the post id and Content text it was fired
+   * for. If, by the time the response arrives, the user has edited Content or switched to a
+   * different post, `isEditorResultStillValid` (lib/social-ai-editor-staleness.ts) catches the
+   * mismatch via the always-current `latestBodyRef`/`latestPostIdRef`, and the stale result — on
+   * success or on failure alike — is discarded silently: never shown as a proposal, never applied,
+   * never surfacing a confusing error for a post/text that's no longer on screen. */
   async function runEditor(action: EditorAction) {
     if (editorBusyAction || !body.trim()) return
     if (action === 'custom' && !editorCustomInstruction.trim()) return
+    const requested = { postId: post.id, text: body }
     setEditorBusyAction(action)
     setEditorError('')
     try {
       const res = await fetch('/api/social/ai-edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, text: body, action, customInstruction: editorCustomInstruction }),
+        body: JSON.stringify({ project, text: requested.text, action, customInstruction: editorCustomInstruction }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
         const message = data && typeof data.error === 'string' ? data.error : t.socialView.aiEditorError
         throw new Error(message)
       }
+      if (!isEditorResultStillValid(requested, { postId: latestPostIdRef.current, text: latestBodyRef.current })) return
       if (typeof data?.text === 'string') setEditorProposal(data.text)
     } catch (err) {
+      if (!isEditorResultStillValid(requested, { postId: latestPostIdRef.current, text: latestBodyRef.current })) return
       setEditorError(err instanceof Error ? err.message : t.socialView.aiEditorError)
     } finally {
-      setEditorBusyAction(null)
+      setEditorBusyAction((current) => (current === action ? null : current))
     }
   }
 

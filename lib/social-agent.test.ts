@@ -315,6 +315,57 @@ test('requirement: a plan the AI Router returns as unparseable JSON also creates
   })
 })
 
+/** Wraps a real Pool so any query whose SQL text includes `matchFragment` rejects with
+ * `error`, while every other query is forwarded unchanged to the real Pool — used below to
+ * simulate buildProjectAiContext's own Postgres query failing (a dropped connection, a transient
+ * error) right after a run has been claimed, without touching anything else runSocialAgentTask
+ * does against the same pool (the channel check, the claim itself, markAgentRunFailed, …). */
+function withFailingQuery(pool: Pool, matchFragment: string, error: Error): Pool {
+  return {
+    query: (text: unknown, params?: unknown[]) => {
+      if (typeof text === 'string' && text.includes(matchFragment)) {
+        return Promise.reject(error)
+      }
+      return pool.query(text as string, params)
+    },
+  } as unknown as Pool
+}
+
+test('requirement: a buildProjectAiContext failure right after a successful claim marks the run failed, never leaves it stuck at running', async (t) => {
+  await withDb(t, async (pool, { makeProjectWithChannel }) => {
+    const projectId = await makeProjectWithChannel()
+    const runId = randomUUID()
+    const deps = makeFakeDeps()
+    // buildProjectAiContext's own project lookup ('SELECT name, domain FROM projects WHERE id = $1')
+    // is the one query forced to fail here — distinct from the channel check and the claim itself,
+    // both of which must still succeed normally against the same pool.
+    const failingPool = withFailingQuery(pool, 'FROM projects WHERE id', new Error('simulated buildProjectAiContext failure'))
+
+    let fetchCalled = false
+    const result = await withFetch(
+      () => {
+        fetchCalled = true
+        return aiRouterOk(SAMPLE_PLAN)
+      },
+      () => runSocialAgentTask(failingPool, projectId, runId, 'A task', deps),
+    )
+    assert.equal('error' in result && result.status, 422, 'a context-building failure must be reported the same way a planning failure is')
+    assert.equal(fetchCalled, false, 'the AI Router must never be called once building the project context has already failed')
+    assert.equal(deps.calls, 0, 'no post may be created when the run never got past building context')
+
+    const { rows } = await pool.query<{ status: string }>('SELECT status FROM social_agent_runs WHERE id = $1 AND project_id = $2', [
+      runId,
+      projectId,
+    ])
+    assert.equal(rows[0]?.status, 'failed', 'the run must land in the safely-retryable failed status, never stuck at running')
+
+    // And because it is 'failed', not stuck 'running', the SAME runId can be retried normally.
+    const retryDeps = makeFakeDeps()
+    const retried = await withFetch(() => aiRouterOk(SAMPLE_PLAN), () => runSocialAgentTask(pool, projectId, runId, 'A task', retryDeps))
+    assert.ok('posts' in retried && !retried.replayed, 'a retry after this failure must be allowed to run fresh, not refused as "already running"')
+  })
+})
+
 test('requirement: a failure partway through CREATING the planned posts rolls back every post already created in this run', async (t) => {
   await withDb(t, async (pool, { makeProjectWithChannel }) => {
     const projectId = await makeProjectWithChannel()

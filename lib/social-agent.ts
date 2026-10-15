@@ -222,10 +222,18 @@ export async function runSocialAgentTask(
     return { error: 'this task is already running — please wait for it to finish before retrying', status: 409 }
   }
 
-  const projectContext = projectAiContextBlock(await buildProjectAiContext(pool, projectId))
-
+  // Everything from here through the AI Router call happens inside one try/catch, deliberately
+  // including buildProjectAiContext — it runs a few more Postgres queries (project/Brand
+  // Profile/SEO context) that can fail for mundane reasons (a dropped connection, a transient
+  // Postgres error), not just a process crash. Before this fix, a failure here threw straight out
+  // of runSocialAgentTask, past every markAgentRun* call, leaving the just-claimed row stuck at
+  // 'running' forever — indistinguishable from the documented "process crashed mid-run" MVP
+  // limitation, but far more likely to actually happen. Zero posts exist yet at this point either
+  // way, so 'failed' (safely auto-retryable) is the correct, safe terminal state — the same one a
+  // planning/AI Router failure already uses just below.
   let planItems: SocialAgentPlanItem[]
   try {
+    const projectContext = projectAiContextBlock(await buildProjectAiContext(pool, projectId))
     const content = await callAiRouter(
       [
         { role: 'system', content: SOCIAL_AGENT_PLAN_SYSTEM_PROMPT },
