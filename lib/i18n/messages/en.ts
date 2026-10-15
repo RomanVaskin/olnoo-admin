@@ -700,6 +700,7 @@ export const en = {
     aiEditorApply: 'Apply',
     aiEditorCancel: 'Cancel',
     aiEditorError: 'Could not run the AI Editor. Please try again.',
+    aiEditorStaleProposal: 'Content or the open post changed since this proposal was generated — it was discarded instead of being applied. Please run the AI Editor again.',
   },
   socialAccountsView: {
     title: 'Accounts',

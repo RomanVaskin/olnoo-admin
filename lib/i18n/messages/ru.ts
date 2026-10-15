@@ -710,6 +710,7 @@ export const ru: Messages = {
     aiEditorApply: 'Применить',
     aiEditorCancel: 'Отмена',
     aiEditorError: 'Не удалось запустить AI-редактор. Попробуйте ещё раз.',
+    aiEditorStaleProposal: 'Текст или открытый пост изменились после получения этого предложения — оно отменено, а не применено. Запустите AI-редактор ещё раз.',
   },
   socialAccountsView: {
     title: 'Аккаунты',

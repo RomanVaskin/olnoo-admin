@@ -109,7 +109,12 @@ function PostDetail({
   const [uploadImageError, setUploadImageError] = useState('')
   const [editorBusyAction, setEditorBusyAction] = useState<EditorAction | null>(null)
   const [editorError, setEditorError] = useState('')
-  const [editorProposal, setEditorProposal] = useState<string | null>(null)
+  // Carries the snapshot it was generated FOR (forPostId/forText), not just the proposed text —
+  // see applyEditorProposal below for why: Apply must refuse a proposal whose snapshot no longer
+  // matches what's on screen, not just whatever `isEditorResultStillValid` already filtered at the
+  // moment the response arrived (the user can still edit Content or switch posts AFTER that, before
+  // clicking Apply).
+  const [editorProposal, setEditorProposal] = useState<{ text: string; forPostId: string; forText: string } | null>(null)
   const [editorCustomInstruction, setEditorCustomInstruction] = useState('')
   // Always mirrors the latest Content/post id, read from inside runEditor's async continuation
   // (after an `await`) where a plain closure over `body`/`post.id` would still hold whatever they
@@ -233,7 +238,7 @@ function PostDetail({
         throw new Error(message)
       }
       if (!isEditorResultStillValid(requested, { postId: latestPostIdRef.current, text: latestBodyRef.current })) return
-      if (typeof data?.text === 'string') setEditorProposal(data.text)
+      if (typeof data?.text === 'string') setEditorProposal({ text: data.text, forPostId: requested.postId, forText: requested.text })
     } catch (err) {
       if (!isEditorResultStillValid(requested, { postId: latestPostIdRef.current, text: latestBodyRef.current })) return
       setEditorError(err instanceof Error ? err.message : t.socialView.aiEditorError)
@@ -243,9 +248,23 @@ function PostDetail({
   }
 
   /** Applies the pending proposal to Content locally — still not persisted until the normal "Save"
-   * button runs, same as "Generate variants" above. */
+   * button runs, same as "Generate variants" above.
+   *
+   * Requirement: a proposal is tied to the exact Content text and post id it was generated for.
+   * Between the response arriving and the user clicking Apply, they can still edit Content or
+   * switch to a different post — unlike the in-flight race `runEditor` already guards (above), this
+   * window is arbitrarily long and entirely expected (reading a proposal takes time). Re-checking
+   * with the SAME `isEditorResultStillValid` here, against the live `post.id`/`body` at the moment
+   * of the click, means a proposal that has gone stale while sitting on screen is refused rather
+   * than silently overwriting whatever new edit the user made in the meantime. */
   function applyEditorProposal() {
-    if (editorProposal !== null) setBody(editorProposal)
+    if (editorProposal === null) return
+    if (!isEditorResultStillValid({ postId: editorProposal.forPostId, text: editorProposal.forText }, { postId: post.id, text: body })) {
+      setEditorProposal(null)
+      setEditorError(t.socialView.aiEditorStaleProposal)
+      return
+    }
+    setBody(editorProposal.text)
     setEditorProposal(null)
   }
 
@@ -408,7 +427,7 @@ function PostDetail({
                     </div>
                     <div className="flex flex-col gap-1.5">
                       <span className="label-mono text-muted-foreground">{t.socialView.aiEditorProposed}</span>
-                      <p className="whitespace-pre-line border border-foreground/40 bg-background p-2.5 text-sm text-foreground">{editorProposal}</p>
+                      <p className="whitespace-pre-line border border-foreground/40 bg-background p-2.5 text-sm text-foreground">{editorProposal.text}</p>
                     </div>
                   </div>
                   <div className="flex gap-3">
