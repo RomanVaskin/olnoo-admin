@@ -1,5 +1,6 @@
 import type { Pool } from 'pg'
 import { callAiRouter, AiRouterError } from './ai-router.ts'
+import { buildProjectAiContext, projectAiContextBlock } from './project-ai-context.ts'
 import {
   SOCIAL_AGENT_PLAN_SYSTEM_PROMPT,
   buildSocialAgentPlanPrompt,
@@ -221,11 +222,7 @@ export async function runSocialAgentTask(
     return { error: 'this task is already running — please wait for it to finish before retrying', status: 409 }
   }
 
-  let projectContext = ''
-  const { rows: projectRows } = await pool.query<{ name: string; domain: string }>('SELECT name, domain FROM projects WHERE id = $1', [
-    projectId,
-  ])
-  if (projectRows[0]) projectContext = `${projectRows[0].name} (${projectRows[0].domain})`
+  const projectContext = projectAiContextBlock(await buildProjectAiContext(pool, projectId))
 
   let planItems: SocialAgentPlanItem[]
   try {

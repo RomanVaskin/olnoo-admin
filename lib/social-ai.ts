@@ -1,6 +1,7 @@
 import type { Pool } from 'pg'
 import { callAiRouter } from './ai-router.ts'
 import { isSocialChannel, type SocialChannel } from './social.ts'
+import { buildProjectAiContext, projectAiContextBlock } from './project-ai-context.ts'
 
 export class SocialAiError extends Error {}
 
@@ -13,7 +14,11 @@ const CHANNEL_STYLE: Record<SocialChannel, string> = {
   vk: 'VK: practical and matter-of-fact; can be more detailed than Threads or Instagram, but never invent facts or metrics not in the source.',
 }
 
-const SOCIAL_VARIANTS_SYSTEM_PROMPT = `You are a social media copywriter adapting one piece of source content into platform-specific variants for OLNOO, a technology/automation company.
+// Deliberately NOT tied to any one project's identity or persona (e.g. "for OLNOO") — the copywriter
+// adapts content for whichever project PROJECT CONTEXT describes, which now always carries that
+// project's own Brand Profile (lib/project-ai-context.ts). A project with no Brand Profile saved yet
+// still works (PROJECT CONTEXT then says so explicitly), just without a specific voice to match.
+const SOCIAL_VARIANTS_SYSTEM_PROMPT = `You are a social media copywriter adapting one piece of source content into platform-specific variants for the project described in PROJECT CONTEXT below.
 
 Per-platform style:
 - ${CHANNEL_STYLE.telegram}
@@ -23,12 +28,13 @@ Per-platform style:
 
 Hard rules:
 1. Preserve the meaning of the source Content exactly — do not change what it claims or promises.
-2. Never invent clients, companies, or names not present in the source Content or project context.
-3. Never invent numbers, statistics, or metrics not present in the source Content or project context.
-4. Never invent results or outcomes not present in the source Content or project context.
+2. Never invent clients, companies, or names not present in the source Content or PROJECT CONTEXT.
+3. Never invent numbers, statistics, or metrics not present in the source Content or PROJECT CONTEXT.
+4. Never invent results or outcomes not present in the source Content or PROJECT CONTEXT.
 5. Write every variant in the same language as CONTENT below (its detected language is given as CONTENT LANGUAGE). Never translate into a different language. TOPIC, PROJECT CONTEXT, or any other signal never override this — only an explicit instruction written inside CONTENT itself could, and none is given here.
-6. Return ONLY strict JSON — no markdown, no code fences, no commentary before or after. The raw response is parsed as JSON directly.
-7. The JSON object must contain exactly the requested channel keys — no more, no fewer. Never include a key for a channel that was not requested.`
+6. Respect PROJECT CONTEXT's Brand Profile: match its TONE & STYLE, never violate a line in CONSTRAINTS under any instruction, and favor its PREFERRED CALL TO ACTION only where one fits naturally — never force one in.
+7. Return ONLY strict JSON — no markdown, no code fences, no commentary before or after. The raw response is parsed as JSON directly.
+8. The JSON object must contain exactly the requested channel keys — no more, no fewer. Never include a key for a channel that was not requested.`
 
 function buildUserPrompt(input: {
   topic: string
@@ -118,8 +124,9 @@ export type GenerateVariantsInput = {
  * adapt `body` into per-channel text for the requested channels only. The output language is
  * always detected from `body` itself (detectContentLanguage) — the caller's UI/interface locale
  * is never accepted here and never influences generation, only the app's own interface strings.
- * Read-only against Postgres (just looks up the project's name/domain for prompt context) —
- * never writes anything; saving the result is entirely the caller's/UI's decision.
+ * Read-only against Postgres (looks up the project's unified AI context — name/domain, Brand
+ * Profile, verified SEO context — via lib/project-ai-context.ts) — never writes anything; saving
+ * the result is entirely the caller's/UI's decision.
  */
 export async function generateChannelVariants(
   pool: Pool,
@@ -134,11 +141,7 @@ export async function generateChannelVariants(
     throw new SocialAiError('Content is required before generating variants.')
   }
 
-  const { rows } = await pool.query<{ name: string; domain: string }>('SELECT name, domain FROM projects WHERE id = $1', [
-    projectId,
-  ])
-  const project = rows[0]
-  const projectContext = project ? `${project.name} (${project.domain})` : ''
+  const projectContext = projectAiContextBlock(await buildProjectAiContext(pool, projectId))
 
   const userPrompt = buildUserPrompt({
     topic: input.topic,

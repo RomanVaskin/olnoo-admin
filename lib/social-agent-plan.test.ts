@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildSocialAgentPlanPrompt, parseSocialAgentPlan, SocialAgentPlanError } from './social-agent-plan.ts'
+import { buildSocialAgentPlanPrompt, parseSocialAgentPlan, SocialAgentPlanError, SOCIAL_AGENT_PLAN_SYSTEM_PROMPT } from './social-agent-plan.ts'
+
+test('requirement: the planning system prompt never hardcodes OLNOO (or any other fixed brand) as the subject', () => {
+  assert.ok(!SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.includes('OLNOO'))
+})
 
 test('buildSocialAgentPlanPrompt includes the task, project context, and available channels', () => {
   const prompt = buildSocialAgentPlanPrompt({
