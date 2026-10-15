@@ -30,12 +30,140 @@ type ProjectRow = {
 type Form = { id: number | null; name: string; slug: string; domain: string; sitemapUrl: string; locale: string; repository: string }
 const EMPTY_FORM: Form = { id: null, name: '', slug: '', domain: '', sitemapUrl: '', locale: '', repository: '' }
 
+type BrandVoice = { targetAudience: string; toneStyle: string; verifiedFacts: string; constraints: string; preferredCta: string }
+const EMPTY_BRAND_VOICE: BrandVoice = { targetAudience: '', toneStyle: '', verifiedFacts: '', constraints: '', preferredCta: '' }
+
 // Only the SEO module has a real backend so far — CRM/Social/Ads/PR/Analytics stay out of scope here.
 const PROJECT_MODULES: ModuleKey[] = ['SEO']
 
 const inputClass = 'w-full border border-hairline bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-blue disabled:opacity-60'
 const buttonClass = 'label-mono border border-foreground bg-foreground px-4 py-2.5 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50'
 const linkButtonClass = 'label-mono whitespace-nowrap text-foreground/80 underline underline-offset-4 hover:text-foreground'
+
+/** OLNOO Social AI Agent 2.0, stage 1 — Brand Profile, edited from this existing Project screen
+ * (not a new app), for one already-saved project (hence rendered only when editing, never while
+ * creating one). Own independent load/save against /api/projects/brand-voice, same pattern as
+ * SeoContextPanel in components/sections/keywords-cleanup.tsx — deliberately not folded into the
+ * main project Save button above, so this panel's own save never risks the project's own
+ * name/slug/domain fields and vice versa. */
+function BrandVoicePanel({ projectId }: { projectId: number }) {
+  const { t } = useI18n()
+  const c = t.brandVoice
+  const [saved, setSaved] = useState<BrandVoice>(EMPTY_BRAND_VOICE)
+  const [draft, setDraft] = useState<BrandVoice>(EMPTY_BRAND_VOICE)
+  const [editing, setEditing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    setEditing(false)
+    setMessage(null)
+    fetch(`/api/projects/brand-voice?projectId=${projectId}`)
+      .then((res) => res.json())
+      .then((data: { voice: BrandVoice }) => {
+        setSaved(data.voice)
+        setDraft(data.voice)
+      })
+  }, [projectId])
+
+  async function save() {
+    setBusy(true)
+    setMessage(null)
+    try {
+      const res = await fetch('/api/projects/brand-voice', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, ...draft }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || c.saveError)
+      setSaved(data.voice)
+      setDraft(data.voice)
+      setEditing(false)
+      setMessage(c.savedHint)
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : c.saveError)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const fields: { key: keyof BrandVoice; label: string; hint: string; lines: boolean }[] = [
+    { key: 'targetAudience', label: c.targetAudience, hint: c.targetAudienceHint, lines: true },
+    { key: 'toneStyle', label: c.toneStyle, hint: c.toneStyleHint, lines: false },
+    { key: 'verifiedFacts', label: c.verifiedFacts, hint: c.verifiedFactsHint, lines: true },
+    { key: 'constraints', label: c.constraints, hint: c.constraintsHint, lines: true },
+    { key: 'preferredCta', label: c.preferredCta, hint: c.preferredCtaHint, lines: false },
+  ]
+  const empty = fields.every((f) => !saved[f.key])
+
+  return (
+    <div className="flex flex-col gap-3 border border-hairline bg-card px-5 py-4">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-0.5">
+          <span className="label-mono text-muted-foreground">{c.title}</span>
+          <span className="text-xs text-muted-foreground">{c.description}</span>
+        </div>
+        {!editing && (
+          <button type="button" onClick={() => setEditing(true)} className="label-mono text-blue hover:text-foreground">
+            {c.edit}
+          </button>
+        )}
+      </div>
+      {empty && !editing && <p className="text-sm text-destructive">{c.empty}</p>}
+      <dl className="grid gap-x-8 gap-y-3 text-sm md:grid-cols-2">
+        {fields.map((f) => (
+          <div key={f.key} className={f.lines ? 'md:col-span-1' : ''}>
+            <dt className="label-mono text-muted-foreground">{f.label}</dt>
+            {editing ? (
+              <dd className="mt-1">
+                {f.lines ? (
+                  <textarea
+                    value={draft[f.key]}
+                    onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+                    placeholder={f.hint}
+                    rows={4}
+                    maxLength={2000}
+                    className="w-full border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-blue"
+                  />
+                ) : (
+                  <input
+                    value={draft[f.key]}
+                    onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+                    placeholder={f.hint}
+                    maxLength={200}
+                    className="w-full border border-hairline bg-background px-3 py-2 text-sm outline-none focus:border-blue"
+                  />
+                )}
+              </dd>
+            ) : (
+              <dd className="mt-1 whitespace-pre-line">{saved[f.key] || <span className="text-muted-foreground">—</span>}</dd>
+            )}
+          </div>
+        ))}
+      </dl>
+      {editing && (
+        <div className="flex items-center gap-3">
+          <button onClick={save} disabled={busy} className="label-mono border border-foreground bg-foreground px-4 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50">
+            {c.save}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(saved)
+              setEditing(false)
+              setMessage(null)
+            }}
+            className="label-mono text-foreground/80 underline underline-offset-4 hover:text-foreground"
+          >
+            {c.cancel}
+          </button>
+        </div>
+      )}
+      {message && <p className="text-sm text-muted-foreground">{message}</p>}
+    </div>
+  )
+}
 
 export function ProjectsView() {
   const { t } = useI18n()
@@ -133,6 +261,8 @@ export function ProjectsView() {
           </div>
         </section>
       )}
+
+      {form && form.id !== null && <BrandVoicePanel projectId={form.id} />}
 
       <label className="label-mono flex w-fit items-center gap-2 text-muted-foreground">
         <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />

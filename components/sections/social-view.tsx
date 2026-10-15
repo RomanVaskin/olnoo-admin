@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, HeaderActions, Metric, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
@@ -8,9 +8,15 @@ import { useProjects } from '@/components/sections/seo-project-picker'
 import { useI18n } from '@/components/i18n-provider'
 import { SocialPublications, type PublicationSummary } from '@/components/sections/social-publications'
 import { toDatetimeLocalInputValue, formatPublishDate } from '@/lib/social-publish-date-format'
+import { isEditorResultStillValid } from '@/lib/social-ai-editor-staleness'
 
 const STATUSES = ['idea', 'draft', 'ready', 'published'] as const
 const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
+// Mirrors lib/social-ai-editor.ts's EDITOR_ACTIONS — kept as a plain local literal (not imported)
+// so this client component never pulls in that server-only module (it calls ai-router.ts, which
+// reads process.env) just for a type.
+const EDITOR_ACTIONS = ['improve', 'shorten', 'punchy_opening', 'remove_ai_cliches', 'custom'] as const
+type EditorAction = (typeof EDITOR_ACTIONS)[number]
 
 type SocialStatus = (typeof STATUSES)[number]
 type SocialChannel = (typeof CHANNELS)[number]
@@ -101,6 +107,24 @@ function PostDetail({
   const [generateError, setGenerateError] = useState('')
   const [uploadingImage, setUploadingImage] = useState(false)
   const [uploadImageError, setUploadImageError] = useState('')
+  const [editorBusyAction, setEditorBusyAction] = useState<EditorAction | null>(null)
+  const [editorError, setEditorError] = useState('')
+  // Carries the snapshot it was generated FOR (forPostId/forText), not just the proposed text —
+  // see applyEditorProposal below for why: Apply must refuse a proposal whose snapshot no longer
+  // matches what's on screen, not just whatever `isEditorResultStillValid` already filtered at the
+  // moment the response arrived (the user can still edit Content or switch posts AFTER that, before
+  // clicking Apply).
+  const [editorProposal, setEditorProposal] = useState<{ text: string; forPostId: string; forText: string } | null>(null)
+  const [editorCustomInstruction, setEditorCustomInstruction] = useState('')
+  // Always mirrors the latest Content/post id, read from inside runEditor's async continuation
+  // (after an `await`) where a plain closure over `body`/`post.id` would still hold whatever they
+  // were at the moment the request was FIRED, not what's on screen once it resolves. Assigning
+  // directly during render (not via useEffect) keeps both refs in sync with every commit, including
+  // the one that resets `body` itself when `post` changes below — see lib/social-ai-editor-staleness.ts.
+  const latestBodyRef = useRef(body)
+  latestBodyRef.current = body
+  const latestPostIdRef = useRef(post.id)
+  latestPostIdRef.current = post.id
 
   useEffect(() => {
     setTopic(post.topic)
@@ -114,6 +138,13 @@ function PostDetail({
     setPublishDate(post.publishDate)
     setStatus(post.status)
     setDifferentPerChannel(hasDistinctChannelText(post))
+    setEditorProposal(null)
+    setEditorError('')
+    setEditorCustomInstruction('')
+    // A request already in flight for the post being left behind must never leave this screen
+    // looking busy for the newly-opened post — its own result is discarded by the staleness guard
+    // in runEditor below regardless, via latestPostIdRef.
+    setEditorBusyAction(null)
   }, [post])
 
   function toggleChannel(channel: SocialChannel) {
@@ -175,6 +206,71 @@ function PostDetail({
     } finally {
       setGenerating(false)
     }
+  }
+
+  /** Asks the AI Editor (via /api/social/ai-edit) to propose an edited version of the current,
+   * possibly unsaved, Content for one preset action or a free-text custom instruction. The result
+   * is held as a PROPOSAL only (editorProposal) — Content itself (`body`) is never touched until
+   * the user explicitly clicks "Apply" below, and a failure here never clears or changes `body`
+   * either, so the original text can never be lost to an AI Router error.
+   *
+   * Staleness guard (requirement): the request snapshots the post id and Content text it was fired
+   * for. If, by the time the response arrives, the user has edited Content or switched to a
+   * different post, `isEditorResultStillValid` (lib/social-ai-editor-staleness.ts) catches the
+   * mismatch via the always-current `latestBodyRef`/`latestPostIdRef`, and the stale result — on
+   * success or on failure alike — is discarded silently: never shown as a proposal, never applied,
+   * never surfacing a confusing error for a post/text that's no longer on screen. */
+  async function runEditor(action: EditorAction) {
+    if (editorBusyAction || !body.trim()) return
+    if (action === 'custom' && !editorCustomInstruction.trim()) return
+    const requested = { postId: post.id, text: body }
+    setEditorBusyAction(action)
+    setEditorError('')
+    try {
+      const res = await fetch('/api/social/ai-edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, text: requested.text, action, customInstruction: editorCustomInstruction }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        const message = data && typeof data.error === 'string' ? data.error : t.socialView.aiEditorError
+        throw new Error(message)
+      }
+      if (!isEditorResultStillValid(requested, { postId: latestPostIdRef.current, text: latestBodyRef.current })) return
+      if (typeof data?.text === 'string') setEditorProposal({ text: data.text, forPostId: requested.postId, forText: requested.text })
+    } catch (err) {
+      if (!isEditorResultStillValid(requested, { postId: latestPostIdRef.current, text: latestBodyRef.current })) return
+      setEditorError(err instanceof Error ? err.message : t.socialView.aiEditorError)
+    } finally {
+      setEditorBusyAction((current) => (current === action ? null : current))
+    }
+  }
+
+  /** Applies the pending proposal to Content locally — still not persisted until the normal "Save"
+   * button runs, same as "Generate variants" above.
+   *
+   * Requirement: a proposal is tied to the exact Content text and post id it was generated for.
+   * Between the response arriving and the user clicking Apply, they can still edit Content or
+   * switch to a different post — unlike the in-flight race `runEditor` already guards (above), this
+   * window is arbitrarily long and entirely expected (reading a proposal takes time). Re-checking
+   * with the SAME `isEditorResultStillValid` here, against the live `post.id`/`body` at the moment
+   * of the click, means a proposal that has gone stale while sitting on screen is refused rather
+   * than silently overwriting whatever new edit the user made in the meantime. */
+  function applyEditorProposal() {
+    if (editorProposal === null) return
+    if (!isEditorResultStillValid({ postId: editorProposal.forPostId, text: editorProposal.forText }, { postId: post.id, text: body })) {
+      setEditorProposal(null)
+      setEditorError(t.socialView.aiEditorStaleProposal)
+      return
+    }
+    setBody(editorProposal.text)
+    setEditorProposal(null)
+  }
+
+  /** Discards the proposal — Content (`body`) was never touched, so this simply drops it. */
+  function cancelEditorProposal() {
+    setEditorProposal(null)
   }
 
   /** Uploads a JPEG to /api/social/upload-instagram-image (saved server-side under this app's own
@@ -289,6 +385,69 @@ function PostDetail({
               className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
             />
           </label>
+
+          {body.trim() !== '' && (
+            <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
+              <span className="label-mono text-muted-foreground">{t.socialView.aiEditorTitle}</span>
+              <div className="flex flex-wrap gap-2">
+                {EDITOR_ACTIONS.filter((a) => a !== 'custom').map((action) => (
+                  <button
+                    key={action}
+                    onClick={() => runEditor(action)}
+                    disabled={editorBusyAction !== null}
+                    className="label-mono border border-hairline px-3 py-2 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+                  >
+                    {editorBusyAction === action ? t.socialView.aiEditorRunning : t.socialView.aiEditorAction[action]}
+                  </button>
+                ))}
+              </div>
+              <div className="flex flex-col gap-2">
+                <textarea
+                  value={editorCustomInstruction}
+                  onChange={(e) => setEditorCustomInstruction(e.target.value)}
+                  placeholder={t.socialView.aiEditorCustomPlaceholder}
+                  rows={2}
+                  className="resize-none border border-hairline bg-card p-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
+                />
+                <button
+                  onClick={() => runEditor('custom')}
+                  disabled={editorBusyAction !== null || !editorCustomInstruction.trim()}
+                  className="label-mono w-fit border border-hairline px-3 py-2 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+                >
+                  {editorBusyAction === 'custom' ? t.socialView.aiEditorRunning : t.socialView.aiEditorAction.custom}
+                </button>
+              </div>
+              {editorError && <p className="text-sm text-destructive">{editorError}</p>}
+              {editorProposal !== null && (
+                <div className="flex flex-col gap-3 border-t border-hairline pt-3">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="label-mono text-muted-foreground">{t.socialView.aiEditorOriginal}</span>
+                      <p className="whitespace-pre-line border border-hairline bg-background p-2.5 text-sm text-muted-foreground">{body}</p>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <span className="label-mono text-muted-foreground">{t.socialView.aiEditorProposed}</span>
+                      <p className="whitespace-pre-line border border-foreground/40 bg-background p-2.5 text-sm text-foreground">{editorProposal.text}</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={applyEditorProposal}
+                      className="label-mono border border-foreground bg-foreground px-4 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground"
+                    >
+                      {t.socialView.aiEditorApply}
+                    </button>
+                    <button
+                      onClick={cancelEditorProposal}
+                      className="label-mono text-foreground/80 underline underline-offset-4 hover:text-foreground"
+                    >
+                      {t.socialView.aiEditorCancel}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex flex-col gap-3">
             <span className="label-mono text-muted-foreground">{t.socialView.channels}</span>
