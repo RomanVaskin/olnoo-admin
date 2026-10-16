@@ -165,6 +165,45 @@ test('editSocialPostText: the custom action without an instruction is refused be
   })
 })
 
+/** Wraps a real Pool so any query whose SQL text includes `matchFragment` rejects with `error`,
+ * while every other query is forwarded unchanged — same helper shape as
+ * lib/social-agent.test.ts's `withFailingQuery`, used here to simulate buildProjectAiContext's own
+ * Postgres query failing (a dropped connection, a transient error). */
+function withFailingQuery(pool: Pool, matchFragment: string, error: Error): Pool {
+  return {
+    query: (text: unknown, params?: unknown[]) => {
+      if (typeof text === 'string' && text.includes(matchFragment)) {
+        return Promise.reject(error)
+      }
+      return pool.query(text as string, params)
+    },
+  } as unknown as Pool
+}
+
+test('requirement (production regression): a buildProjectAiContext failure is reported as a SocialAiEditorError, never an uncaught exception', async (t) => {
+  await withDb(t, async (pool, makeProject) => {
+    const projectId = await makeProject('DriveSet')
+    // The query inside buildProjectAiContext that reads the project's own name/domain — distinct
+    // from the queries makeProject itself already ran successfully above.
+    const failingPool = withFailingQuery(pool, 'FROM projects WHERE id', new Error('simulated Postgres failure'))
+
+    let fetchCalled = false
+    await assert.rejects(
+      () =>
+        withFetch(
+          () => {
+            fetchCalled = true
+            return aiRouterOk('x')
+          },
+          () => editSocialPostText(failingPool, projectId, { text: 'Some text', action: 'improve' }),
+        ),
+      SocialAiEditorError,
+      'a context-building failure must surface as a typed SocialAiEditorError (so the route can report it), never an untyped exception that falls through to the generic 500',
+    )
+    assert.equal(fetchCalled, false, 'the AI Router must never be called once building the project context has already failed')
+  })
+})
+
 test('requirement: an AI Router failure never loses or mutates the original text — the caller receives a thrown error', async (t) => {
   await withDb(t, async (pool, makeProject) => {
     const projectId = await makeProject('DriveSet')

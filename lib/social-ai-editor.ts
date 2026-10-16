@@ -81,9 +81,11 @@ export type EditSocialPostTextInput = {
  * reaches Postgres until the existing post editor's own "Save" runs, unchanged.
  *
  * Throws `SocialAiEditorError`/`AiRouterError` on any failure (empty input, missing custom
- * instruction, AI Router error, empty/unusable response) — the caller's original text is never
- * touched by a thrown error, since this function never receives or holds a reference to it beyond
- * building the one outgoing prompt.
+ * instruction, a failure building the project's AI context, AI Router error, empty/unusable
+ * response) — never a raw/untyped error, so the route's own `catch` can always report the real
+ * cause instead of its generic fallback message. The caller's original text is never touched by a
+ * thrown error, since this function never receives or holds a reference to it beyond building the
+ * one outgoing prompt.
  */
 export async function editSocialPostText(pool: Pool, projectId: number, input: EditSocialPostTextInput): Promise<string> {
   const text = input.text.trim()
@@ -94,8 +96,21 @@ export async function editSocialPostText(pool: Pool, projectId: number, input: E
     throw new SocialAiEditorError('Write your own instruction before running a custom edit.')
   }
 
-  const context = await buildProjectAiContext(pool, projectId)
-  const contextBlock = projectAiContextBlock(context)
+  // buildProjectAiContext runs three Postgres queries (project row, Brand Profile, SEO context)
+  // and can fail for a mundane reason (a dropped connection, a transient Postgres error) — not
+  // caught by the route's own `catch`, which only recognizes `SocialAiEditorError`/`AiRouterError`
+  // and otherwise falls through to a generic 500 ("Could not run the AI Editor. Please try again.")
+  // with the real cause only in the server log, never surfaced to the admin. Same bug class, same
+  // fix, as the one already applied to lib/social-agent.ts's `runSocialAgentTask` — wrap the call
+  // and convert any failure into a `SocialAiEditorError` so the route's existing 422 path reports
+  // the real cause instead of silently swallowing it into the unhelpful generic message.
+  let contextBlock: string
+  try {
+    contextBlock = projectAiContextBlock(await buildProjectAiContext(pool, projectId))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new SocialAiEditorError(`Could not load the project's AI context: ${message}`)
+  }
 
   const content = await callAiRouter(
     [
