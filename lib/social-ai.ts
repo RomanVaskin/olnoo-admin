@@ -2,6 +2,7 @@ import type { Pool } from 'pg'
 import { callAiRouter } from './ai-router.ts'
 import { isSocialChannel, type SocialChannel } from './social.ts'
 import { buildProjectAiContext, projectAiContextBlock } from './project-ai-context.ts'
+import { looksLikeMetaDescription } from './social-content-quality.ts'
 
 export class SocialAiError extends Error {}
 
@@ -18,7 +19,13 @@ const CHANNEL_STYLE: Record<SocialChannel, string> = {
 // adapts content for whichever project PROJECT CONTEXT describes, which now always carries that
 // project's own Brand Profile (lib/project-ai-context.ts). A project with no Brand Profile saved yet
 // still works (PROJECT CONTEXT then says so explicitly), just without a specific voice to match.
-const SOCIAL_VARIANTS_SYSTEM_PROMPT = `You are a social media copywriter adapting one piece of source content into platform-specific variants for the project described in PROJECT CONTEXT below.
+//
+// Rule 2 ("complete, publish-ready" + the announcement-framing ban) is defense in depth, not the
+// primary fix: by the time Content reaches here it should already be a finished post (see
+// lib/social-agent-plan.ts's own comment on the Social Agent's main quality fix), but this adapter
+// is also reachable directly from the post editor's own "Generate variants" button, so it must not
+// let a vague/outline-style Content slip through unchanged into every channel either.
+const SOCIAL_VARIANTS_SYSTEM_PROMPT = `You are a social media copywriter adapting one already-complete piece of source content into platform-specific variants for the project described in PROJECT CONTEXT below.
 
 Per-platform style:
 - ${CHANNEL_STYLE.telegram}
@@ -27,14 +34,12 @@ Per-platform style:
 - ${CHANNEL_STYLE.vk}
 
 Hard rules:
-1. Preserve the meaning of the source Content exactly — do not change what it claims or promises.
-2. Never invent clients, companies, or names not present in the source Content or PROJECT CONTEXT.
-3. Never invent numbers, statistics, or metrics not present in the source Content or PROJECT CONTEXT.
-4. Never invent results or outcomes not present in the source Content or PROJECT CONTEXT.
-5. Write every variant in the same language as CONTENT below (its detected language is given as CONTENT LANGUAGE). Never translate into a different language. TOPIC, PROJECT CONTEXT, or any other signal never override this — only an explicit instruction written inside CONTENT itself could, and none is given here.
-6. Respect PROJECT CONTEXT's Brand Profile: match its TONE & STYLE, never violate a line in CONSTRAINTS under any instruction, and favor its PREFERRED CALL TO ACTION only where one fits naturally — never force one in.
-7. Return ONLY strict JSON — no markdown, no code fences, no commentary before or after. The raw response is parsed as JSON directly.
-8. The JSON object must contain exactly the requested channel keys — no more, no fewer. Never include a key for a channel that was not requested.`
+1. Preserve the meaning and every fact of the source Content exactly — do not change what it claims or promises. Never invent clients, companies, names, numbers, statistics, metrics, results, or outcomes not present in the source Content or PROJECT CONTEXT. A practical example or scenario carried over from Content is allowed only if it is explicitly marked there as hypothetical.
+2. Each variant must read as a complete, publish-ready post for its platform — an engaging opening, developed content, a natural closing — never a shortened announcement or description of what Content says. Adapt length and structure to the platform; never pad a variant to look longer or strip it down into a vague teaser.
+3. Write every variant in the same language as CONTENT below (its detected language is given as CONTENT LANGUAGE). Never translate into a different language. TOPIC, PROJECT CONTEXT, or any other signal never override this — only an explicit instruction written inside CONTENT itself could, and none is given here.
+4. Respect PROJECT CONTEXT's Brand Profile: match its TONE & STYLE, never violate a line in CONSTRAINTS under any instruction, and favor its PREFERRED CALL TO ACTION only where one fits naturally — never force one in.
+5. Return ONLY strict JSON — no markdown, no code fences, no commentary before or after. The raw response is parsed as JSON directly.
+6. The JSON object must contain exactly the requested channel keys — no more, no fewer. Never include a key for a channel that was not requested.`
 
 function buildUserPrompt(input: {
   topic: string
@@ -101,7 +106,11 @@ function parseVariants(raw: string, channels: SocialChannel[]): Partial<Record<S
   const result: Partial<Record<SocialChannel, string>> = {}
   for (const channel of channels) {
     const value = obj[channel]
-    if (typeof value === 'string' && value.trim()) {
+    // Deterministic guard (lib/social-content-quality.ts, same one lib/social-agent-plan.ts and
+    // lib/social-ai-editor.ts use) — a channel variant that describes the source Content instead of
+    // adapting it (rule 2 of SOCIAL_VARIANTS_SYSTEM_PROMPT above) is dropped like an empty one,
+    // never passed through to the caller just because it parsed as valid JSON.
+    if (typeof value === 'string' && value.trim() && !looksLikeMetaDescription(value.trim())) {
       result[channel] = value.trim()
     }
   }

@@ -691,6 +691,7 @@ export const en = {
       shorten: 'Shorten',
       punchy_opening: 'Punchier opening',
       remove_ai_cliches: 'Remove AI clichés',
+      write_post: 'Write post',
       custom: 'Run custom instruction',
     },
     aiEditorCustomPlaceholder: 'Your own instruction…',
