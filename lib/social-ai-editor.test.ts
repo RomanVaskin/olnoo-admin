@@ -52,6 +52,26 @@ test('requirement: the system prompt never hardcodes OLNOO (or any other fixed b
   assert.ok(!EDITOR_SYSTEM_PROMPT.includes('OLNOO'))
 })
 
+test('requirement: the system prompt demands a complete, publish-ready result and forbids announcement-style framing', () => {
+  assert.ok(EDITOR_SYSTEM_PROMPT.toLowerCase().includes('complete, publish-ready'))
+  assert.ok(EDITOR_SYSTEM_PROMPT.includes('This post is about'))
+  assert.ok(/hypothetical/i.test(EDITOR_SYSTEM_PROMPT))
+})
+
+test("write_post is a known action, and its instruction treats TEXT as a brief to expand, not finished copy to edit", () => {
+  assert.ok(isEditorAction('write_post'))
+  const prompt = buildEditorUserPrompt({ text: 'ceramic coating for winter', action: 'write_post', customInstruction: '', contextBlock: 'CTX' })
+  assert.ok(prompt.includes('not finished copy'))
+  assert.ok(prompt.includes('COMPLETE, publish-ready post'))
+})
+
+test("requirement: improve's instruction now permits meaningfully restructuring the text, not just swapping a few words", () => {
+  const prompt = buildEditorUserPrompt({ text: 'Some draft text', action: 'improve', customInstruction: '', contextBlock: 'CTX' })
+  assert.ok(/restructure/i.test(prompt))
+  assert.ok(prompt.toLowerCase().includes('not limit yourself to swapping a few words'))
+  assert.ok(/already strong/i.test(prompt), 'must tell the model not to change an already-good text just to produce a different result')
+})
+
 // --- DB + AI Router integration (skipped without a reachable Postgres) ---
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://olnoo_admin:CHANGE_ME@localhost:5432/olnoo_admin'
@@ -124,6 +144,31 @@ test('editSocialPostText: a preset action returns the AI Router\'s (cleaned) pro
       editSocialPostText(pool, projectId, { text: 'A much longer original version of the post.', action: 'shorten' }),
     )
     assert.equal(result, 'A shorter version.')
+  })
+})
+
+test('requirement: write_post turns a topic/brief into the AI Router\'s (cleaned) full post', async (t) => {
+  await withDb(t, async (pool, makeProject) => {
+    const projectId = await makeProject('DriveSet')
+    const fullPost =
+      'Зимой дорожная соль разрушает лак быстрее, чем кажется. Керамическое покрытие создаёт защитный слой, который отталкивает грязь и облегчает мойку всю зиму. Запишитесь на бесплатную диагностику.'
+    const result = await withFetch(() => aiRouterOk(fullPost), () =>
+      editSocialPostText(pool, projectId, { text: 'керамическое покрытие зимой', action: 'write_post' }),
+    )
+    assert.equal(result, fullPost)
+  })
+})
+
+test('requirement: editSocialPostText rejects an AI Router response that is a meta-description instead of a real post', async (t) => {
+  await withDb(t, async (pool, makeProject) => {
+    const projectId = await makeProject('DriveSet')
+    await assert.rejects(
+      () =>
+        withFetch(() => aiRouterOk('Пост о том, как керамическое покрытие защищает авто зимой.'), () =>
+          editSocialPostText(pool, projectId, { text: 'керамическое покрытие зимой', action: 'write_post' }),
+        ),
+      SocialAiEditorError,
+    )
   })
 })
 

@@ -701,6 +701,7 @@ export const ru: Messages = {
       shorten: 'Сократить',
       punchy_opening: 'Усилить начало',
       remove_ai_cliches: 'Убрать ИИ-штампы',
+      write_post: 'Написать пост',
       custom: 'Выполнить свою инструкцию',
     },
     aiEditorCustomPlaceholder: 'Своя инструкция…',

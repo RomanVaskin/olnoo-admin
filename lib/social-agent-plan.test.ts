@@ -6,6 +6,35 @@ test('requirement: the planning system prompt never hardcodes OLNOO (or any othe
   assert.ok(!SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.includes('OLNOO'))
 })
 
+test('requirement: the planning prompt demands a complete, ready-to-publish post, never a description of one', () => {
+  assert.ok(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.toLowerCase().includes('complete, publish-ready'))
+  assert.ok(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.includes('This post is about'), 'must name the banned announcement framing explicitly')
+  assert.ok(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.includes("We'll tell you about"))
+  assert.ok(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.includes('Here we\'ll focus on'))
+  assert.ok(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.includes('We need to write about'))
+})
+
+test('requirement: the planning prompt never again asks for a "shared" summary body that gets adapted later — the regression that caused the original defect', () => {
+  // "shared content every channel later adapts from" was the exact earlier wording that nudged the
+  // model toward an outline/brief instead of a finished post — this guards against it coming back.
+  assert.ok(!SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.toLowerCase().includes('shared content'))
+  assert.ok(!SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.toLowerCase().includes('adapts from'))
+})
+
+test('requirement: the planning prompt asks for distinct, non-repetitive posts when more than one is planned', () => {
+  assert.ok(/distinct|genuinely different/i.test(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT))
+})
+
+test('requirement: the planning prompt still preserves the task language rule and Brand Profile rule', () => {
+  assert.ok(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.includes('SAME language as TASK'))
+  assert.ok(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.includes('Brand Profile'))
+  assert.ok(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT.includes('CONSTRAINTS'))
+})
+
+test('requirement: practical examples are allowed only as explicitly marked hypotheticals, never invented as real', () => {
+  assert.ok(/hypothetical/i.test(SOCIAL_AGENT_PLAN_SYSTEM_PROMPT))
+})
+
 test('buildSocialAgentPlanPrompt includes the task, project context, and available channels', () => {
   const prompt = buildSocialAgentPlanPrompt({
     task: 'Подготовь три поста на неделю о полировке автомобилей для DriveSet',
@@ -63,6 +92,41 @@ test('parseSocialAgentPlan: an entry missing topic or body is dropped, never def
   ])
   const items = parseSocialAgentPlan(raw, ['telegram'])
   assert.equal(items.length, 1)
+})
+
+test('requirement: parseSocialAgentPlan rejects the WHOLE plan when even ONE post is a meta-description — never silently returns fewer posts than requested', () => {
+  const raw = JSON.stringify([
+    { topic: 'Bad one', body: 'Пост о том, как ИИ используется в бизнесе.', channels: ['telegram'] },
+    { topic: 'Good one', body: 'Зимой дорожная соль разрушает лак — керамическое покрытие защищает кузов всю зиму.', channels: ['telegram'] },
+    { topic: 'Also good', body: 'Еженедельная мойка с воском продлевает блеск кузова и облегчает уход зимой.', channels: ['telegram'] },
+  ])
+  assert.throws(() => parseSocialAgentPlan(raw, ['telegram']), SocialAgentPlanError)
+})
+
+test('requirement: the rejection names how many posts failed the quality check, not just that the plan failed', () => {
+  const raw = JSON.stringify([
+    { topic: 'Bad one', body: 'Пост о том, как ИИ используется в бизнесе.', channels: ['telegram'] },
+    { topic: 'Also bad', body: "This post is about our new winter detailing package.", channels: ['telegram'] },
+    { topic: 'Good one', body: 'Зимой дорожная соль разрушает лак — керамическое покрытие защищает кузов всю зиму.', channels: ['telegram'] },
+  ])
+  assert.throws(() => parseSocialAgentPlan(raw, ['telegram']), (err: unknown) => err instanceof SocialAgentPlanError && /\b2\b/.test(err.message))
+})
+
+test('requirement: parseSocialAgentPlan throws when EVERY post is a meta-description — never silently accepts a plan of only bad posts', () => {
+  const raw = JSON.stringify([
+    { topic: 'A', body: 'Пост о том, как мы работаем.', channels: ['telegram'] },
+    { topic: 'B', body: "We'll tell you about our services.", channels: ['telegram'] },
+  ])
+  assert.throws(() => parseSocialAgentPlan(raw, ['telegram']), SocialAgentPlanError)
+})
+
+test('a plan with zero meta-descriptions is entirely unaffected — all good posts are returned as before', () => {
+  const raw = JSON.stringify([
+    { topic: 'Good one', body: 'Зимой дорожная соль разрушает лак — керамическое покрытие защищает кузов всю зиму.', channels: ['telegram'] },
+    { topic: 'Also good', body: 'Еженедельная мойка с воском продлевает блеск кузова и облегчает уход зимой.', channels: ['telegram'] },
+  ])
+  const items = parseSocialAgentPlan(raw, ['telegram'])
+  assert.equal(items.length, 2)
 })
 
 test('parseSocialAgentPlan: capped at 10 items even if the model returns more', () => {

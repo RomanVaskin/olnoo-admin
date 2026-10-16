@@ -15,7 +15,7 @@ const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
 // Mirrors lib/social-ai-editor.ts's EDITOR_ACTIONS — kept as a plain local literal (not imported)
 // so this client component never pulls in that server-only module (it calls ai-router.ts, which
 // reads process.env) just for a type.
-const EDITOR_ACTIONS = ['improve', 'shorten', 'punchy_opening', 'remove_ai_cliches', 'custom'] as const
+const EDITOR_ACTIONS = ['improve', 'shorten', 'punchy_opening', 'remove_ai_cliches', 'write_post', 'custom'] as const
 type EditorAction = (typeof EDITOR_ACTIONS)[number]
 
 type SocialStatus = (typeof STATUSES)[number]

@@ -4,6 +4,8 @@
 // itself `@/`-free) lives in lib/social-agent.ts; this file only decides what to ask for and makes
 // sense of the JSON that comes back.
 
+import { looksLikeMetaDescription } from './social-content-quality.ts'
+
 export type SocialAgentPlanItem = { topic: string; body: string; channels: string[] }
 
 export class SocialAgentPlanError extends Error {}
@@ -16,15 +18,26 @@ const MAX_PLAN_ITEMS = 10
 // Deliberately NOT tied to any one project's identity (e.g. "for OLNOO") — this plans content for
 // whichever project PROJECT CONTEXT describes, which now always carries that project's own Brand
 // Profile (lib/project-ai-context.ts), never a hardcoded persona.
-export const SOCIAL_AGENT_PLAN_SYSTEM_PROMPT = `You are a social media content planner, turning ONE free-text task written by a project's own admin into a short posting plan for the project described in PROJECT CONTEXT below.
+//
+// Rule 2 below is the fix for the Social Agent's main quality defect (reported directly): earlier
+// wording asked for "a short, factual body (shared content every channel later adapts from)" —
+// that framing itself nudged the model toward writing a BRIEF/outline of a future post ("Пост о
+// том, как…", "Расскажем о…") rather than the post itself, since "shared content ... adapts from"
+// reads as "raw material for something else", not "the thing a reader will read". `body` is what
+// `generateChannelVariants` (lib/social-ai.ts) adapts per channel AND what's stored directly as
+// `social_posts.body` — it must already be a complete, publish-ready post.
+export const SOCIAL_AGENT_PLAN_SYSTEM_PROMPT = `You are a social media copywriter, turning ONE free-text task written by a project's own admin into several complete, ready-to-publish posts for the project described in PROJECT CONTEXT below.
 
 Hard rules:
 1. Decide how many posts the task calls for from its own wording (e.g. "three posts" -> 3 posts); if the task doesn't say, plan exactly 3 posts.
-2. Each post gets its own distinct topic and a short, factual body (shared content every channel later adapts from) — never invent clients, prices, numbers, results, or promises not implied by TASK or PROJECT CONTEXT.
-3. "channels" for each post must be chosen ONLY from AVAILABLE CHANNELS — never invent or assume a channel the project hasn't connected. If AVAILABLE CHANNELS is empty, still produce the plan, with an empty "channels" array for each post.
-4. Write every topic and body in the SAME language as TASK itself — detect it from TASK's own text, never translate, never switch languages regardless of what language PROJECT CONTEXT happens to be in.
-5. Respect PROJECT CONTEXT's Brand Profile: match its TONE & STYLE, never violate a line in CONSTRAINTS under any instruction, and favor its PREFERRED CALL TO ACTION only where one fits naturally — never force one into every post.
-6. Return ONLY a strict JSON array — no markdown, no code fences, no commentary before or after. Each array element is an object with exactly "topic", "body", "channels" (an array of strings). The raw response is parsed as JSON directly.`
+2. Write "body" as a COMPLETE, publish-ready post, not a summary, outline, or plan for one: an engaging opening, substantive developed content, and a natural closing. NEVER describe the post instead of writing it — announcement-style framing such as "This post is about...", "We'll tell you about...", "Here we'll focus on...", "We need to write about...", "A post about...", or any equivalent phrasing in any language, is forbidden. Write the actual content a reader would read, not a description that content exists.
+3. When the task calls for more than one post, give each its own distinct topic and angle — genuinely different content and focus, never variations of the same text, the same opening, or the same structure repeated with different words.
+4. Keep "body" as factual and specific as TASK and PROJECT CONTEXT allow — never invent clients, prices, numbers, results, testimonials, statistics, or promises not implied by TASK or PROJECT CONTEXT. A practical example or scenario is allowed only if explicitly marked as hypothetical (e.g. "for example, imagine..."), never presented as a real case.
+5. "channels" for each post must be chosen ONLY from AVAILABLE CHANNELS — never invent or assume a channel the project hasn't connected. If AVAILABLE CHANNELS is empty, still produce the plan, with an empty "channels" array for each post.
+6. Write every topic and body in the SAME language as TASK itself — detect it from TASK's own text, never translate, never switch languages regardless of what language PROJECT CONTEXT happens to be in.
+7. Respect PROJECT CONTEXT's Brand Profile: match its TONE & STYLE, never violate a line in CONSTRAINTS under any instruction, and favor its PREFERRED CALL TO ACTION only where one fits naturally — never force one into every post.
+8. Keep "body" the length a real post on AVAILABLE CHANNELS would actually have for this topic — substantive, but never padded or stretched just to look longer.
+9. Return ONLY a strict JSON array — no markdown, no code fences, no commentary before or after. Each array element is an object with exactly "topic", "body", "channels" (an array of strings). The raw response is parsed as JSON directly.`
 
 export function buildSocialAgentPlanPrompt(input: { task: string; projectContext: string; availableChannels: string[] }): string {
   return `TASK: ${input.task}
@@ -33,7 +46,7 @@ PROJECT CONTEXT: ${input.projectContext || '(none given)'}
 
 AVAILABLE CHANNELS: ${input.availableChannels.length ? input.availableChannels.join(', ') : '(none connected)'}
 
-Produce the posting plan as a JSON array, following the system rules exactly.`
+Produce the posting plan as a JSON array of complete, ready-to-publish posts, following the system rules exactly.`
 }
 
 function stripToJson(text: string): string {
@@ -52,6 +65,15 @@ function stripToJson(text: string): string {
  * `SocialAgentPlanError` (never a raw parse exception) if nothing usable survives, so the caller
  * can treat this uniformly alongside an `AiRouterError` — both mean "the plan could not be
  * produced", before anything is ever written to Postgres.
+ *
+ * Requirement: a quality-filter rejection (`looksLikeMetaDescription`) must never silently shrink
+ * the plan below what the task asked for. Unlike a missing topic/body/channels (a structurally
+ * broken entry the admin never asked for in the first place), a meta-description IS one of the
+ * posts the admin explicitly requested — just written badly. Dropping it and quietly returning
+ * fewer posts would mean "подготовь три поста" sometimes creates two with no indication why. So
+ * ANY quality-filter rejection fails the WHOLE plan (zero posts created — this runs before
+ * `runSocialAgentTask` creates anything) with a message naming the shortfall, rather than
+ * persisting an incomplete set. No extra AI call is made — the admin simply retries the request.
  */
 export function parseSocialAgentPlan(raw: string, availableChannels: string[]): SocialAgentPlanItem[] {
   const text = stripToJson(raw)
@@ -77,6 +99,7 @@ export function parseSocialAgentPlan(raw: string, availableChannels: string[]): 
 
   const availableSet = new Set(availableChannels)
   const items: SocialAgentPlanItem[] = []
+  let qualityRejected = 0
   for (const entry of data) {
     if (!entry || typeof entry !== 'object') continue
     const obj = entry as Record<string, unknown>
@@ -85,10 +108,25 @@ export function parseSocialAgentPlan(raw: string, availableChannels: string[]): 
     const rawChannels = Array.isArray(obj.channels) ? obj.channels : []
     const channels = rawChannels.filter((c): c is string => typeof c === 'string' && availableSet.has(c))
     if (!topic || !body || channels.length === 0) continue
+    // Deterministic guard (see lib/social-content-quality.ts): a model that ignored rule 2 of
+    // SOCIAL_AGENT_PLAN_SYSTEM_PROMPT and wrote a description of the post instead of the post
+    // itself is counted and rejected — never silently passed through to
+    // generateChannelVariants/createSocialPost just because it parsed as valid JSON. See this
+    // function's own doc comment for why this fails the WHOLE plan below rather than just
+    // dropping the one entry like a structurally missing field does.
+    if (looksLikeMetaDescription(body)) {
+      qualityRejected++
+      continue
+    }
     items.push({ topic, body, channels })
     if (items.length >= MAX_PLAN_ITEMS) break
   }
 
+  if (qualityRejected > 0) {
+    throw new SocialAgentPlanError(
+      `AI Router returned ${qualityRejected} post(s) that read like a description of a post instead of real, publish-ready content. The plan was rejected rather than created with fewer posts than requested — please try again.`,
+    )
+  }
   if (items.length === 0) {
     throw new SocialAgentPlanError('AI Router did not return any usable posts for this task (check that the project has a connected channel).')
   }
