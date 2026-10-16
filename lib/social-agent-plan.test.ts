@@ -94,15 +94,22 @@ test('parseSocialAgentPlan: an entry missing topic or body is dropped, never def
   assert.equal(items.length, 1)
 })
 
-test('requirement: parseSocialAgentPlan drops a post whose body is a meta-description instead of real content, keeping the others', () => {
+test('requirement: parseSocialAgentPlan rejects the WHOLE plan when even ONE post is a meta-description — never silently returns fewer posts than requested', () => {
+  const raw = JSON.stringify([
+    { topic: 'Bad one', body: 'Пост о том, как ИИ используется в бизнесе.', channels: ['telegram'] },
+    { topic: 'Good one', body: 'Зимой дорожная соль разрушает лак — керамическое покрытие защищает кузов всю зиму.', channels: ['telegram'] },
+    { topic: 'Also good', body: 'Еженедельная мойка с воском продлевает блеск кузова и облегчает уход зимой.', channels: ['telegram'] },
+  ])
+  assert.throws(() => parseSocialAgentPlan(raw, ['telegram']), SocialAgentPlanError)
+})
+
+test('requirement: the rejection names how many posts failed the quality check, not just that the plan failed', () => {
   const raw = JSON.stringify([
     { topic: 'Bad one', body: 'Пост о том, как ИИ используется в бизнесе.', channels: ['telegram'] },
     { topic: 'Also bad', body: "This post is about our new winter detailing package.", channels: ['telegram'] },
     { topic: 'Good one', body: 'Зимой дорожная соль разрушает лак — керамическое покрытие защищает кузов всю зиму.', channels: ['telegram'] },
   ])
-  const items = parseSocialAgentPlan(raw, ['telegram'])
-  assert.equal(items.length, 1)
-  assert.equal(items[0].topic, 'Good one')
+  assert.throws(() => parseSocialAgentPlan(raw, ['telegram']), (err: unknown) => err instanceof SocialAgentPlanError && /\b2\b/.test(err.message))
 })
 
 test('requirement: parseSocialAgentPlan throws when EVERY post is a meta-description — never silently accepts a plan of only bad posts', () => {
@@ -111,6 +118,15 @@ test('requirement: parseSocialAgentPlan throws when EVERY post is a meta-descrip
     { topic: 'B', body: "We'll tell you about our services.", channels: ['telegram'] },
   ])
   assert.throws(() => parseSocialAgentPlan(raw, ['telegram']), SocialAgentPlanError)
+})
+
+test('a plan with zero meta-descriptions is entirely unaffected — all good posts are returned as before', () => {
+  const raw = JSON.stringify([
+    { topic: 'Good one', body: 'Зимой дорожная соль разрушает лак — керамическое покрытие защищает кузов всю зиму.', channels: ['telegram'] },
+    { topic: 'Also good', body: 'Еженедельная мойка с воском продлевает блеск кузова и облегчает уход зимой.', channels: ['telegram'] },
+  ])
+  const items = parseSocialAgentPlan(raw, ['telegram'])
+  assert.equal(items.length, 2)
 })
 
 test('parseSocialAgentPlan: capped at 10 items even if the model returns more', () => {

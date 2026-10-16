@@ -65,6 +65,15 @@ function stripToJson(text: string): string {
  * `SocialAgentPlanError` (never a raw parse exception) if nothing usable survives, so the caller
  * can treat this uniformly alongside an `AiRouterError` — both mean "the plan could not be
  * produced", before anything is ever written to Postgres.
+ *
+ * Requirement: a quality-filter rejection (`looksLikeMetaDescription`) must never silently shrink
+ * the plan below what the task asked for. Unlike a missing topic/body/channels (a structurally
+ * broken entry the admin never asked for in the first place), a meta-description IS one of the
+ * posts the admin explicitly requested — just written badly. Dropping it and quietly returning
+ * fewer posts would mean "подготовь три поста" sometimes creates two with no indication why. So
+ * ANY quality-filter rejection fails the WHOLE plan (zero posts created — this runs before
+ * `runSocialAgentTask` creates anything) with a message naming the shortfall, rather than
+ * persisting an incomplete set. No extra AI call is made — the admin simply retries the request.
  */
 export function parseSocialAgentPlan(raw: string, availableChannels: string[]): SocialAgentPlanItem[] {
   const text = stripToJson(raw)
@@ -90,6 +99,7 @@ export function parseSocialAgentPlan(raw: string, availableChannels: string[]): 
 
   const availableSet = new Set(availableChannels)
   const items: SocialAgentPlanItem[] = []
+  let qualityRejected = 0
   for (const entry of data) {
     if (!entry || typeof entry !== 'object') continue
     const obj = entry as Record<string, unknown>
@@ -100,13 +110,23 @@ export function parseSocialAgentPlan(raw: string, availableChannels: string[]): 
     if (!topic || !body || channels.length === 0) continue
     // Deterministic guard (see lib/social-content-quality.ts): a model that ignored rule 2 of
     // SOCIAL_AGENT_PLAN_SYSTEM_PROMPT and wrote a description of the post instead of the post
-    // itself is dropped exactly like a missing-field entry above — never silently passed through
-    // to generateChannelVariants/createSocialPost just because it parsed as valid JSON.
-    if (looksLikeMetaDescription(body)) continue
+    // itself is counted and rejected — never silently passed through to
+    // generateChannelVariants/createSocialPost just because it parsed as valid JSON. See this
+    // function's own doc comment for why this fails the WHOLE plan below rather than just
+    // dropping the one entry like a structurally missing field does.
+    if (looksLikeMetaDescription(body)) {
+      qualityRejected++
+      continue
+    }
     items.push({ topic, body, channels })
     if (items.length >= MAX_PLAN_ITEMS) break
   }
 
+  if (qualityRejected > 0) {
+    throw new SocialAgentPlanError(
+      `AI Router returned ${qualityRejected} post(s) that read like a description of a post instead of real, publish-ready content. The plan was rejected rather than created with fewer posts than requested — please try again.`,
+    )
+  }
   if (items.length === 0) {
     throw new SocialAgentPlanError('AI Router did not return any usable posts for this task (check that the project has a connected channel).')
   }
