@@ -102,12 +102,15 @@ function clip(text: string, max: number): string {
 /**
  * Parses the AI Router's review response into a validated, bounded result — never trusts the
  * model's own output beyond this: a finding with an unknown category, a missing/blank
- * excerpt/explanation/recommendation, or a non-boolean `needsVerification` is dropped entirely
- * (never defaulted/guessed), and every string is length-capped. Throws `QualityGateError` (never a
- * raw parse exception) if the response isn't a usable JSON object at all — an empty-but-valid
- * `findings` array is a legitimate "no issues found" result, not an error.
+ * excerpt/explanation/recommendation, an `excerpt` that is not actually a verbatim substring of
+ * `originalText` (a fabricated/paraphrased quote, despite rule 3 of the system prompt), or a
+ * `needsVerification` that is not a genuine boolean is dropped entirely (never defaulted/guessed —
+ * in particular, a non-boolean `needsVerification` is REJECTED, not silently treated as `false`),
+ * and every string is length-capped. Throws `QualityGateError` (never a raw parse exception) if the
+ * response isn't a usable JSON object at all — an empty-but-valid `findings` array is a legitimate
+ * "no issues found" result, not an error.
  */
-export function parseQualityGateResult(raw: string): QualityGateResult {
+export function parseQualityGateResult(raw: string, originalText: string): QualityGateResult {
   const text = stripToJson(raw)
   let data: unknown
   try {
@@ -141,8 +144,15 @@ export function parseQualityGateResult(raw: string): QualityGateResult {
     const explanation = typeof f.explanation === 'string' ? clip(f.explanation, EXPLANATION_MAX) : ''
     const recommendation = typeof f.recommendation === 'string' ? clip(f.recommendation, RECOMMENDATION_MAX) : ''
     if (!excerpt || !explanation || !recommendation) continue
-    const needsVerification = f.needsVerification === true
-    findings.push({ category: f.category, excerpt, explanation, recommendation, needsVerification })
+    // Reject a fabricated/paraphrased quote — excerpt must be a real, verbatim substring of the
+    // text actually checked (clip() only ever slices from the front, so a clipped excerpt that was
+    // a substring of originalText before clipping is still one after — checking post-clip is safe).
+    if (!originalText.includes(excerpt)) continue
+    // needsVerification must be a genuine boolean from the model; any other type (missing, a
+    // string, a number, null, ...) is rejected outright rather than silently defaulting to false —
+    // defaulting would let an unverifiable claim be reported as a confirmed falsehood.
+    if (typeof f.needsVerification !== 'boolean') continue
+    findings.push({ category: f.category, excerpt, explanation, recommendation, needsVerification: f.needsVerification })
     if (findings.length >= MAX_FINDINGS) break
   }
 
@@ -180,5 +190,5 @@ export async function runQualityGate(pool: Pool, projectId: number, input: RunQu
     { temperature: 0.2, task: 'social-quality-gate' },
   )
 
-  return parseQualityGateResult(content)
+  return parseQualityGateResult(content, text)
 }

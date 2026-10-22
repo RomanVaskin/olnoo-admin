@@ -68,7 +68,8 @@ test('parseQualityGateResult: a valid JSON object is parsed as-is', () => {
       },
     ],
   })
-  const result = parseQualityGateResult(raw)
+  const originalText = 'Наш сервис снижает расходы на 40% для большинства клиентов.'
+  const result = parseQualityGateResult(raw, originalText)
   assert.equal(result.summary, 'Decent post, one factual gap.')
   assert.equal(result.findings.length, 1)
   assert.deepEqual(result.findings[0], {
@@ -82,48 +83,49 @@ test('parseQualityGateResult: a valid JSON object is parsed as-is', () => {
 
 test('parseQualityGateResult: strips a markdown code fence before parsing', () => {
   const raw = '```json\n' + JSON.stringify({ summary: 'Looks good.', findings: [] }) + '\n```'
-  const result = parseQualityGateResult(raw)
+  const result = parseQualityGateResult(raw, 'anything')
   assert.equal(result.summary, 'Looks good.')
   assert.equal(result.findings.length, 0)
 })
 
 test('parseQualityGateResult: a clean post with zero findings is a valid result, not an error', () => {
-  const result = parseQualityGateResult(JSON.stringify({ summary: 'No issues found.', findings: [] }))
+  const result = parseQualityGateResult(JSON.stringify({ summary: 'No issues found.', findings: [] }), 'anything')
   assert.equal(result.findings.length, 0)
 })
 
 test('parseQualityGateResult: not valid JSON at all throws QualityGateError', () => {
-  assert.throws(() => parseQualityGateResult('not json at all'), QualityGateError)
+  assert.throws(() => parseQualityGateResult('not json at all', 'anything'), QualityGateError)
 })
 
 test('parseQualityGateResult: a JSON array (not an object) throws QualityGateError', () => {
-  assert.throws(() => parseQualityGateResult(JSON.stringify([{ summary: 'x' }])), QualityGateError)
+  assert.throws(() => parseQualityGateResult(JSON.stringify([{ summary: 'x' }]), 'anything'), QualityGateError)
 })
 
 test('parseQualityGateResult: a stray object before/after the JSON (model commentary) is recovered via the { ... } fallback', () => {
   const raw = `Here is the review:\n${JSON.stringify({ summary: 'ok', findings: [] })}\nLet me know if you want more detail.`
-  const result = parseQualityGateResult(raw)
+  const result = parseQualityGateResult(raw, 'anything')
   assert.equal(result.summary, 'ok')
 })
 
 test('parseQualityGateResult: no usable summary AND no findings throws QualityGateError', () => {
-  assert.throws(() => parseQualityGateResult(JSON.stringify({ summary: '', findings: [] })), QualityGateError)
+  assert.throws(() => parseQualityGateResult(JSON.stringify({ summary: '', findings: [] }), 'anything'), QualityGateError)
 })
 
 test('requirement: a finding with an unknown category is dropped, never invented/kept', () => {
   const raw = JSON.stringify({
     summary: 'x',
     findings: [
-      { category: 'tone_of_voice', excerpt: 'e', explanation: 'x', recommendation: 'y', needsVerification: false },
-      { category: 'structure', excerpt: 'e', explanation: 'x', recommendation: 'y', needsVerification: false },
+      { category: 'tone_of_voice', excerpt: 'some excerpt', explanation: 'x', recommendation: 'y', needsVerification: false },
+      { category: 'structure', excerpt: 'some excerpt', explanation: 'x', recommendation: 'y', needsVerification: false },
     ],
   })
-  const result = parseQualityGateResult(raw)
+  const result = parseQualityGateResult(raw, 'Original post text containing some excerpt verbatim.')
   assert.equal(result.findings.length, 1)
   assert.equal(result.findings[0].category, 'structure')
 })
 
 test('requirement: a finding missing excerpt/explanation/recommendation is dropped, never defaulted to empty strings', () => {
+  const originalText = 'Original post text containing e verbatim.'
   const raw = JSON.stringify({
     summary: 'x',
     findings: [
@@ -133,22 +135,25 @@ test('requirement: a finding missing excerpt/explanation/recommendation is dropp
       { category: 'structure', excerpt: 'e', explanation: 'x', recommendation: 'y', needsVerification: false },
     ],
   })
-  const result = parseQualityGateResult(raw)
+  const result = parseQualityGateResult(raw, originalText)
   assert.equal(result.findings.length, 1)
 })
 
 test('requirement: findings are capped at 5 even if the model returns more', () => {
+  const excerpts = Array.from({ length: 12 }, (_, i) => `excerpt ${i}`)
   const raw = JSON.stringify({
     summary: 'x',
-    findings: Array.from({ length: 12 }, (_, i) => ({
+    findings: excerpts.map((excerpt) => ({
       category: 'structure',
-      excerpt: `excerpt ${i}`,
+      excerpt,
       explanation: 'x',
       recommendation: 'y',
       needsVerification: false,
     })),
   })
-  const result = parseQualityGateResult(raw)
+  // The original text literally contains every excerpt the model returned, so the cap (not the new
+  // verbatim-excerpt check) is what's being exercised here.
+  const result = parseQualityGateResult(raw, excerpts.join(' — '))
   assert.equal(result.findings.length, 5)
 })
 
@@ -158,7 +163,7 @@ test('requirement: an overly long string in any field is clipped, not rejected o
     summary: huge,
     findings: [{ category: 'structure', excerpt: huge, explanation: huge, recommendation: huge, needsVerification: false }],
   })
-  const result = parseQualityGateResult(raw)
+  const result = parseQualityGateResult(raw, huge)
   assert.ok(result.summary.length < 5000)
   assert.ok(result.findings[0].excerpt.length < 5000)
   assert.ok(result.findings[0].explanation.length < 5000)
@@ -168,10 +173,80 @@ test('requirement: an overly long string in any field is clipped, not rejected o
 test('requirement: needsVerification is only ever true when the model explicitly says so — never inferred', () => {
   const raw = JSON.stringify({
     summary: 'x',
-    findings: [{ category: 'factuality', excerpt: 'e', explanation: 'x', recommendation: 'y' }],
+    findings: [{ category: 'factuality', excerpt: 'claim', explanation: 'x', recommendation: 'y', needsVerification: false }],
   })
-  const result = parseQualityGateResult(raw)
+  const result = parseQualityGateResult(raw, 'Original text with the claim in it.')
   assert.equal(result.findings[0].needsVerification, false)
+})
+
+// --- Regression: excerpt must be a real, verbatim substring of the checked text ---
+
+test('requirement: a finding whose excerpt is not a verbatim substring of the checked text is rejected, never kept', () => {
+  const raw = JSON.stringify({
+    summary: 'x',
+    findings: [
+      // Fabricated/paraphrased — not actually present in the original text.
+      { category: 'factuality', excerpt: 'something the model invented', explanation: 'x', recommendation: 'y', needsVerification: false },
+      // A real verbatim quote from the original text.
+      { category: 'structure', excerpt: 'real post text', explanation: 'x', recommendation: 'y', needsVerification: false },
+    ],
+  })
+  const result = parseQualityGateResult(raw, 'This is the real post text, nothing more.')
+  assert.equal(result.findings.length, 1)
+  assert.equal(result.findings[0].category, 'structure')
+})
+
+test('requirement: an excerpt that is merely a paraphrase (not a literal substring) is rejected even if closely related', () => {
+  const raw = JSON.stringify({
+    summary: 'x',
+    findings: [{ category: 'specificity', excerpt: 'helps businesses grow faster', explanation: 'x', recommendation: 'y', needsVerification: false }],
+  })
+  // The original text says "helps businesses grow" — "faster" was never there.
+  const result = parseQualityGateResult(raw, 'AI helps businesses grow across every industry.')
+  assert.equal(result.findings.length, 0)
+})
+
+test('requirement: an empty findings array survives untouched when the original text is checked for every excerpt', () => {
+  const result = parseQualityGateResult(JSON.stringify({ summary: 'Looks good, no issues.', findings: [] }), 'Some real post text.')
+  assert.equal(result.findings.length, 0)
+  assert.equal(result.summary, 'Looks good, no issues.')
+})
+
+// --- Regression: needsVerification must be a genuine boolean — a wrong type is rejected, never
+// silently coerced to false (a non-boolean "needsVerification" previously became `false`, which
+// would wrongly let an unverifiable claim be reported as a confirmed falsehood). ---
+
+test('requirement: needsVerification missing entirely is rejected — the finding is dropped, not defaulted to false', () => {
+  const raw = JSON.stringify({
+    summary: 'x',
+    findings: [{ category: 'factuality', excerpt: 'claim', explanation: 'x', recommendation: 'y' }],
+  })
+  const result = parseQualityGateResult(raw, 'Original text with the claim in it.')
+  assert.equal(result.findings.length, 0)
+})
+
+test('requirement: needsVerification as a string ("true") is rejected, never coerced to a boolean', () => {
+  const raw = JSON.stringify({
+    summary: 'x',
+    findings: [{ category: 'factuality', excerpt: 'claim', explanation: 'x', recommendation: 'y', needsVerification: 'true' }],
+  })
+  const result = parseQualityGateResult(raw, 'Original text with the claim in it.')
+  assert.equal(result.findings.length, 0)
+})
+
+test('requirement: needsVerification as a number or null is rejected, never silently treated as false', () => {
+  const raw = JSON.stringify({
+    summary: 'x',
+    findings: [
+      { category: 'factuality', excerpt: 'claim one', explanation: 'x', recommendation: 'y', needsVerification: 1 },
+      { category: 'factuality', excerpt: 'claim two', explanation: 'x', recommendation: 'y', needsVerification: null },
+      { category: 'factuality', excerpt: 'claim three', explanation: 'x', recommendation: 'y', needsVerification: true },
+    ],
+  })
+  const result = parseQualityGateResult(raw, 'Text with claim one, claim two and claim three.')
+  assert.equal(result.findings.length, 1)
+  assert.equal(result.findings[0].excerpt, 'claim three')
+  assert.equal(result.findings[0].needsVerification, true)
 })
 
 test('QUALITY_CATEGORIES covers all seven criteria named in the task', () => {
