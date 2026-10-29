@@ -26,6 +26,10 @@ yarn-error.log*
 # uploaded media (Social → Instagram image upload) — never committed, written at runtime
 /uploads/
 
+# Google Ads OAuth MVP bootstrap handoff file (the one-time refresh token file the OAuth callback
+# writes) — never committed, written at runtime. See lib/google-ads-oauth-token-store.ts.
+/secrets/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
