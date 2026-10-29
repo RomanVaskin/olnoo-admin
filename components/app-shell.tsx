@@ -23,6 +23,10 @@ import { SocialOverview } from '@/components/sections/social-overview'
 import { SocialView } from '@/components/sections/social-view'
 import { SocialAccountsView } from '@/components/sections/social-accounts-view'
 import { SocialCommentsView } from '@/components/sections/social-comments-view'
+import { ContentFactoryOverview } from '@/components/sections/content-factory-overview'
+import { ContentFactorySourcesView } from '@/components/sections/content-factory-sources-view'
+import { ContentFactoryItemsView } from '@/components/sections/content-factory-items-view'
+import { ContentFactoryAutomationView } from '@/components/sections/content-factory-automation-view'
 import { AdsView } from '@/components/sections/ads-view'
 import { SettingsView } from '@/components/sections/settings-view'
 import { ClientCrm } from '@/components/sections/client-crm'
@@ -76,6 +80,16 @@ const adminGroups: NavGroup[] = [
         id: 'social',
         status: 'active',
         children: [{ id: 'social-overview' }, { id: 'social-posts' }, { id: 'social-accounts' }, { id: 'social-comments' }],
+      },
+      {
+        id: 'content-factory',
+        status: 'active',
+        children: [
+          { id: 'content-factory-overview' },
+          { id: 'content-factory-sources' },
+          { id: 'content-factory-items' },
+          { id: 'content-factory-automation' },
+        ],
       },
       { id: 'ads', status: 'active' },
       { id: 'pr', status: 'soon' },
@@ -316,6 +330,24 @@ export function AppShell() {
           )}
           {active === 'social-comments' && (
             <SocialCommentsView project={project} onProjectChange={setProject} />
+          )}
+          {/* Контент-завод — a standalone module (own top-level menu entry), not nested under
+              Social: it only ever creates/prepares material and hands it to the EXISTING Social
+              Posts/Publications module to actually publish (see lib/content-factory-publish.ts).
+              Sources/materials/settings are all project-scoped, same "all" handling as Ads: each
+              screen itself shows a clear "pick a project" message rather than silently rendering
+              nothing when `project === 'all'`. */}
+          {active === 'content-factory-overview' && (
+            <ContentFactoryOverview project={project} onProjectChange={setProject} />
+          )}
+          {active === 'content-factory-sources' && (
+            <ContentFactorySourcesView project={project} onProjectChange={setProject} />
+          )}
+          {active === 'content-factory-items' && (
+            <ContentFactoryItemsView project={project} onProjectChange={setProject} />
+          )}
+          {active === 'content-factory-automation' && (
+            <ContentFactoryAutomationView project={project} onProjectChange={setProject} />
           )}
           {active === 'ads' && project !== 'all' && <AdsView project={project} />}
           {active === 'settings' && <SettingsView />}
