@@ -24,7 +24,8 @@ VISUAL THEME (interpret as a scene; do not render these words): ${theme}
 BRAND PROFILE (visual mood and constraints only; do not render its words):
 ${visualStyle}
 
-Compose a natural, specific scene with depth, believable light and material detail. Avoid generic stock-photo collage, gradients, floating shapes and text panels. For real-estate themes, prefer architecture, urban settings, buildings or interiors that fit the confirmed topic. Never depict an identifiable specific property as a real project without confirmation; use a generic, non-identifiable scene instead.
+Make the scene match the publication theme and the project's Brand Profile. Compose a realistic photograph with natural light, depth and believable material detail. Avoid generic stock-photo collage, gradients, floating shapes and text panels.
+Only for real-estate news or analysis: use a premium editorial real estate style. Prefer architecture, city panoramas, streets, residential developments or interiors relevant to the confirmed theme. Avoid close-up portraits of people and staged advertising scenes. Never depict an identifiable specific property as a real project without confirmation; use a generic, non-identifiable scene instead. For other topics, follow their own subject and Brand Profile without imposing real-estate imagery or style.
 The image must contain NO text, letters, digits, logos, signs, labels, interfaces, charts, diagrams or watermarks. Do not copy, imitate or reference any image from the source publication. Return only the image.`
 }
 
