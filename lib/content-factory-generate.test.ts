@@ -57,6 +57,33 @@ test('requirement: the prompt flags substantial copied wording for manual review
   assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /substantially copies the source's wording, set "needsReview": true/i)
 })
 
+test('Telegram format: body contains the visible title, short paragraphs, emoji subheadings, and bullets', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  assert.match(p, /publisher sends "body" alone, so put the exact "title" as its first line/i)
+  assert.match(p, /short paragraphs/i)
+  assert.match(p, /emoji-led subheadings/i)
+  assert.match(p, /plain-text bullets \(•\)/i)
+  assert.match(p, /practical takeaway easy to find/i)
+})
+
+test('Telegram format: default length and emoji density yield to the project Brand Profile', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  assert.match(p, /1200–1800 characters in "body" by default, including the title, source URL, and any CTA/i)
+  assert.match(p, /different length if the project's Brand Profile specifies one/i)
+  assert.match(p, /shorter useful post rather than padding it/i)
+  assert.match(p, /3–6 relevant emojis across the whole post by default/i)
+  assert.match(p, /rather than in every paragraph/i)
+  assert.match(p, /Brand Profile calls for fewer or none, follow it/i)
+  assert.doesNotMatch(p, /AURELMAR/i)
+})
+
+test('Telegram format: plain text avoids markup that the current publisher would send literally', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  assert.match(p, /publisher sends plain text without a formatting parse mode/i)
+  assert.match(p, /do not use raw Markdown or HTML for bold, headings, links, or lists/i)
+  assert.match(p, /markers would appear literally/i)
+})
+
 test('buildContentFactoryPrompt includes source text, source URL, and the project context block', () => {
   const prompt = buildContentFactoryPrompt({ sourceText: 'Original post text', sourceUrl: 'https://t.me/x/1', contextBlock: 'CTX-BLOCK' })
   assert.ok(prompt.includes('Original post text'))
