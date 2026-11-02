@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Pool } from 'pg'
 import { checkSourceNow } from './content-factory-check.ts'
-import { createSource, getSource } from './content-factory-sources.ts'
+import { createSource, getSource, type ContentFactorySource } from './content-factory-sources.ts'
 import { listItems } from './content-factory-items.ts'
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://olnoo_admin:CHANGE_ME@localhost:5432/olnoo_admin'
@@ -40,9 +40,9 @@ async function withDb(t: import('node:test').TestContext, fn: (pool: Pool, makeP
   }
 }
 
-async function withFetch<T>(handler: () => { ok: boolean; status: number; text(): Promise<string> }, fn: () => Promise<T>): Promise<T> {
+async function withFetch<T>(handler: (url: string) => { ok: boolean; status: number; text(): Promise<string> }, fn: () => Promise<T>): Promise<T> {
   const original = globalThis.fetch
-  globalThis.fetch = (async () => handler()) as unknown as typeof fetch
+  globalThis.fetch = (async (url: string) => handler(url)) as unknown as typeof fetch
   try {
     return await fn()
   } finally {
@@ -56,6 +56,53 @@ const SAMPLE_HTML = `<div class="tgme_widget_message_wrap">
     <time datetime="2026-01-01T10:00:00+00:00">10:00</time>
   </div>
 </div>`
+
+test('checkSourceNow normalizes all supported Telegram address formats before fetching', async () => {
+  for (const address of ['alexander_realty', '@alexander_realty', 'https://t.me/alexander_realty']) {
+    let fetchedUrl = ''
+    let recordedError = 'not checked'
+    const pool = {
+      query: async (sql: string, params: unknown[]) => {
+        if (sql.startsWith('INSERT INTO content_factory_items')) return { rows: [] }
+        if (sql.startsWith('UPDATE content_factory_sources')) {
+          recordedError = params[0] as string
+          return { rows: [] }
+        }
+        throw new Error(`Unexpected query: ${sql}`)
+      },
+    } as unknown as Pool
+    const source = { id: 'source-1', projectId: 1, type: 'telegram', handle: address } as ContentFactorySource
+
+    const result = await withFetch((url) => {
+      fetchedUrl = url
+      return { ok: true, status: 200, text: async () => SAMPLE_HTML }
+    }, () => checkSourceNow(pool, source))
+
+    assert.equal(result.error, '', address)
+    assert.equal(recordedError, '', address)
+    assert.equal(fetchedUrl, 'https://t.me/s/alexander_realty', address)
+  }
+})
+
+test('checkSourceNow records a clear error for an invalid Telegram address without fetching', async () => {
+  let recordedError = ''
+  const pool = {
+    query: async (sql: string, params: unknown[]) => {
+      assert.match(sql, /^UPDATE content_factory_sources/)
+      recordedError = params[0] as string
+      return { rows: [] }
+    },
+  } as unknown as Pool
+  const source = { id: 'source-1', projectId: 1, type: 'telegram', handle: 'https://example.com/channel' } as ContentFactorySource
+
+  const result = await withFetch(() => {
+    throw new Error('Invalid address must not be fetched')
+  }, () => checkSourceNow(pool, source))
+
+  assert.match(result.error, /Invalid Telegram channel address/)
+  assert.equal(recordedError, result.error)
+  assert.deepEqual(result.created, [])
+})
 
 test('checkSourceNow: fetches, stores new items, and records success on the source', async (t) => {
   await withDb(t, async (pool, makeProject) => {

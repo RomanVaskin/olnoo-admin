@@ -1,6 +1,6 @@
 import type { Pool } from 'pg'
 import { type ContentFactorySource, ContentFactorySourceError, recordSourceCheckResult } from './content-factory-sources.ts'
-import { fetchPublicTelegramChannel } from './content-factory-telegram-source.ts'
+import { fetchPublicTelegramChannel, normalizeTelegramHandle } from './content-factory-telegram-source.ts'
 import { storeNewSourceMessages, type ContentFactoryItem } from './content-factory-items.ts'
 
 // Контент-завод — "Проверить сейчас" / periodic sweep. Pool-injected, no `@/` imports.
@@ -19,7 +19,10 @@ export async function checkSourceNow(pool: Pool, source: ContentFactorySource): 
     if (source.type !== 'telegram') {
       throw new ContentFactorySourceError(`Source type "${source.type}" is not implemented yet — only "telegram" is.`)
     }
-    const handle = source.handle.trim()
+    const handle = normalizeTelegramHandle(source.handle)
+    if (!handle) {
+      throw new ContentFactorySourceError('Invalid Telegram channel address. Use a channel username, @username, or https://t.me/username.')
+    }
     const messages = await fetchPublicTelegramChannel(handle)
     const created = await storeNewSourceMessages(pool, source.projectId, source.id, messages)
     await recordSourceCheckResult(pool, source.id, source.projectId, '')
