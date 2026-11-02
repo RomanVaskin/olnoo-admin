@@ -51,6 +51,7 @@ export const en = {
     'content-factory-items': 'Materials',
     'content-factory-automation': 'Automation',
     ads: 'Ads',
+    'ai-router': 'AI Router',
     pr: 'PR',
     analytics: 'Analytics',
     settings: 'Settings',
@@ -904,6 +905,15 @@ export const en = {
     metricNew: 'New',
     metricInProgress: 'In progress',
     metricWon: 'Won',
+  },
+  aiRouter: {
+    description: 'Providers, availability, and actual model assignments from AI Router.',
+    providers: 'Providers', provider: 'Provider', connection: 'Connection', availability: 'Availability',
+    connected: 'Connected', disconnected: 'Not connected', available: 'Available', unavailable: 'Unavailable', unknown: 'Not checked',
+    lastCheck: 'Last check', lastError: 'Last error', check: 'Check', checking: 'Checking…',
+    checkNote: 'A check makes a real model request', loadError: 'Could not load AI Router data.',
+    assignments: 'Model assignments', moduleTask: 'Module · task', model: 'Model', models: 'Model catalog', purpose: 'Purpose',
+    costs: 'Costs', balances: 'Balances',
   },
   contentFactory: {
     selectProjectHint: 'Select a project to use the Content Factory.',

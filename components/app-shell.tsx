@@ -28,6 +28,7 @@ import { ContentFactorySourcesView } from '@/components/sections/content-factory
 import { ContentFactoryItemsView } from '@/components/sections/content-factory-items-view'
 import { ContentFactoryAutomationView } from '@/components/sections/content-factory-automation-view'
 import { AdsView } from '@/components/sections/ads-view'
+import { AiRouterView } from '@/components/sections/ai-router-view'
 import { SettingsView } from '@/components/sections/settings-view'
 import { ClientCrm } from '@/components/sections/client-crm'
 import {
@@ -92,6 +93,7 @@ const adminGroups: NavGroup[] = [
         ],
       },
       { id: 'ads', status: 'active' },
+      { id: 'ai-router', status: 'active' },
       { id: 'pr', status: 'soon' },
       { id: 'analytics', status: 'soon' },
     ],
@@ -350,6 +352,7 @@ export function AppShell() {
             <ContentFactoryAutomationView project={project} onProjectChange={setProject} />
           )}
           {active === 'ads' && project !== 'all' && <AdsView project={project} />}
+          {active === 'ai-router' && mode === 'admin' && <AiRouterView />}
           {active === 'settings' && <SettingsView />}
 
           {/* Client */}
