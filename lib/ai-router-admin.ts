@@ -18,6 +18,8 @@ const catalog = z.object({
 })
 
 export type AiRouterProvider = z.infer<typeof providerName>
+export type AiRouterProviderStatus = z.infer<typeof status>
+export type AiRouterCatalog = z.infer<typeof catalog>
 
 /** This API has no browser caller: the separate Super Admin token stays on trusted servers. */
 export function isAiRouterSuperAdmin(req: Request): boolean {

@@ -61,6 +61,7 @@ export const ru: Messages = {
     'content-factory-items': 'Материалы',
     'content-factory-automation': 'Автоматизация',
     ads: 'Реклама',
+    'ai-router': 'AI Router',
     pr: 'PR',
     analytics: 'Аналитика',
     settings: 'Настройки',
@@ -915,6 +916,15 @@ export const ru: Messages = {
     metricNew: 'Новые',
     metricInProgress: 'В работе',
     metricWon: 'Выиграно',
+  },
+  aiRouter: {
+    description: 'Провайдеры, доступность и фактические назначения моделей из AI Router.',
+    providers: 'Провайдеры', provider: 'Провайдер', connection: 'Подключение', availability: 'Доступность',
+    connected: 'Подключён', disconnected: 'Не подключён', available: 'Доступен', unavailable: 'Недоступно', unknown: 'Не проверено',
+    lastCheck: 'Последняя проверка', lastError: 'Последняя ошибка', check: 'Проверить', checking: 'Проверка…',
+    checkNote: 'Проверка выполняет реальный запрос к модели', loadError: 'Не удалось получить данные AI Router.',
+    assignments: 'Назначения моделей', moduleTask: 'Модуль · задача', model: 'Модель', models: 'Каталог моделей', purpose: 'Назначение',
+    costs: 'Расходы', balances: 'Балансы',
   },
   contentFactory: {
     selectProjectHint: 'Выберите проект, чтобы работать с Контент-заводом.',
