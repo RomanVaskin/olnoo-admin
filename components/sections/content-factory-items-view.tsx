@@ -39,6 +39,7 @@ type Item = {
   reviewReason: string
   error: string
   socialPostId: string | null
+  imageFilename: string
   createdAt: string
 }
 
@@ -61,7 +62,7 @@ function ItemDetail({
   const { t } = useI18n()
   const [title, setTitle] = useState(item.generatedTitle)
   const [text, setText] = useState(item.generatedText)
-  const [busy, setBusy] = useState<'generate' | 'publish' | 'save' | 'approve' | 'reject' | null>(null)
+  const [busy, setBusy] = useState<'generate' | 'publish' | 'save' | 'approve' | 'reject' | 'image' | 'deleteImage' | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -100,6 +101,12 @@ function ItemDetail({
   }
   function publish() {
     call(`/api/content-factory/items/${item.id}/publish`, { method: 'POST' }, 'publish')
+  }
+  function generateImage() {
+    call(`/api/content-factory/items/${item.id}/image`, { method: 'POST' }, 'image')
+  }
+  function deleteImage() {
+    call(`/api/content-factory/items/${item.id}/image`, { method: 'DELETE' }, 'deleteImage')
   }
 
   return (
@@ -161,6 +168,30 @@ function ItemDetail({
               </>
             ) : (
               <p className="text-sm text-muted-foreground">{t.contentFactory.items.noText}</p>
+            )}
+
+            {item.imageFilename && (
+              <img
+                src={`/api/content-factory/items/${item.id}/image?project=${encodeURIComponent(project)}&v=${encodeURIComponent(item.imageFilename)}`}
+                alt={t.contentFactory.items.imageAlt}
+                className="aspect-square w-full border border-hairline object-cover"
+              />
+            )}
+            {item.generatedText && (item.status === 'ready' || item.status === 'needs_review') && !item.socialPostId && (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={generateImage}
+                  disabled={busy !== null}
+                  className="label-mono border border-hairline px-3 py-2 text-foreground disabled:opacity-50"
+                >
+                  {busy === 'image' ? t.contentFactory.items.generatingImage : item.imageFilename ? t.contentFactory.items.regenerateImage : t.contentFactory.items.generateImage}
+                </button>
+                {item.imageFilename && (
+                  <button onClick={deleteImage} disabled={busy !== null} className="label-mono border border-hairline px-3 py-2 text-destructive disabled:opacity-50">
+                    {t.contentFactory.items.deleteImage}
+                  </button>
+                )}
+              </div>
             )}
 
             {error && <p className="text-sm text-destructive">{error}</p>}

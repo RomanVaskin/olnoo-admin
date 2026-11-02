@@ -29,6 +29,7 @@ export type ContentFactoryItem = {
   reviewReason: string
   error: string
   socialPostId: string | null
+  imageFilename: string
   createdAt: string
   updatedAt: string
 }
@@ -49,6 +50,7 @@ function fromRow(row: Record<string, unknown>): ContentFactoryItem {
     reviewReason: (row.review_reason as string) ?? '',
     error: (row.error as string) ?? '',
     socialPostId: (row.social_post_id as string) ?? null,
+    imageFilename: (row.image_filename as string) ?? '',
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   }
@@ -191,4 +193,12 @@ export async function setItemSocialPostId(pool: Pool, projectId: number, id: str
     id,
     projectId,
   ])
+}
+
+export async function setItemImageFilename(pool: Pool, projectId: number, id: string, filename: string): Promise<ContentFactoryItem | null> {
+  const { rows } = await pool.query(
+    "UPDATE content_factory_items SET image_filename = $1, updated_at = now() WHERE id = $2 AND project_id = $3 AND status IN ('ready', 'needs_review') AND social_post_id IS NULL RETURNING *",
+    [filename, id, projectId],
+  )
+  return rows[0] ? fromRow(rows[0]) : null
 }

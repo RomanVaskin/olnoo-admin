@@ -4,6 +4,7 @@ import { syncPostStatusFromPublications } from '@/lib/social'
 import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
 import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
 import { resolvePendingAutoForwardForPublication } from '@/lib/social-comments'
+import { sendTelegramPhotoWithText } from '@/lib/social-telegram-photo'
 
 // Server-side only. TELEGRAM_BOT_TOKEN must never be sent to the browser — it is read here and
 // only here, inside a function called exclusively from a server route handler.
@@ -58,6 +59,7 @@ export async function publishSocialPublicationToTelegram(
   pool: Pool,
   id: string,
   projectSlug: string | null,
+  photo?: Buffer,
 ): Promise<SocialTelegramResult> {
   const projectId = await resolveProjectId(projectSlug)
   if (!projectId) return { error: 'a known project is required', status: 400 }
@@ -128,7 +130,7 @@ export async function publishSocialPublicationToTelegram(
   const chatId = chatIdFor(account.username)
 
   // Atomic claim, right before the one irreversible call — see claimPublicationForSending's own
-  // comment. Every pre-flight check above is a safe-to-repeat local read; only sendMessage itself
+  // comment. Every pre-flight check above is a safe-to-repeat local read; only the Bot API send
   // can actually cause a duplicate, so only it needs to be guarded.
   const claim = await claimPublicationForSending(pool, id, projectId)
   if (!claim.claimed) return publicationClaimConflictResult(claim.currentStatus)
@@ -136,7 +138,14 @@ export async function publishSocialPublicationToTelegram(
   let telegramError: string | null = null
   let messageId: number | null = null
   let sendOutcomeUnknown = false
-  try {
+  if (photo) {
+    const result = await sendTelegramPhotoWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, image: photo })
+    if (result.kind === 'sent') messageId = result.messageId
+    else {
+      telegramError = result.error
+      sendOutcomeUnknown = result.kind === 'unknown'
+    }
+  } else try {
     const res = await fetch(`${TELEGRAM_API_BASE}/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

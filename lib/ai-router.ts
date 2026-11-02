@@ -19,6 +19,34 @@ export type AiRouterResponse = {
 
 export class AiRouterError extends Error {}
 
+/** Uses the Router's existing text-to-image endpoint; source images are never sent. */
+export async function callAiRouterImage(prompt: string): Promise<Buffer> {
+  const baseUrl = process.env.AI_ROUTER_URL || 'http://127.0.0.1:3010'
+  const token = process.env.OLNOO_ROUTER_TOKEN
+  const res = await fetch(`${baseUrl}/v1/images/generate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ prompt, size: '1024x1024' }),
+  }).catch((err) => {
+    throw new AiRouterError(`Could not reach AI Router: ${err instanceof Error ? err.message : String(err)}`)
+  })
+  if (!res.ok) throw new AiRouterError(`AI Router image request failed (${res.status}).`)
+
+  const data = await res.json().catch(() => null) as { imageBase64?: unknown; mimeType?: unknown } | null
+  if (data?.mimeType !== 'image/png' || typeof data.imageBase64 !== 'string' ||
+      data.imageBase64.length > 20 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data.imageBase64)) {
+    throw new AiRouterError('AI Router returned invalid image data.')
+  }
+  const bytes = Buffer.from(data.imageBase64, 'base64')
+  if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new AiRouterError('AI Router returned an invalid PNG image.')
+  }
+  return bytes
+}
+
 /**
  * SEO bulk tasks (relevance cleanup, clustering) run on DeepSeek Flash only: explicit provider, no
  * fallback (the Router never falls back from deepseek, and a different provider in the answer is
