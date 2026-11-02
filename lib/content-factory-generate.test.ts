@@ -166,6 +166,32 @@ test('hasVerbatimOverlap: forces needsReview true in parseGenerationResult even 
   assert.ok(/verbatim/i.test(result.reviewReason))
 })
 
+test('Content Factory uses the text preset while retaining Brand Profile, JSON parsing and review flag', async () => {
+  const pool = { query: async (sql: string) => {
+    if (sql.includes('FROM projects')) return { rows: [{ name: 'Example', domain: 'example.com' }] }
+    if (sql.includes('FROM project_brand_voice')) return { rows: [{ target_audience: 'Readers', tone_style: 'Measured', verified_facts: '', constraints: '', preferred_cta: '' }] }
+    return { rows: [] }
+  } } as unknown as Pool
+  const originalFetch = globalThis.fetch
+  let sent: Record<string, unknown> = {}
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    sent = JSON.parse(init.body as string)
+    return new Response(JSON.stringify({ provider: 'deepseek', content: JSON.stringify({ title: 'Analysis', body: 'Independent text', needsReview: true, reviewReason: 'Check a claim' }) }))
+  }) as typeof fetch
+  try {
+    const result = await generateContentFactoryArticle(pool, 1, { sourceText: 'Original report', sourceUrl: 'https://t.me/source/1' })
+    assert.equal(sent.service, 'content-factory')
+    assert.equal('provider' in sent, false)
+    assert.equal('model' in sent, false)
+    const prompt = (sent.messages as Array<{ content: string }>).map((message) => message.content).join('\n')
+    assert.match(prompt, /Measured/)
+    assert.match(prompt, /Original report/)
+    assert.deepEqual(result, { title: 'Analysis', body: 'Independent text\n\nИсточник: https://t.me/source/1', needsReview: true, reviewReason: 'Check a claim' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 // --- DB + AI Router integration (skipped without a reachable Postgres) ---
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://olnoo_admin:CHANGE_ME@localhost:5432/olnoo_admin'

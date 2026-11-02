@@ -38,6 +38,17 @@ test('SEO bulk route pins the request to deepseek, no fallback, reasoning off', 
   assert.deepEqual(body.metadata, { application: 'olnoo-admin', task: 'seo-test' })
 })
 
+test('service preset request sends service without choosing provider, model, reasoning or fallback', async () => {
+  const { body, result } = await withFetch({ content: '{"title":"t"}', provider: 'deepseek' }, () =>
+    callAiRouter(messages, { service: 'content-factory', task: 'content-factory-generate', temperature: 0.4 }),
+  )
+  assert.equal(result, '{"title":"t"}')
+  assert.equal(body.service, 'content-factory')
+  for (const field of ['provider', 'model', 'reasoningMode', 'allowFallback']) assert.equal(field in body, false)
+  assert.equal(body.temperature, 0.4)
+  assert.deepEqual(body.metadata, { application: 'olnoo-admin', task: 'content-factory-generate' })
+})
+
 test('a pinned request answered by another provider is rejected, never used', async () => {
   await assert.rejects(
     withFetch({ content: 'from sonnet', provider: 'anthropic', fallbackUsed: true }, () => callAiRouter(messages, SEO_BULK_ROUTE)),

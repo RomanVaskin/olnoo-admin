@@ -181,7 +181,7 @@ export async function generateContentFactoryArticle(pool: Pool, projectId: numbe
       { role: 'system', content: CONTENT_FACTORY_SYSTEM_PROMPT },
       { role: 'user', content: buildContentFactoryPrompt({ sourceText, sourceUrl: input.sourceUrl, contextBlock }) },
     ],
-    { temperature: 0.4, task: 'content-factory-generate' },
+    { service: 'content-factory', temperature: 0.4, task: 'content-factory-generate' },
   )
 
   return parseGenerationResult(content, sourceText, input.sourceUrl)
