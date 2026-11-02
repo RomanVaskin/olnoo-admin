@@ -58,6 +58,8 @@ export const SEO_BULK_ROUTE = { provider: 'deepseek', allowFallback: false, reas
 export async function callAiRouter(
   messages: AiRouterMessage[],
   opts: {
+    /** Optional fixed service preset selected by the Router; this request then omits provider/model routing. */
+    service?: string
     maxTokens?: number
     temperature?: number
     /** Provider-neutral reasoning level; omitted = the Router's/provider's default (unchanged behaviour). */
@@ -82,13 +84,12 @@ export async function callAiRouter(
     body: JSON.stringify({
       taskType: 'reasoning',
       messages,
-      provider: opts.provider ?? 'openai',
-      model: null,
+      ...(opts.service ? { service: opts.service } : { provider: opts.provider ?? 'openai', model: null }),
       temperature: opts.temperature ?? 0.1,
       maxTokens: opts.maxTokens ?? 12000,
-      allowFallback: opts.allowFallback ?? true,
+      ...(!opts.service ? { allowFallback: opts.allowFallback ?? true } : {}),
       webSearch: false,
-      ...(opts.reasoningMode ? { reasoningMode: opts.reasoningMode } : {}),
+      ...(!opts.service && opts.reasoningMode ? { reasoningMode: opts.reasoningMode } : {}),
       metadata: { application: 'olnoo-admin', ...(opts.task ? { task: opts.task } : {}) },
     }),
   }).catch((err) => {
