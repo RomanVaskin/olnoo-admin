@@ -4,6 +4,7 @@ import { createSocialPost, getSocialPost } from '@/lib/social'
 import { publishSocialPublicationToTelegram } from '@/lib/social-telegram'
 import { getItem, setItemSocialPostId, setItemStatus, canPublish, type ContentFactoryItem } from '@/lib/content-factory-items'
 import { telegramPublicationOutcome } from './content-factory-publish-outcome.ts'
+import { readContentFactoryCover } from './content-factory-image.ts'
 
 // Контент-завод — hands a generated item off to the EXISTING Social Posts/Publications module
 // to actually reach Telegram. This file creates nothing new on the publishing side: it calls the
@@ -48,6 +49,15 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
     return { error: 'This item has no prepared text yet — generate one first.', status: 400 }
   }
 
+  let photo: Buffer | undefined
+  if (item.imageFilename) {
+    try {
+      photo = await readContentFactoryCover(projectSlug, item.imageFilename)
+    } catch {
+      return { error: 'The generated image is unavailable. Regenerate or delete it before publishing.', status: 500 }
+    }
+  }
+
   let socialPostId = item.socialPostId
   if (!socialPostId) {
     const created = await createSocialPost(projectSlug, {
@@ -73,7 +83,7 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
 
   await setItemStatus(pool, projectId, item.id, { status: 'scheduled' })
 
-  const result = await publishSocialPublicationToTelegram(pool, publicationId, projectSlug)
+  const result = await publishSocialPublicationToTelegram(pool, publicationId, projectSlug, photo)
   const outcome = telegramPublicationOutcome(result)
   if (!outcome.published) {
     // Left as 'failed' rather than reverting to 'ready' so the queue makes the problem visible;
