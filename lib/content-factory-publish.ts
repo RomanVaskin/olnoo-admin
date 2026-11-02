@@ -3,6 +3,7 @@ import { resolveProjectId } from '@/lib/crm'
 import { createSocialPost, getSocialPost } from '@/lib/social'
 import { publishSocialPublicationToTelegram } from '@/lib/social-telegram'
 import { getItem, setItemSocialPostId, setItemStatus, canPublish, type ContentFactoryItem } from '@/lib/content-factory-items'
+import { telegramPublicationOutcome } from './content-factory-publish-outcome.ts'
 
 // Контент-завод — hands a generated item off to the EXISTING Social Posts/Publications module
 // to actually reach Telegram. This file creates nothing new on the publishing side: it calls the
@@ -73,15 +74,15 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
   await setItemStatus(pool, projectId, item.id, { status: 'scheduled' })
 
   const result = await publishSocialPublicationToTelegram(pool, publicationId, projectSlug)
-  if ('error' in result) {
+  const outcome = telegramPublicationOutcome(result)
+  if (!outcome.published) {
     // Left as 'failed' rather than reverting to 'ready' so the queue makes the problem visible;
     // `socialPostId` is already set at this point, so a retry click bypasses the status gate
     // above entirely and simply calls `publishSocialPublicationToTelegram` again on the same
-    // publication row — which itself refuses a genuinely concurrent duplicate send and otherwise
-    // just retries the last (failed, or unconfirmed/"unknown") outcome, never creating a second
-    // post or publication row.
-    await setItemStatus(pool, projectId, item.id, { status: 'failed', error: result.error })
-    return { error: result.error, status: result.status }
+    // publication row. The publisher permits retrying a confirmed failure but refuses a
+    // concurrent or unconfirmed send while its row remains 'publishing'.
+    await setItemStatus(pool, projectId, item.id, { status: 'failed', error: outcome.error })
+    return { error: outcome.error, status: outcome.status }
   }
 
   const updated = await setItemStatus(pool, projectId, item.id, { status: 'published' })
