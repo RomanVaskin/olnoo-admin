@@ -13,18 +13,35 @@ import { saveProjectBrandVoice } from './project-brand-voice.ts'
 
 // --- Pure: prompt / parser ---
 
-test('requirement: the system prompt forbids reposting/paraphrasing and requires an independent rewrite', () => {
-  assert.ok(/never a repost, translation, or light paraphrase/i.test(CONTENT_FACTORY_SYSTEM_PROMPT))
-  assert.ok(/independent/i.test(CONTENT_FACTORY_SYSTEM_PROMPT))
+test('requirement: the prompt asks for an independent analytical article with its own structure and a practical takeaway', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  assert.match(p, /first identify the concrete facts/i)
+  assert.match(p, /never a repost, translation, summary, or light paraphrase/i)
+  assert.match(p, /new title, opening, and structure/i)
+  assert.match(p, /why it matters to the target audience/i)
+  assert.match(p, /practical takeaway that follows from the supported facts/i)
 })
 
-test('requirement: the system prompt requires flagging unconfirmed price/yield/legislation/investment claims for review', () => {
+test('requirement: the prompt separates interpretation from evidence and forbids invented claims', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
-  assert.ok(/price/i.test(p))
-  assert.ok(/yield|profitability/i.test(p))
-  assert.ok(/legislation/i.test(p))
-  assert.ok(/investment/i.test(p))
-  assert.ok(p.includes('needsReview'))
+  assert.match(p, /never invent facts, numbers, prices, statistics, laws, outcomes, or claims/i)
+  assert.match(p, /distinguish source-reported facts from your interpretation/i)
+  assert.match(p, /if the facts do not support a specific consequence or recommendation/i)
+})
+
+test('requirement: the prompt flags unconfirmed price, yield, statistics, legislation, and investment claims', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  assert.match(p, /unconfirmed PRICE, YIELD\/PROFITABILITY, STATISTIC, LEGISLATION claim, or INVESTMENT recommendation/i)
+  assert.match(p, /"needsReview": true with a specific "reviewReason"/i)
+  assert.match(p, /do not derive new figures or forecasts/i)
+})
+
+test('requirement: the prompt removes source promotion while using the project Brand Profile', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  assert.match(p, /remove the SOURCE channel's advertising, self-promotion, promotional links, and calls to action/i)
+  assert.match(p, /do not carry over its contact details or sales pitch/i)
+  assert.match(p, /use PROJECT CONTEXT's Brand Profile/i)
+  assert.match(p, /never force one or copy the source's CTA/i)
 })
 
 test('requirement: the system prompt forbids reusing a source image', () => {
@@ -32,7 +49,12 @@ test('requirement: the system prompt forbids reusing a source image', () => {
 })
 
 test('requirement: the system prompt requires citing the source URL', () => {
-  assert.ok(CONTENT_FACTORY_SYSTEM_PROMPT.includes('SOURCE URL'))
+  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /include SOURCE URL itself/i)
+  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /SOURCE URL is the only source link to keep by default/i)
+})
+
+test('requirement: the prompt flags substantial copied wording for manual review', () => {
+  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /substantially copies the source's wording, set "needsReview": true/i)
 })
 
 test('buildContentFactoryPrompt includes source text, source URL, and the project context block', () => {
