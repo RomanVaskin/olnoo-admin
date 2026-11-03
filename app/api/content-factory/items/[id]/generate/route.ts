@@ -32,8 +32,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const flaggedIssues = item.aiReview?.issues ?? []
     const isTargetedRevision = !!item.generatedText.trim() && flaggedIssues.length > 0
       && (item.aiReview?.risk === 'high' || item.aiReview?.risk === 'medium')
-      && item.aiReview.reviewedTitle === item.generatedTitle
-      && item.aiReview.reviewedText === item.generatedText
+      && item.aiReview?.reviewedTitle === item.generatedTitle
+      && item.aiReview?.reviewedText === item.generatedText
     const generated = isTargetedRevision
       ? await reviseContentFactoryArticle(pool, projectId, {
           sourceText: item.originalText, sourceUrl: item.originalUrl,
