@@ -2,7 +2,7 @@ import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { createSocialPost, getSocialPost } from '@/lib/social'
 import { publishSocialPublicationToTelegram } from '@/lib/social-telegram'
-import { getItem, setItemSocialPostId, setItemStatus, canPublish, hasPassedAiReview, type ContentFactoryItem } from '@/lib/content-factory-items'
+import { getItem, setItemSocialPostId, setItemStatus, canPublish, hasPassedAiReview, hasApprovedPartnerCopy, claimPartnerCopyPublish, type ContentFactoryItem } from '@/lib/content-factory-items'
 import { telegramPublicationOutcome } from './content-factory-publish-outcome.ts'
 import { readContentFactoryCover } from './content-factory-image.ts'
 
@@ -42,18 +42,25 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
   const item = await getItem(pool, projectId, itemId)
   if (!item) return { error: 'not found', status: 404 }
 
-  if (!item.socialPostId && !canPublish(item.status)) {
+  const isCopy = item.processingMode === 'copy'
+  if (!item.socialPostId && !canPublish(item.status) && !(isCopy && item.status === 'failed')) {
     return { error: `Item is not ready to publish (status: ${item.status}). Approve it first.`, status: 409 }
   }
   if (!item.generatedText.trim()) {
     return { error: 'This item has no prepared text yet — generate one first.', status: 400 }
   }
-  if (!hasPassedAiReview(item)) {
-    return { error: 'A successful AI review of the current material is required before publication.', status: 409 }
+  if (isCopy ? !hasApprovedPartnerCopy(item) : !hasPassedAiReview(item)) {
+    return { error: isCopy ? 'Partner copy requires confirmed rights and manual approval of the unchanged original text.' : 'A successful AI review of the current material is required before publication.', status: 409 }
+  }
+  if (isCopy && (item.generatedText !== item.originalText || item.generatedText !== item.generatedText.trim())) {
+    return { error: 'Partner text differs from the approved source preview. Publication is blocked.', status: 409 }
+  }
+  if (isCopy && Array.from(item.originalText).length > 4096) {
+    return { error: 'The original text exceeds Telegram\'s 4096-character limit and cannot be copied without changes.', status: 422 }
   }
 
   let photo: Buffer | undefined
-  if (item.imageFilename) {
+  if (item.imageFilename && !isCopy) {
     try {
       photo = await readContentFactoryCover(projectSlug, item.imageFilename)
     } catch {
@@ -63,13 +70,25 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
 
   let socialPostId = item.socialPostId
   if (!socialPostId) {
-    const created = await createSocialPost(projectSlug, {
-      topic: item.generatedTitle || 'Content Factory',
-      body: item.generatedText,
-      channels: ['telegram'],
-      status: 'ready',
-    })
-    if ('error' in created) return { error: created.error, status: created.status }
+    if (isCopy && !(await claimPartnerCopyPublish(pool, projectId, item.id))) {
+      return { error: 'This partner copy is already being published or has changed.', status: 409 }
+    }
+    let created: Awaited<ReturnType<typeof createSocialPost>>
+    try {
+      created = await createSocialPost(projectSlug, {
+        topic: item.generatedTitle || 'Content Factory',
+        body: item.generatedText,
+        channels: ['telegram'],
+        status: 'ready',
+      })
+    } catch (err) {
+      if (isCopy) await setItemStatus(pool, projectId, item.id, { status: 'failed', error: 'Could not create the Social post.' })
+      throw err
+    }
+    if ('error' in created) {
+      if (isCopy) await setItemStatus(pool, projectId, item.id, { status: 'failed', error: created.error })
+      return { error: created.error, status: created.status }
+    }
     socialPostId = created.row.id as string
     await setItemSocialPostId(pool, projectId, item.id, socialPostId)
   }

@@ -22,6 +22,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const item = await getItem(pool, projectId, id)
   if (!item) return NextResponse.json({ error: 'not found' }, { status: 404 })
+  if (item.processingMode === 'copy') return NextResponse.json({ error: 'Partner copy does not use AI text generation.' }, { status: 409 })
   if (!canGenerate(item.status)) {
     return NextResponse.json({ error: `Cannot generate from status "${item.status}".` }, { status: 409 })
   }

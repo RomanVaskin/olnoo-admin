@@ -1,6 +1,7 @@
 import type { Pool } from 'pg'
 import { randomUUID } from 'node:crypto'
 import type { RawSourceMessage } from './content-factory-telegram-source.ts'
+import type { SourceProcessingMode } from './content-factory-sources.ts'
 
 // Контент-завод — the discovered-publications queue ("Материалы"). Pool-injected, no `@/`
 // imports, project-scoped like lib/content-factory-sources.ts.
@@ -45,6 +46,9 @@ export type ContentFactoryItem = {
   originalUrl: string
   originalText: string
   originalImageUrls: string[]
+  processingMode: SourceProcessingMode
+  copyPermissionConfirmed: boolean
+  copyApprovedAt: string | null
   originalPublishedAt: string | null
   status: ItemStatus
   generatedTitle: string
@@ -67,6 +71,9 @@ function fromRow(row: Record<string, unknown>): ContentFactoryItem {
     originalUrl: (row.original_url as string) ?? '',
     originalText: (row.original_text as string) ?? '',
     originalImageUrls: ((row.original_image_urls as string) ?? '').split(',').filter(Boolean),
+    processingMode: row.processing_mode === 'copy' ? 'copy' : 'ai',
+    copyPermissionConfirmed: row.copy_permission_confirmed === true,
+    copyApprovedAt: (row.copy_approved_at as string) ?? null,
     originalPublishedAt: (row.original_published_at as string) ?? null,
     status: (row.status as ItemStatus) ?? 'new',
     generatedTitle: (row.generated_title as string) ?? '',
@@ -92,6 +99,7 @@ export async function storeNewSourceMessages(
   projectId: number,
   sourceId: string,
   messages: RawSourceMessage[],
+  sourcePolicy: { processingMode: SourceProcessingMode; copyPermissionConfirmed: boolean } = { processingMode: 'ai', copyPermissionConfirmed: false },
 ): Promise<ContentFactoryItem[]> {
   const created: ContentFactoryItem[] = []
   for (const msg of messages) {
@@ -99,11 +107,16 @@ export async function storeNewSourceMessages(
     const { rows } = await pool.query(
       `INSERT INTO content_factory_items (
          id, project_id, source_id, external_id, original_url, original_text,
-         original_image_urls, original_published_at, status
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new')
+         original_image_urls, original_published_at, status, generated_text, review_reason,
+         processing_mode, copy_permission_confirmed
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT (source_id, external_id) DO NOTHING
        RETURNING *`,
-      [id, projectId, sourceId, msg.externalId, msg.url, msg.text, msg.imageUrls.join(','), msg.publishedAt || null],
+      [id, projectId, sourceId, msg.externalId, msg.url, msg.text, msg.imageUrls.join(','), msg.publishedAt || null,
+        sourcePolicy.processingMode === 'copy' ? (msg.text ? 'needs_review' : 'failed') : 'new',
+        sourcePolicy.processingMode === 'copy' ? msg.text : '',
+        sourcePolicy.processingMode === 'copy' ? 'Compare the public preview text with the original Telegram post before approving; preview completeness is not verified.' : '',
+        sourcePolicy.processingMode, sourcePolicy.processingMode === 'copy' && sourcePolicy.copyPermissionConfirmed],
     )
     if (rows[0]) created.push(fromRow(rows[0]))
   }
@@ -168,6 +181,37 @@ export function canPublish(status: ItemStatus): boolean {
 
 export function canReject(status: ItemStatus): boolean {
   return status === 'new' || status === 'ready' || status === 'needs_review' || status === 'failed'
+}
+
+export function hasApprovedPartnerCopy(item: ContentFactoryItem): boolean {
+  return item.processingMode === 'copy' && item.copyPermissionConfirmed && !!item.copyApprovedAt
+    && !!item.originalText && item.generatedText === item.originalText && !item.imageFilename
+}
+
+/** Explicit human comparison with the original is required because the public HTML preview
+ * cannot prove it is complete. An atomic status/unchanged-text condition prevents stale approvals. */
+export async function approvePartnerCopy(pool: Pool, projectId: number, id: string): Promise<ContentFactoryItem | null> {
+  const { rows } = await pool.query(
+    `UPDATE content_factory_items SET status = 'ready', copy_approved_at = now(), updated_at = now()
+     WHERE id = $1 AND project_id = $2 AND processing_mode = 'copy'
+       AND copy_permission_confirmed = true AND status = 'needs_review'
+       AND original_text <> '' AND generated_text = original_text AND image_filename = ''
+     RETURNING *`, [id, projectId],
+  )
+  return rows[0] ? fromRow(rows[0]) : null
+}
+
+/** Serializes the first Social-post creation for a manually approved copy. */
+export async function claimPartnerCopyPublish(pool: Pool, projectId: number, id: string): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE content_factory_items SET status = 'scheduled', updated_at = now()
+     WHERE id = $1 AND project_id = $2 AND processing_mode = 'copy'
+       AND status IN ('ready', 'failed') AND social_post_id IS NULL
+       AND copy_permission_confirmed = true AND copy_approved_at IS NOT NULL
+       AND original_text <> '' AND generated_text = original_text AND image_filename = ''`,
+    [id, projectId],
+  )
+  return (rowCount ?? 0) === 1
 }
 
 export async function setItemStatus(

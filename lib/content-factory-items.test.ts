@@ -12,6 +12,9 @@ import {
   setGeneratedContent,
   setItemStatus,
   countItemsByStatus,
+  hasApprovedPartnerCopy,
+  approvePartnerCopy,
+  claimPartnerCopyPublish,
 } from './content-factory-items.ts'
 import { createSource } from './content-factory-sources.ts'
 
@@ -51,6 +54,44 @@ test('canReject: from new/ready/needs_review/failed, never from published/reject
   assert.equal(canReject('published'), false)
   assert.equal(canReject('rejected'), false)
   assert.equal(canReject('scheduled'), false)
+})
+
+test('partner copy gate needs permission, unchanged text and manual approval', () => {
+  const copy = { processingMode: 'copy', copyPermissionConfirmed: true, copyApprovedAt: '2026-11-03T00:00:00Z', originalText: 'Текст &#33;', generatedText: 'Текст &#33;', imageFilename: '' } as import('./content-factory-items.ts').ContentFactoryItem
+  assert.equal(hasApprovedPartnerCopy(copy), true)
+  assert.equal(hasApprovedPartnerCopy({ ...copy, copyPermissionConfirmed: false }), false)
+  assert.equal(hasApprovedPartnerCopy({ ...copy, copyApprovedAt: null }), false)
+  assert.equal(hasApprovedPartnerCopy({ ...copy, generatedText: 'Изменённый текст' }), false)
+  assert.equal(hasApprovedPartnerCopy({ ...copy, imageFilename: 'cover.jpg' }), false)
+  assert.equal(hasApprovedPartnerCopy({ ...copy, processingMode: 'ai' }), false)
+})
+
+test('copy intake snapshots the source mode and leaves the original text unchanged', async () => {
+  const queries: { sql: string; values: unknown[] }[] = []
+  const pool = { query: async (sql: string, values: unknown[]) => { queries.push({ sql, values }); return { rows: [] } } } as unknown as Pool
+  const message = { externalId: '9', url: 'https://t.me/partner/9', text: 'Новость! 🏠\nhttps://example.com', imageUrls: [], publishedAt: '' }
+  await storeNewSourceMessages(pool, 1, 'source', [message], { processingMode: 'copy', copyPermissionConfirmed: true })
+  assert.equal(queries[0].values[5], message.text)
+  assert.equal(queries[0].values[9], message.text)
+  assert.equal(queries[0].values[8], 'needs_review')
+  assert.equal(queries[0].values[11], 'copy')
+  assert.equal(queries[0].values[12], true)
+  await storeNewSourceMessages(pool, 1, 'source', [{ ...message, externalId: '10' }])
+  assert.equal(queries[1].values[11], 'ai')
+  assert.equal(queries[1].values[9], '')
+})
+
+test('manual copy approval and first publish claim require the snapshot and unchanged text', async () => {
+  const statements: string[] = []
+  const pool = { query: async (sql: string) => { statements.push(sql); return { rows: [], rowCount: 0 } } } as unknown as Pool
+  assert.equal(await approvePartnerCopy(pool, 1, 'item'), null)
+  assert.equal(await claimPartnerCopyPublish(pool, 1, 'item'), false)
+  for (const sql of statements) {
+    assert.match(sql, /processing_mode = 'copy'/)
+    assert.match(sql, /copy_permission_confirmed = true/)
+    assert.match(sql, /generated_text = original_text/)
+    assert.match(sql, /project_id = \$2/)
+  }
 })
 
 // --- DB integration (skipped without a reachable Postgres) ---

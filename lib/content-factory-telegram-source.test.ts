@@ -52,12 +52,14 @@ test('parseTelegramPreviewHtml: extracts text, image, date, and builds a stable 
 })
 
 test('parseTelegramPreviewHtml: decodes HTML entities and converts <br> to newlines', () => {
-  const html = fixtureBlock({ id: 102, text: 'Цена&nbsp;&mdash; от $200k.<br>Подробности &gt; здесь.' })
+  const html = fixtureBlock({ id: 102, text: 'Цена&nbsp;&mdash; от $200k&#33;<br>Подробности &gt; здесь &#x1F3E0;.' })
   const messages = parseTelegramPreviewHtml(html, 'alexander_realty')
   assert.equal(messages.length, 1)
   assert.ok(messages[0].text.includes('\n'))
   assert.ok(!messages[0].text.includes('&nbsp;'))
   assert.ok(messages[0].text.includes('>'))
+  assert.ok(messages[0].text.includes('$200k!'))
+  assert.ok(messages[0].text.includes('🏠'))
 })
 
 test('parseTelegramPreviewHtml: skips a block with neither text nor an image (service/forward marker)', () => {
