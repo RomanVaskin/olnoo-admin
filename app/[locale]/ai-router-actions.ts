@@ -2,11 +2,11 @@
 
 import { headers } from 'next/headers'
 import { GET, POST } from '@/app/api/ai-router/route'
-import type { AiRouterCatalog, AiRouterProvider, AiRouterProviderStatus } from '@/lib/ai-router-admin'
+import type { AiRouterCatalog, AiRouterProvider, AiRouterProviderStatus, AiRouterPresetSelection } from '@/lib/ai-router-admin'
 
 // The production nginx `location /` verifies Basic Auth before forwarding this page's
 // Server Action POST. Do not accept a request that did not pass through that layer.
-async function internalRequest(method: 'GET' | 'POST', provider?: AiRouterProvider) {
+async function internalRequest(method: 'GET' | 'POST', payload?: { provider: AiRouterProvider } | ({ action: 'setPreset' } & AiRouterPresetSelection)) {
   const authorization = (await headers()).get('authorization')
   if (!authorization?.startsWith('Basic ')) throw new Error('Admin authentication is required.')
 
@@ -15,7 +15,7 @@ async function internalRequest(method: 'GET' | 'POST', provider?: AiRouterProvid
   const request = new Request('http://localhost/api/ai-router', {
     method,
     headers: { authorization: `Bearer ${token}` },
-    ...(provider ? { body: JSON.stringify({ provider }) } : {}),
+    ...(payload ? { body: JSON.stringify(payload) } : {}),
   })
   const response = method === 'GET' ? await GET(request) : await POST(request)
   if (!response.ok) throw new Error('AI Router is unavailable.')
@@ -27,5 +27,9 @@ export async function loadAiRouterCatalog(): Promise<AiRouterCatalog> {
 }
 
 export async function checkAiRouterProvider(provider: AiRouterProvider): Promise<AiRouterProviderStatus> {
-  return internalRequest('POST', provider)
+  return internalRequest('POST', { provider })
+}
+
+export async function saveAiRouterPreset(selection: AiRouterPresetSelection): Promise<AiRouterPresetSelection> {
+  return internalRequest('POST', { action: 'setPreset', ...selection })
 }
