@@ -26,7 +26,7 @@ export type ContentFactoryAiReview = {
 
 export function hasPassedAiReview(item: ContentFactoryItem): boolean {
   const review = item.aiReview
-  return review?.status === 'passed' && review.risk === 'low' && review.passed === true
+  return review?.status === 'passed' && (review.risk === 'low' || review.risk === 'medium') && review.passed === true
     && review.reviewedTitle === item.generatedTitle
     && review.reviewedText === item.generatedText
     && review.reviewedImageFilename === item.imageFilename
