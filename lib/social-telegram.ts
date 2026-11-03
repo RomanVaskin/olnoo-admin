@@ -4,7 +4,10 @@ import { syncPostStatusFromPublications } from '@/lib/social'
 import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
 import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
 import { resolvePendingAutoForwardForPublication } from '@/lib/social-comments'
-import { sendTelegramPhotoWithText } from '@/lib/social-telegram-photo'
+import { sendTelegramPhotoWithText, sendTelegramAlbumWithText } from '@/lib/social-telegram-photo'
+import { getItem, hasApprovedPartnerCopy } from '@/lib/content-factory-items'
+import { readOriginalImage } from '@/lib/content-factory-original-images'
+import sharp from 'sharp'
 
 // Server-side only. TELEGRAM_BOT_TOKEN must never be sent to the browser — it is read here and
 // only here, inside a function called exclusively from a server route handler.
@@ -88,7 +91,7 @@ export async function publishSocialPublicationToTelegram(
     [publication.social_post_id, projectId],
   )
   const post = postRows[0]
-  const text = post?.telegram_text?.trim() || post?.body?.trim() || ''
+  let text = post?.telegram_text?.trim() || post?.body?.trim() || ''
   if (!text) {
     const error = 'post has no content to publish'
     await recordPublicationPreflightFailure(pool, id, projectId, error)
@@ -129,6 +132,33 @@ export async function publishSocialPublicationToTelegram(
 
   const chatId = chatIdFor(account.username)
 
+  // Also applies to direct Social API calls: copy-mode images and rights cannot be bypassed.
+  const { rows: copyRows } = await pool.query<{ id: string }>(
+    `SELECT id FROM content_factory_items WHERE social_post_id = $1 AND project_id = $2 AND processing_mode = 'copy'`,
+    [publication.social_post_id, projectId],
+  )
+  let copyImages: { bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }[] = []
+  if (copyRows[0]) {
+    const item = await getItem(pool, projectId, copyRows[0].id)
+    if (!item || !hasApprovedPartnerCopy(item) || item.generatedText !== item.originalText) {
+      const error = 'Partner copy requires confirmed image rights, complete images and manual approval.'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 409 }
+    }
+    text = item.originalText
+    try {
+      copyImages = await Promise.all(item.originalImageFiles.map(async (filename) => {
+        const bytes = await readOriginalImage(projectId, item.id, filename)
+        if (filename.endsWith('.webp')) return { bytes: await sharp(bytes).jpeg({ quality: 95 }).toBuffer(), mimeType: 'image/jpeg' as const }
+        return { bytes, mimeType: filename.endsWith('.png') ? 'image/png' as const : 'image/jpeg' as const }
+      }))
+    } catch {
+      const error = 'A saved source image is unavailable. Restore it before publishing the complete post.'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 409 }
+    }
+  }
+
   // Atomic claim, right before the one irreversible call — see claimPublicationForSending's own
   // comment. Every pre-flight check above is a safe-to-repeat local read; only the Bot API send
   // can actually cause a duplicate, so only it needs to be guarded.
@@ -138,8 +168,10 @@ export async function publishSocialPublicationToTelegram(
   let telegramError: string | null = null
   let messageId: number | null = null
   let sendOutcomeUnknown = false
-  if (photo) {
-    const result = await sendTelegramPhotoWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, image: photo })
+  if (photo || copyImages.length) {
+    const result = copyImages.length > 1
+      ? await sendTelegramAlbumWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, images: copyImages })
+      : await sendTelegramPhotoWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, image: copyImages[0]?.bytes ?? photo!, mimeType: copyImages[0]?.mimeType })
     if (result.kind === 'sent') messageId = result.messageId
     else {
       telegramError = result.error

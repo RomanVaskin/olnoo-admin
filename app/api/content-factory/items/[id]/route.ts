@@ -37,7 +37,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (!canApprove(item.status)) return NextResponse.json({ error: `Cannot approve from status "${item.status}".` }, { status: 409 })
     if (item.processingMode === 'copy') {
       if (body.confirmOriginalTextComplete !== true) return NextResponse.json({ error: 'Compare the public preview with the original Telegram post and confirm the text is complete before approving.' }, { status: 422 })
-      const approved = await approvePartnerCopy(pool, projectId, id)
+      if (item.originalImageUrls.length > 0 && body.confirmImageRights !== true) return NextResponse.json({ error: 'Confirm permission to use the source images before approving.' }, { status: 422 })
+      const approved = await approvePartnerCopy(pool, projectId, id, body.confirmImageRights === true)
       if (!approved) return NextResponse.json({ error: 'Partner copy is incomplete, unlicensed, or changed. Refresh the material.' }, { status: 409 })
       return NextResponse.json(approved)
     }

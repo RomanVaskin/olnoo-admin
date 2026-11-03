@@ -6,8 +6,8 @@ import { hasPassedAiReview, type ContentFactoryItem } from './content-factory-it
 
 const item = {
   id: 'item', projectId: 1, sourceId: 'source', externalId: 'post',
-  originalUrl: 'https://t.me/source/1', originalText: 'The city approved a new housing plan.', originalImageUrls: [], originalPublishedAt: null,
-  processingMode: 'ai', copyPermissionConfirmed: false, copyApprovedAt: null,
+  originalUrl: 'https://t.me/source/1', originalText: 'The city approved a new housing plan.', originalImageUrls: [], originalImageFiles: [], originalImageError: '', originalPublishedAt: null,
+  processingMode: 'ai', copyPermissionConfirmed: false, copyImagePermissionConfirmed: false, copyApprovedAt: null,
   status: 'ready', generatedTitle: 'Housing plan', generatedText: 'A city housing plan was approved. The decision may affect local buyers.',
   reviewReason: '', aiReview: null, error: '', socialPostId: null, imageFilename: '', createdAt: '', updatedAt: '',
 } satisfies ContentFactoryItem
