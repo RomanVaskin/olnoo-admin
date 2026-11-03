@@ -15,6 +15,7 @@ export class ContentFactorySourceError extends Error {}
 // refuses it with a clear "not supported yet" error rather than silently doing nothing.
 export const SOURCE_TYPES = ['telegram', 'rss', 'website', 'youtube'] as const
 export type SourceType = (typeof SOURCE_TYPES)[number]
+export type SourceProcessingMode = 'ai' | 'copy'
 
 export function isSourceType(value: unknown): value is SourceType {
   return typeof value === 'string' && (SOURCE_TYPES as readonly string[]).includes(value)
@@ -26,6 +27,8 @@ export type ContentFactorySource = {
   type: SourceType
   handle: string
   enabled: boolean
+  processingMode: SourceProcessingMode
+  copyPermissionConfirmed: boolean
   lastCheckedAt: string | null
   lastError: string
   createdAt: string
@@ -39,6 +42,8 @@ function fromRow(row: Record<string, unknown>): ContentFactorySource {
     type: row.type as SourceType,
     handle: row.handle as string,
     enabled: row.enabled as boolean,
+    processingMode: row.processing_mode === 'copy' ? 'copy' : 'ai',
+    copyPermissionConfirmed: row.copy_permission_confirmed === true,
     lastCheckedAt: (row.last_checked_at as string) ?? null,
     lastError: (row.last_error as string) ?? '',
     createdAt: row.created_at as string,
@@ -59,17 +64,22 @@ export async function getSource(pool: Pool, projectId: number, id: string): Prom
 export async function createSource(
   pool: Pool,
   projectId: number,
-  input: { type: string; handle: string },
+  input: { type: string; handle: string; processingMode?: string; copyPermissionConfirmed?: boolean },
 ): Promise<ContentFactorySource> {
   const type = isSourceType(input.type) ? input.type : null
   if (!type) throw new ContentFactorySourceError('Unknown source type.')
   const handle = input.handle.trim()
   if (!handle) throw new ContentFactorySourceError('A source handle/URL is required.')
+  const processingMode = input.processingMode ?? 'ai'
+  if (processingMode !== 'ai' && processingMode !== 'copy') throw new ContentFactorySourceError('Unknown source processing mode.')
+  if (processingMode === 'copy' && (type !== 'telegram' || input.copyPermissionConfirmed !== true)) {
+    throw new ContentFactorySourceError('Copy mode requires a Telegram source and confirmed permission to use its text.')
+  }
 
   const id = randomUUID()
   const { rows } = await pool.query(
-    `INSERT INTO content_factory_sources (id, project_id, type, handle) VALUES ($1, $2, $3, $4) RETURNING *`,
-    [id, projectId, type, handle],
+    `INSERT INTO content_factory_sources (id, project_id, type, handle, processing_mode, copy_permission_confirmed) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [id, projectId, type, handle, processingMode, processingMode === 'copy' && input.copyPermissionConfirmed === true],
   )
   return fromRow(rows[0])
 }
@@ -78,7 +88,7 @@ export async function updateSource(
   pool: Pool,
   projectId: number,
   id: string,
-  patch: { handle?: string; enabled?: boolean },
+  patch: { handle?: string; enabled?: boolean; processingMode?: string; copyPermissionConfirmed?: boolean },
 ): Promise<ContentFactorySource | null> {
   const existing = await getSource(pool, projectId, id)
   if (!existing) return null
@@ -86,10 +96,16 @@ export async function updateSource(
   const handle = patch.handle !== undefined ? patch.handle.trim() : existing.handle
   if (!handle) throw new ContentFactorySourceError('A source handle/URL is required.')
   const enabled = patch.enabled !== undefined ? patch.enabled : existing.enabled
+  const processingMode = patch.processingMode ?? existing.processingMode
+  if (processingMode !== 'ai' && processingMode !== 'copy') throw new ContentFactorySourceError('Unknown source processing mode.')
+  const copyPermissionConfirmed = patch.copyPermissionConfirmed ?? existing.copyPermissionConfirmed
+  if (processingMode === 'copy' && (existing.type !== 'telegram' || !copyPermissionConfirmed)) {
+    throw new ContentFactorySourceError('Copy mode requires a Telegram source and confirmed permission to use its text.')
+  }
 
   const { rows } = await pool.query(
-    `UPDATE content_factory_sources SET handle = $1, enabled = $2, updated_at = now() WHERE id = $3 AND project_id = $4 RETURNING *`,
-    [handle, enabled, id, projectId],
+    `UPDATE content_factory_sources SET handle = $1, enabled = $2, processing_mode = $3, copy_permission_confirmed = $4, updated_at = now() WHERE id = $5 AND project_id = $6 RETURNING *`,
+    [handle, enabled, processingMode, processingMode === 'copy' && copyPermissionConfirmed, id, projectId],
   )
   return rows[0] ? fromRow(rows[0]) : null
 }

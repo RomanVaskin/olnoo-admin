@@ -26,6 +26,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const owned = await ownItem(req, params)
   if (!owned) return NextResponse.json({ error: 'Material not found for this project.' }, { status: 404 })
   const { item, project, projectId } = owned
+  if (item.processingMode === 'copy') return NextResponse.json({ error: 'Partner copy does not use AI image generation.' }, { status: 409 })
   if (!item.generatedText.trim() || !['ready', 'needs_review'].includes(item.status) || item.socialPostId) {
     return NextResponse.json({ error: 'Prepare the material before generating an image; published materials cannot be changed.' }, { status: 409 })
   }

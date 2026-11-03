@@ -32,6 +32,10 @@ type Item = {
   externalId: string
   originalUrl: string
   originalText: string
+  processingMode: 'ai' | 'copy'
+  copyPermissionConfirmed: boolean
+  copyApprovedAt: string | null
+  originalImageUrls: string[]
   originalPublishedAt: string | null
   status: ItemStatus
   generatedTitle: string
@@ -73,6 +77,8 @@ function ItemDetail({
   const [text, setText] = useState(item.generatedText)
   const [busy, setBusy] = useState<'generate' | 'review' | 'publish' | 'save' | 'approve' | 'reject' | 'image' | 'deleteImage' | null>(null)
   const [error, setError] = useState('')
+  const [copyCompared, setCopyCompared] = useState(false)
+  const isCopy = item.processingMode === 'copy'
   const dirty = title !== item.generatedTitle || text !== item.generatedText
   const reviewPassed = item.aiReview?.status === 'passed' && (item.aiReview.risk === 'low' || item.aiReview.risk === 'medium') && item.aiReview.quality?.passed === true
 
@@ -80,6 +86,7 @@ function ItemDetail({
     setTitle(item.generatedTitle)
     setText(item.generatedText)
     setError('')
+    setCopyCompared(false)
   }, [item])
 
   async function call(path: string, init: RequestInit, busyKind: typeof busy) {
@@ -104,7 +111,7 @@ function ItemDetail({
     call(`/api/content-factory/items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, text }) }, 'save')
   }
   function approve() {
-    call(`/api/content-factory/items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'approve' }) }, 'approve')
+    call(`/api/content-factory/items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'approve', confirmOriginalTextComplete: isCopy && copyCompared }) }, 'approve')
   }
   function reject() {
     if (!window.confirm(t.contentFactory.items.confirmReject)) return
@@ -136,14 +143,18 @@ function ItemDetail({
 
         <div className="flex flex-col gap-6 px-6 py-6">
           <div className="flex flex-col gap-1.5">
+            {isCopy && <p className="text-sm font-medium">{t.contentFactory.items.partnerCopy}</p>}
             <span className="label-mono text-muted-foreground">{t.contentFactory.items.original}</span>
-            <p className="whitespace-pre-line border border-hairline bg-background p-3 text-sm text-muted-foreground">{item.originalText || '—'}</p>
+            <p className="whitespace-pre-wrap border border-hairline bg-background p-3 text-sm text-muted-foreground">{item.originalText || '—'}</p>
             {item.originalUrl && (
               <a href={item.originalUrl} target="_blank" rel="noreferrer" className="label-mono text-blue underline underline-offset-4">
                 {t.contentFactory.items.sourceLink}
               </a>
             )}
           </div>
+
+          {isCopy && <p className="border border-hairline bg-background p-3 text-sm">{t.contentFactory.items.previewWarning}</p>}
+          {isCopy && item.originalImageUrls.length > 0 && <p className="text-sm text-destructive">{t.contentFactory.items.textOnlyWarning}</p>}
 
           {item.reviewReason && (
             <p className="border border-hairline bg-background p-3 text-sm text-foreground">
@@ -158,7 +169,7 @@ function ItemDetail({
             </p>
           )}
 
-          <div className="flex flex-col gap-2 border border-hairline bg-background p-3 text-sm">
+          {!isCopy && <div className="flex flex-col gap-2 border border-hairline bg-background p-3 text-sm">
             <span className="label-mono text-muted-foreground">{t.contentFactory.items.aiReviewLabel}</span>
             <p>{item.aiReview ? t.contentFactory.items.aiReviewStatuses[item.aiReview.status] : t.contentFactory.items.aiReviewNotRun}</p>
             {item.aiReview?.risk && <p>{t.contentFactory.items.aiReviewRisk}: {t.contentFactory.items.aiReviewRisks[item.aiReview.risk]}</p>}
@@ -172,11 +183,11 @@ function ItemDetail({
                 {busy === 'review' ? t.contentFactory.items.aiReviewChecking : t.contentFactory.items.aiReviewAction}
               </button>
             )}
-          </div>
+          </div>}
 
           <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
             <span className="label-mono text-muted-foreground">{t.contentFactory.items.prepared}</span>
-            {item.generatedText || canGenerate(item.status) ? (
+            {isCopy ? <p className="whitespace-pre-wrap text-sm">{item.originalText || '—'}</p> : item.generatedText || canGenerate(item.status) ? (
               <>
                 <label className="flex flex-col gap-1.5">
                   <span className="label-mono text-muted-foreground">{t.contentFactory.items.editTitleLabel}</span>
@@ -207,7 +218,7 @@ function ItemDetail({
                 className="aspect-square w-full border border-hairline object-cover"
               />
             )}
-            {item.generatedText && (item.status === 'ready' || item.status === 'needs_review') && !item.socialPostId && (
+            {!isCopy && item.generatedText && (item.status === 'ready' || item.status === 'needs_review') && !item.socialPostId && (
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={generateImage}
@@ -227,7 +238,7 @@ function ItemDetail({
             {error && <p className="text-sm text-destructive">{error}</p>}
 
             <div className="flex flex-wrap gap-2">
-              {canGenerate(item.status) && (
+              {!isCopy && canGenerate(item.status) && (
                 <button
                   onClick={generate}
                   disabled={busy !== null}
@@ -236,7 +247,7 @@ function ItemDetail({
                   {busy === 'generate' ? t.contentFactory.items.generating : item.generatedText ? t.contentFactory.items.actionRegenerate : t.contentFactory.items.actionGenerate}
                 </button>
               )}
-              {item.generatedText && (
+              {!isCopy && item.generatedText && (
                 <button
                   onClick={saveEdit}
                   disabled={busy !== null}
@@ -245,10 +256,11 @@ function ItemDetail({
                   {t.contentFactory.items.saveEdit}
                 </button>
               )}
+              {isCopy && canApprove(item.status) && <label className="flex w-full items-start gap-2 text-sm"><input type="checkbox" checked={copyCompared} onChange={(e) => setCopyCompared(e.target.checked)} />{t.contentFactory.items.confirmCopyText}</label>}
               {canApprove(item.status) && (
                 <button
                   onClick={approve}
-                  disabled={busy !== null}
+                  disabled={busy !== null || (isCopy && !copyCompared)}
                   className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
                 >
                   {t.contentFactory.items.actionApprove}
@@ -257,7 +269,7 @@ function ItemDetail({
               {canPublish(item.status) && (
                 <button
                   onClick={publish}
-                  disabled={busy !== null || dirty || !reviewPassed}
+                  disabled={busy !== null || (!isCopy && (dirty || !reviewPassed)) || (isCopy && !item.copyApprovedAt)}
                   className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
                 >
                   {busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.actionPublish}

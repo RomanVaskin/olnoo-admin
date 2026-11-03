@@ -24,7 +24,9 @@ export async function checkSourceNow(pool: Pool, source: ContentFactorySource): 
       throw new ContentFactorySourceError('Invalid Telegram channel address. Use a channel username, @username, or https://t.me/username.')
     }
     const messages = await fetchPublicTelegramChannel(handle)
-    const created = await storeNewSourceMessages(pool, source.projectId, source.id, messages)
+    const created = await storeNewSourceMessages(pool, source.projectId, source.id, messages, {
+      processingMode: source.processingMode, copyPermissionConfirmed: source.copyPermissionConfirmed,
+    })
     await recordSourceCheckResult(pool, source.id, source.projectId, '')
     return { created, error: '' }
   } catch (err) {

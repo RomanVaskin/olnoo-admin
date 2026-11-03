@@ -29,7 +29,7 @@ import { checkSourceNow } from './content-factory-check.ts'
 export type SchedulerSourceResult = { sourceId: string; projectId: number; createdCount: number; error: string }
 
 export async function runContentFactorySourceSweep(pool: Pool): Promise<SchedulerSourceResult[]> {
-  const { rows } = await pool.query<{ id: string; project_id: number; type: string; handle: string; enabled: boolean; last_checked_at: string | null; last_error: string; created_at: string; updated_at: string }>(
+  const { rows } = await pool.query<{ id: string; project_id: number; type: string; handle: string; enabled: boolean; processing_mode: string; copy_permission_confirmed: boolean; last_checked_at: string | null; last_error: string; created_at: string; updated_at: string }>(
     `SELECT * FROM content_factory_sources WHERE enabled = true`,
   )
   const results: SchedulerSourceResult[] = []
@@ -40,6 +40,8 @@ export async function runContentFactorySourceSweep(pool: Pool): Promise<Schedule
       type: row.type as 'telegram' | 'rss' | 'website' | 'youtube',
       handle: row.handle,
       enabled: row.enabled,
+      processingMode: (row.processing_mode === 'copy' ? 'copy' : 'ai') as 'copy' | 'ai',
+      copyPermissionConfirmed: row.copy_permission_confirmed === true,
       lastCheckedAt: row.last_checked_at,
       lastError: row.last_error,
       createdAt: row.created_at,

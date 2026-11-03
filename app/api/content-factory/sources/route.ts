@@ -20,7 +20,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'type and handle are required' }, { status: 400 })
   }
   try {
-    const source = await createSource(pool, projectId, { type: body.type, handle: body.handle })
+    const source = await createSource(pool, projectId, {
+      type: body.type, handle: body.handle,
+      processingMode: body.processingMode, copyPermissionConfirmed: body.copyPermissionConfirmed,
+    })
     return NextResponse.json(source, { status: 201 })
   } catch (err) {
     if (err instanceof ContentFactorySourceError) return NextResponse.json({ error: err.message }, { status: 422 })
