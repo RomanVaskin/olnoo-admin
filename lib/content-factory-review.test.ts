@@ -9,6 +9,7 @@ const item = {
   originalUrl: 'https://t.me/source/1', originalText: 'The city approved a new housing plan.', originalImageUrls: [], originalImageFiles: [], originalImageError: '', originalPublishedAt: null,
   processingMode: 'ai', copyPermissionConfirmed: false, copyImagePermissionConfirmed: false, copyApprovedAt: null,
   status: 'ready', generatedTitle: 'Housing plan', generatedText: 'A city housing plan was approved. The decision may affect local buyers.',
+  ruAccountId: null, ruApprovedAt: null, enText: '', enSourceText: '', enApprovedAt: null, enRightsConfirmed: false, enAccountId: null, enSocialPostId: null, enPublishClaimed: false,
   reviewReason: '', aiReview: null, error: '', socialPostId: null, imageFilename: '', createdAt: '', updatedAt: '',
 } satisfies ContentFactoryItem
 

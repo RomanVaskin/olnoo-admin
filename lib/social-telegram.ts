@@ -5,9 +5,8 @@ import { recordPublicationPreflightFailure } from '@/lib/social-publication-pref
 import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
 import { resolvePendingAutoForwardForPublication } from '@/lib/social-comments'
 import { sendTelegramPhotoWithText, sendTelegramAlbumWithText } from '@/lib/social-telegram-photo'
-import { getItem, hasApprovedPartnerCopy } from '@/lib/content-factory-items'
-import { readOriginalImage } from '@/lib/content-factory-original-images'
-import sharp from 'sharp'
+import { getItem, hasApprovedPartnerCopy, hasPassedAiReview } from '@/lib/content-factory-items'
+import { loadLanguageMedia } from '@/lib/content-factory-language-media'
 
 // Server-side only. TELEGRAM_BOT_TOKEN must never be sent to the browser — it is read here and
 // only here, inside a function called exclusively from a server route handler.
@@ -133,27 +132,34 @@ export async function publishSocialPublicationToTelegram(
   const chatId = chatIdFor(account.username)
 
   // Also applies to direct Social API calls: copy-mode images and rights cannot be bypassed.
-  const { rows: copyRows } = await pool.query<{ id: string }>(
-    `SELECT id FROM content_factory_items WHERE social_post_id = $1 AND project_id = $2 AND processing_mode = 'copy'`,
+  const { rows: linkedRows } = await pool.query<{ id: string; is_en: boolean }>(
+    `SELECT id, en_social_post_id = $1 AS is_en FROM content_factory_items
+     WHERE project_id = $2 AND (social_post_id = $1 OR en_social_post_id = $1)`,
     [publication.social_post_id, projectId],
   )
   let copyImages: { bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }[] = []
-  if (copyRows[0]) {
-    const item = await getItem(pool, projectId, copyRows[0].id)
-    if (!item || !hasApprovedPartnerCopy(item) || item.generatedText !== item.originalText) {
-      const error = 'Partner copy requires confirmed image rights, complete images and manual approval.'
+  let outgoingPhoto = photo
+  if (linkedRows[0]) {
+    const item = await getItem(pool, projectId, linkedRows[0].id)
+    const isEnglish = linkedRows[0].is_en
+    if (!item || (isEnglish
+      ? !item.enApprovedAt || (item.processingMode === 'copy' && !item.enRightsConfirmed) || item.enSourceText !== item.generatedText ||
+        (item.processingMode === 'ai' && !hasPassedAiReview(item))
+      : !item.ruApprovedAt || (item.processingMode === 'copy' && !hasApprovedPartnerCopy(item)))) {
+      const error = 'Content Factory language approval, rights or Quality Gate is missing.'
       await recordPublicationPreflightFailure(pool, id, projectId, error)
       return { error, status: 409 }
     }
-    text = item.originalText
+    if (isEnglish) text = item.enText
+    else if (item.processingMode === 'copy') text = item.originalText
     try {
-      copyImages = await Promise.all(item.originalImageFiles.map(async (filename) => {
-        const bytes = await readOriginalImage(projectId, item.id, filename)
-        if (filename.endsWith('.webp')) return { bytes: await sharp(bytes).jpeg({ quality: 95 }).toBuffer(), mimeType: 'image/jpeg' as const }
-        return { bytes, mimeType: filename.endsWith('.png') ? 'image/png' as const : 'image/jpeg' as const }
-      }))
+      const media = await loadLanguageMedia(item, projectSlug!, isEnglish ? 'en' : 'ru')
+      copyImages = media.images
+      outgoingPhoto = media.photo ?? outgoingPhoto
     } catch {
-      const error = 'A saved source image is unavailable. Restore it before publishing the complete post.'
+      const error = item.processingMode === 'copy'
+        ? 'A saved source image is unavailable. Restore it before publishing the complete post.'
+        : 'The generated cover is unavailable. Restore it before publishing the English post.'
       await recordPublicationPreflightFailure(pool, id, projectId, error)
       return { error, status: 409 }
     }
@@ -168,10 +174,10 @@ export async function publishSocialPublicationToTelegram(
   let telegramError: string | null = null
   let messageId: number | null = null
   let sendOutcomeUnknown = false
-  if (photo || copyImages.length) {
+  if (outgoingPhoto || copyImages.length) {
     const result = copyImages.length > 1
       ? await sendTelegramAlbumWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, images: copyImages })
-      : await sendTelegramPhotoWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, image: copyImages[0]?.bytes ?? photo!, mimeType: copyImages[0]?.mimeType })
+      : await sendTelegramPhotoWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, image: copyImages[0]?.bytes ?? outgoingPhoto!, mimeType: copyImages[0]?.mimeType })
     if (result.kind === 'sent') messageId = result.messageId
     else {
       telegramError = result.error
