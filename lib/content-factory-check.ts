@@ -1,7 +1,8 @@
 import type { Pool } from 'pg'
 import { type ContentFactorySource, ContentFactorySourceError, recordSourceCheckResult } from './content-factory-sources.ts'
 import { fetchPublicTelegramChannel, normalizeTelegramHandle } from './content-factory-telegram-source.ts'
-import { storeNewSourceMessages, type ContentFactoryItem } from './content-factory-items.ts'
+import { storeNewSourceMessages, listItems, type ContentFactoryItem } from './content-factory-items.ts'
+import { syncOriginalImages } from './content-factory-original-images.ts'
 
 // Контент-завод — "Проверить сейчас" / periodic sweep. Pool-injected, no `@/` imports.
 //
@@ -27,8 +28,18 @@ export async function checkSourceNow(pool: Pool, source: ContentFactorySource): 
     const created = await storeNewSourceMessages(pool, source.projectId, source.id, messages, {
       processingMode: source.processingMode, copyPermissionConfirmed: source.copyPermissionConfirmed,
     })
-    await recordSourceCheckResult(pool, source.id, source.projectId, '')
-    return { created, error: '' }
+    let imageError = ''
+    if (source.processingMode === 'copy') {
+      const items = await listItems(pool, source.projectId, { sourceId: source.id })
+      for (const item of items) {
+        if (item.processingMode === 'copy' && !item.socialPostId && item.status !== 'published' && item.status !== 'scheduled' && (item.originalImageFiles.length !== item.originalImageUrls.length || item.originalImageError)) {
+          const error = await syncOriginalImages(pool, item)
+          if (!imageError) imageError = error
+        }
+      }
+    }
+    await recordSourceCheckResult(pool, source.id, source.projectId, imageError)
+    return { created, error: imageError }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Could not check this source.'
     await recordSourceCheckResult(pool, source.id, source.projectId, message)

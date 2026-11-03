@@ -57,13 +57,17 @@ test('canReject: from new/ready/needs_review/failed, never from published/reject
 })
 
 test('partner copy gate needs permission, unchanged text and manual approval', () => {
-  const copy = { processingMode: 'copy', copyPermissionConfirmed: true, copyApprovedAt: '2026-11-03T00:00:00Z', originalText: 'Текст &#33;', generatedText: 'Текст &#33;', imageFilename: '' } as import('./content-factory-items.ts').ContentFactoryItem
+  const copy = { processingMode: 'copy', copyPermissionConfirmed: true, copyApprovedAt: '2026-11-03T00:00:00Z', originalText: 'Текст &#33;', generatedText: 'Текст &#33;', imageFilename: '', originalImageUrls: [], originalImageFiles: [], originalImageError: '', copyImagePermissionConfirmed: false } as unknown as import('./content-factory-items.ts').ContentFactoryItem
   assert.equal(hasApprovedPartnerCopy(copy), true)
   assert.equal(hasApprovedPartnerCopy({ ...copy, copyPermissionConfirmed: false }), false)
   assert.equal(hasApprovedPartnerCopy({ ...copy, copyApprovedAt: null }), false)
   assert.equal(hasApprovedPartnerCopy({ ...copy, generatedText: 'Изменённый текст' }), false)
   assert.equal(hasApprovedPartnerCopy({ ...copy, imageFilename: 'cover.jpg' }), false)
   assert.equal(hasApprovedPartnerCopy({ ...copy, processingMode: 'ai' }), false)
+  assert.equal(hasApprovedPartnerCopy({ ...copy, originalImageUrls: ['url'] }), false)
+  assert.equal(hasApprovedPartnerCopy({ ...copy, originalImageUrls: ['url'], originalImageFiles: ['image.jpg'] }), false)
+  assert.equal(hasApprovedPartnerCopy({ ...copy, originalImageUrls: ['url'], originalImageFiles: ['image.jpg'], copyImagePermissionConfirmed: true }), true)
+  assert.equal(hasApprovedPartnerCopy({ ...copy, originalImageError: 'download failed' }), false)
 })
 
 test('copy intake snapshots the source mode and leaves the original text unchanged', async () => {
@@ -84,7 +88,7 @@ test('copy intake snapshots the source mode and leaves the original text unchang
 test('manual copy approval and first publish claim require the snapshot and unchanged text', async () => {
   const statements: string[] = []
   const pool = { query: async (sql: string) => { statements.push(sql); return { rows: [], rowCount: 0 } } } as unknown as Pool
-  assert.equal(await approvePartnerCopy(pool, 1, 'item'), null)
+  assert.equal(await approvePartnerCopy(pool, 1, 'item', false), null)
   assert.equal(await claimPartnerCopyPublish(pool, 1, 'item'), false)
   for (const sql of statements) {
     assert.match(sql, /processing_mode = 'copy'/)

@@ -36,6 +36,9 @@ type Item = {
   copyPermissionConfirmed: boolean
   copyApprovedAt: string | null
   originalImageUrls: string[]
+  originalImageFiles: string[]
+  originalImageError: string
+  copyImagePermissionConfirmed: boolean
   originalPublishedAt: string | null
   status: ItemStatus
   generatedTitle: string
@@ -75,9 +78,10 @@ function ItemDetail({
   const { t } = useI18n()
   const [title, setTitle] = useState(item.generatedTitle)
   const [text, setText] = useState(item.generatedText)
-  const [busy, setBusy] = useState<'generate' | 'review' | 'publish' | 'save' | 'approve' | 'reject' | 'image' | 'deleteImage' | null>(null)
+  const [busy, setBusy] = useState<'generate' | 'review' | 'publish' | 'save' | 'approve' | 'reject' | 'image' | 'deleteImage' | 'originalImages' | null>(null)
   const [error, setError] = useState('')
   const [copyCompared, setCopyCompared] = useState(false)
+  const [imageRights, setImageRights] = useState(false)
   const isCopy = item.processingMode === 'copy'
   const dirty = title !== item.generatedTitle || text !== item.generatedText
   const reviewPassed = item.aiReview?.status === 'passed' && (item.aiReview.risk === 'low' || item.aiReview.risk === 'medium') && item.aiReview.quality?.passed === true
@@ -87,6 +91,7 @@ function ItemDetail({
     setText(item.generatedText)
     setError('')
     setCopyCompared(false)
+    setImageRights(false)
   }, [item])
 
   async function call(path: string, init: RequestInit, busyKind: typeof busy) {
@@ -111,7 +116,7 @@ function ItemDetail({
     call(`/api/content-factory/items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, text }) }, 'save')
   }
   function approve() {
-    call(`/api/content-factory/items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'approve', confirmOriginalTextComplete: isCopy && copyCompared }) }, 'approve')
+    call(`/api/content-factory/items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'approve', confirmOriginalTextComplete: isCopy && copyCompared, confirmImageRights: isCopy && imageRights }) }, 'approve')
   }
   function reject() {
     if (!window.confirm(t.contentFactory.items.confirmReject)) return
@@ -128,6 +133,9 @@ function ItemDetail({
   }
   function deleteImage() {
     call(`/api/content-factory/items/${item.id}/image`, { method: 'DELETE' }, 'deleteImage')
+  }
+  function retryOriginalImages() {
+    call(`/api/content-factory/items/${item.id}/original-images`, { method: 'POST' }, 'originalImages')
   }
 
   return (
@@ -154,7 +162,13 @@ function ItemDetail({
           </div>
 
           {isCopy && <p className="border border-hairline bg-background p-3 text-sm">{t.contentFactory.items.previewWarning}</p>}
-          {isCopy && item.originalImageUrls.length > 0 && <p className="text-sm text-destructive">{t.contentFactory.items.textOnlyWarning}</p>}
+          {isCopy && item.originalImageUrls.length > 0 && <div className="flex flex-col gap-2 border border-hairline bg-background p-3 text-sm">
+            <span className="label-mono text-muted-foreground">{t.contentFactory.items.originalImages} ({item.originalImageFiles.length}/{item.originalImageUrls.length})</span>
+            <div className="grid grid-cols-2 gap-2">{item.originalImageFiles.map((filename, index) => <img key={filename} src={`/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`${t.contentFactory.items.originalImages} ${index + 1}`} className="aspect-square w-full border border-hairline object-cover" />)}</div>
+            {item.originalImageError && <p className="text-destructive">{item.originalImageError}</p>}
+            {item.originalImageFiles.length !== item.originalImageUrls.length && !item.originalImageError && <p className="text-destructive">{t.contentFactory.items.imagesIncomplete}</p>}
+            {!item.socialPostId && item.originalImageFiles.length !== item.originalImageUrls.length && <button onClick={retryOriginalImages} disabled={busy !== null} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.retryImages}</button>}
+          </div>}
 
           {item.reviewReason && (
             <p className="border border-hairline bg-background p-3 text-sm text-foreground">
@@ -257,10 +271,11 @@ function ItemDetail({
                 </button>
               )}
               {isCopy && canApprove(item.status) && <label className="flex w-full items-start gap-2 text-sm"><input type="checkbox" checked={copyCompared} onChange={(e) => setCopyCompared(e.target.checked)} />{t.contentFactory.items.confirmCopyText}</label>}
+              {isCopy && canApprove(item.status) && item.originalImageUrls.length > 0 && <label className="flex w-full items-start gap-2 text-sm"><input type="checkbox" checked={imageRights} onChange={(e) => setImageRights(e.target.checked)} />{t.contentFactory.items.confirmImageRights}</label>}
               {canApprove(item.status) && (
                 <button
                   onClick={approve}
-                  disabled={busy !== null || (isCopy && !copyCompared)}
+                  disabled={busy !== null || (isCopy && (!copyCompared || (item.originalImageUrls.length > 0 && (!imageRights || item.originalImageFiles.length !== item.originalImageUrls.length || !!item.originalImageError))))}
                   className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
                 >
                   {t.contentFactory.items.actionApprove}

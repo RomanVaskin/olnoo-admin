@@ -46,6 +46,9 @@ export type ContentFactoryItem = {
   originalUrl: string
   originalText: string
   originalImageUrls: string[]
+  originalImageFiles: string[]
+  originalImageError: string
+  copyImagePermissionConfirmed: boolean
   processingMode: SourceProcessingMode
   copyPermissionConfirmed: boolean
   copyApprovedAt: string | null
@@ -71,6 +74,9 @@ function fromRow(row: Record<string, unknown>): ContentFactoryItem {
     originalUrl: (row.original_url as string) ?? '',
     originalText: (row.original_text as string) ?? '',
     originalImageUrls: ((row.original_image_urls as string) ?? '').split(',').filter(Boolean),
+    originalImageFiles: Array.isArray(row.original_image_files) ? row.original_image_files as string[] : [],
+    originalImageError: (row.original_image_error as string) ?? '',
+    copyImagePermissionConfirmed: row.copy_image_permission_confirmed === true,
     processingMode: row.processing_mode === 'copy' ? 'copy' : 'ai',
     copyPermissionConfirmed: row.copy_permission_confirmed === true,
     copyApprovedAt: (row.copy_approved_at as string) ?? null,
@@ -186,17 +192,23 @@ export function canReject(status: ItemStatus): boolean {
 export function hasApprovedPartnerCopy(item: ContentFactoryItem): boolean {
   return item.processingMode === 'copy' && item.copyPermissionConfirmed && !!item.copyApprovedAt
     && !!item.originalText && item.generatedText === item.originalText && !item.imageFilename
+    && !item.originalImageError && item.originalImageFiles.length === item.originalImageUrls.length
+    && (item.originalImageUrls.length === 0 || item.copyImagePermissionConfirmed)
 }
 
 /** Explicit human comparison with the original is required because the public HTML preview
  * cannot prove it is complete. An atomic status/unchanged-text condition prevents stale approvals. */
-export async function approvePartnerCopy(pool: Pool, projectId: number, id: string): Promise<ContentFactoryItem | null> {
+export async function approvePartnerCopy(pool: Pool, projectId: number, id: string, confirmImageRights: boolean): Promise<ContentFactoryItem | null> {
   const { rows } = await pool.query(
-    `UPDATE content_factory_items SET status = 'ready', copy_approved_at = now(), updated_at = now()
+    `UPDATE content_factory_items SET status = 'ready', copy_approved_at = now(),
+       copy_image_permission_confirmed = CASE WHEN original_image_urls = '' THEN false ELSE $3 END, updated_at = now()
      WHERE id = $1 AND project_id = $2 AND processing_mode = 'copy'
        AND copy_permission_confirmed = true AND status = 'needs_review'
        AND original_text <> '' AND generated_text = original_text AND image_filename = ''
-     RETURNING *`, [id, projectId],
+       AND original_image_error = ''
+       AND jsonb_array_length(original_image_files) = CASE WHEN original_image_urls = '' THEN 0 ELSE cardinality(string_to_array(original_image_urls, ',')) END
+       AND (original_image_urls = '' OR $3 = true)
+     RETURNING *`, [id, projectId, confirmImageRights],
   )
   return rows[0] ? fromRow(rows[0]) : null
 }
@@ -208,7 +220,10 @@ export async function claimPartnerCopyPublish(pool: Pool, projectId: number, id:
      WHERE id = $1 AND project_id = $2 AND processing_mode = 'copy'
        AND status IN ('ready', 'failed') AND social_post_id IS NULL
        AND copy_permission_confirmed = true AND copy_approved_at IS NOT NULL
-       AND original_text <> '' AND generated_text = original_text AND image_filename = ''`,
+       AND original_text <> '' AND generated_text = original_text AND image_filename = ''
+       AND original_image_error = ''
+       AND jsonb_array_length(original_image_files) = CASE WHEN original_image_urls = '' THEN 0 ELSE cardinality(string_to_array(original_image_urls, ',')) END
+       AND (original_image_urls = '' OR copy_image_permission_confirmed = true)`,
     [id, projectId],
   )
   return (rowCount ?? 0) === 1

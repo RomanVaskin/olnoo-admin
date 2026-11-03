@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { sendTelegramPhotoWithText } from './social-telegram-photo.ts'
+import { sendTelegramPhotoWithText, sendTelegramAlbumWithText } from './social-telegram-photo.ts'
 
 const image = Buffer.from([0xff, 0xd8, 0xff])
 const base = { baseUrl: 'https://telegram.example', token: 'test', chatId: '@channel', image }
@@ -68,4 +68,43 @@ test('oversized text is refused before sending the photo', async () => {
     throw new Error('should not send')
   }) as typeof fetch })
   assert.equal(result.kind, 'failed')
+})
+
+test('album sends ordered photos with unchanged caption on first image only', async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  const result = await sendTelegramAlbumWithText({ ...base, text: 'Original! 🏠', images: [
+    { bytes: image, mimeType: 'image/jpeg' }, { bytes: image, mimeType: 'image/jpeg' },
+  ], fetchImpl: (async (url: string, init: RequestInit) => {
+    calls.push({ url, init })
+    return new Response(JSON.stringify({ ok: true, result: [{ message_id: 41 }, { message_id: 42 }] }), { status: 200 })
+  }) as typeof fetch })
+  assert.deepEqual(result, { kind: 'sent', messageId: 41 })
+  assert.equal(calls.length, 1)
+  assert.match(calls[0].url, /sendMediaGroup$/)
+  const form = calls[0].init.body as FormData
+  const media = JSON.parse(form.get('media') as string)
+  assert.equal(media[0].caption, 'Original! 🏠')
+  assert.equal(media[1].caption, undefined)
+  assert.equal((form.get('photo0') as File).name, 'original0.jpg')
+  assert.equal((form.get('photo1') as File).name, 'original1.jpg')
+})
+
+test('long album caption sends full text separately and blocks replay if text outcome is unknown', async () => {
+  let calls = 0
+  const result = await sendTelegramAlbumWithText({ ...base, text: 'A'.repeat(1200), images: [
+    { bytes: image, mimeType: 'image/jpeg' }, { bytes: image, mimeType: 'image/jpeg' },
+  ], fetchImpl: (async () => {
+    calls++
+    if (calls === 1) return new Response(JSON.stringify({ ok: true, result: [{ message_id: 41 }, { message_id: 42 }] }), { status: 200 })
+    throw new Error('timeout')
+  }) as typeof fetch })
+  assert.equal(result.kind, 'unknown')
+  assert.equal(calls, 2)
+})
+
+test('album rejection is a confirmed failure', async () => {
+  const result = await sendTelegramAlbumWithText({ ...base, text: 'Post', images: [
+    { bytes: image, mimeType: 'image/jpeg' }, { bytes: image, mimeType: 'image/jpeg' },
+  ], fetchImpl: (async () => new Response(JSON.stringify({ ok: false, description: 'Forbidden' }), { status: 403 })) as typeof fetch })
+  assert.deepEqual(result, { kind: 'failed', error: 'Forbidden' })
 })
