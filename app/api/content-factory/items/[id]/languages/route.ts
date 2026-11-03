@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { getItem } from '@/lib/content-factory-items'
-import { approveLanguage, ContentFactoryLanguageError, translateItemToEnglish, validateEnglishTranslation } from '@/lib/content-factory-languages'
+import { approveLanguage, ContentFactoryLanguageError, translateItem, validateTranslation } from '@/lib/content-factory-languages'
 
 async function itemFor(req: Request, id: string) {
   const projectId = await resolveProjectId(new URL(req.url).searchParams.get('project'))
@@ -33,13 +33,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const item = found.item
   try {
     if (body.action === 'translate') {
-      return NextResponse.json(await translateItemToEnglish(pool, item, body.confirmPartnerTranslationRights === true))
+      if (body.language !== 'ru' && body.language !== 'en') throw new ContentFactoryLanguageError('Choose RU or EN as the translation language.')
+      return NextResponse.json(await translateItem(pool, item, body.language, body.confirmPartnerTranslationRights === true))
     }
-    if (body.action === 'save_en') {
-      if (item.enSocialPostId || typeof body.text !== 'string' || item.enSourceText !== item.generatedText) throw new ContentFactoryLanguageError('English post is linked to Social or the Russian source has changed.')
-      validateEnglishTranslation(item.generatedText, body.text)
-      await pool.query(`UPDATE content_factory_items SET en_text = $1, en_approved_at = NULL, updated_at = now()
-        WHERE id = $2 AND project_id = $3 AND en_social_post_id IS NULL`, [body.text, item.id, found.projectId])
+    if (body.action === 'save_translation') {
+      const language = body.language
+      if ((language !== 'ru' && language !== 'en') || language === item.sourceLanguage || typeof body.text !== 'string') throw new ContentFactoryLanguageError('Choose the other language for this translation.')
+      const linkedPost = language === 'ru' ? item.socialPostId : item.enSocialPostId
+      if ((language === 'en' && item.enPublishClaimed) || (language === 'ru' && item.status === 'scheduled')) throw new ContentFactoryLanguageError('This channel is being prepared for publication.')
+      const source = language === 'ru' ? item.ruSourceText : item.enSourceText
+      const postIdColumn = language === 'ru' ? 'social_post_id' : 'en_social_post_id'
+      if (linkedPost || source !== item.generatedText) throw new ContentFactoryLanguageError('The translation is linked to Social or the source has changed.')
+      validateTranslation(item.generatedText, body.text, language)
+      const result = await pool.query(`UPDATE content_factory_items SET ${language}_text = $1, ${language}_approved_at = NULL, updated_at = now()
+        WHERE id = $2 AND project_id = $3 AND ${postIdColumn} IS NULL AND ${language === 'en' ? 'en_publish_claimed = false' : "status <> 'scheduled'"} AND source_language <> $4
+          AND ${language}_source_text = generated_text AND generated_text = $5 RETURNING id`,
+      [body.text, item.id, found.projectId, language, item.generatedText])
+      if (!result.rowCount) throw new ContentFactoryLanguageError('The source changed during editing. Reload it.')
       return NextResponse.json(await getItem(pool, found.projectId, id))
     }
     if (body.action === 'approve_ru' || body.action === 'approve_en') {

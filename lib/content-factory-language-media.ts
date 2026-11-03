@@ -22,6 +22,6 @@ export async function loadLanguageMedia(
     }))
     return { images }
   }
-  if (language === 'en' && item.imageFilename) return { images: [], photo: await (readers.cover ?? readContentFactoryCover)(projectSlug, item.imageFilename) }
+  if (item.imageFilename) return { images: [], photo: await (readers.cover ?? readContentFactoryCover)(projectSlug, item.imageFilename) }
   return { images: [] }
 }

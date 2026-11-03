@@ -23,6 +23,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const item = await getItem(pool, projectId, id)
   if (!item) return NextResponse.json({ error: 'not found' }, { status: 404 })
   if (item.processingMode === 'copy') return NextResponse.json({ error: 'Partner copy does not use AI text generation.' }, { status: 409 })
+  if (item.socialPostId || item.enSocialPostId || item.enPublishClaimed) return NextResponse.json({ error: 'A linked or publishing post cannot be regenerated.' }, { status: 409 })
   if (!canGenerate(item.status)) {
     return NextResponse.json({ error: `Cannot generate from status "${item.status}".` }, { status: 409 })
   }
@@ -49,7 +50,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       status,
       reviewReason: generated.reviewReason,
     })
-    return NextResponse.json(updated)
+    return updated ? NextResponse.json(updated) : NextResponse.json({ error: 'The material changed during generation. Reload it.' }, { status: 409 })
   } catch (err) {
     if (err instanceof ContentFactoryGenerateError || err instanceof AiRouterError) {
       await setItemStatus(pool, projectId, id, { status: 'failed', error: err.message })

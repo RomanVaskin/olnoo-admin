@@ -40,6 +40,10 @@ type Item = {
   status: ItemStatus
   generatedTitle: string
   generatedText: string
+  sourceLanguage: 'ru' | 'en' | null
+  ruText: string
+  ruSourceText: string
+  ruRightsConfirmed: boolean
   reviewReason: string
   aiReview: {
     status: 'checking' | 'passed' | 'changes_required' | 'blocked' | 'error'
@@ -60,6 +64,7 @@ type Item = {
   enRightsConfirmed: boolean
   enAccountId: string | null
   enSocialPostId: string | null
+  enPublishClaimed: boolean
   imageFilename: string
   createdAt: string
 }
@@ -90,6 +95,7 @@ function ItemDetail({
   const [title, setTitle] = useState(item.generatedTitle)
   const [text, setText] = useState(item.generatedText)
   const [enText, setEnText] = useState(item.enText)
+  const [ruText, setRuText] = useState(item.ruText)
   const [channels, setChannels] = useState<ChannelData>({ accounts: [], ru: null, en: null })
   const [ruAccount, setRuAccount] = useState(item.ruAccountId ?? '')
   const [enAccount, setEnAccount] = useState(item.enAccountId ?? '')
@@ -101,6 +107,7 @@ function ItemDetail({
   const [copyCompared, setCopyCompared] = useState(false)
   const [imageRights, setImageRights] = useState(false)
   const isCopy = item.processingMode === 'copy'
+  const linked = !!(item.socialPostId || item.enSocialPostId || item.enPublishClaimed || item.status === 'scheduled')
   const dirty = title !== item.generatedTitle || text !== item.generatedText
   const reviewPassed = item.aiReview?.status === 'passed' && (item.aiReview.risk === 'low' || item.aiReview.risk === 'medium') && item.aiReview.quality?.passed === true
 
@@ -121,6 +128,7 @@ function ItemDetail({
   }, [item.id])
 
   useEffect(() => { setEnText(item.enText) }, [item.enText])
+  useEffect(() => { setRuText(item.ruText) }, [item.ruText])
 
   async function loadChannels() {
     try {
@@ -162,8 +170,9 @@ function ItemDetail({
   function publish() {
     void publishSelected()
   }
-  function languageAction(action: string, accountId?: string, textValue?: string) {
-    call(`/api/content-factory/items/${item.id}/languages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, accountId, text: textValue, confirmRights: isCopy && (action === 'approve_ru' ? copyCompared && (item.originalImageUrls.length === 0 || imageRights) : partnerTranslationRights), confirmPartnerTranslationRights: isCopy && partnerTranslationRights }) }, action === 'translate' ? 'translate' : 'approve')
+  function languageAction(action: string, language: 'ru' | 'en', accountId?: string, textValue?: string) {
+    const native = language === item.sourceLanguage
+    call(`/api/content-factory/items/${item.id}/languages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, language, accountId, text: textValue, confirmRights: isCopy && (native ? copyCompared && (item.originalImageUrls.length === 0 || imageRights) : partnerTranslationRights), confirmPartnerTranslationRights: isCopy && partnerTranslationRights }) }, action === 'translate' ? 'translate' : 'approve')
   }
   async function publishSelected() {
     setBusy('publish')
@@ -250,7 +259,7 @@ function ItemDetail({
             {item.aiReview?.error && <p className="text-destructive">{item.aiReview.error}</p>}
             {!!item.aiReview?.issues?.length && <div><p className="font-medium">{t.contentFactory.items.aiReviewIssues}</p><ul className="list-disc pl-5">{item.aiReview.issues.map((issue, index) => <li key={index}>{issue.detail} — {issue.example}</li>)}</ul></div>}
             {!!item.aiReview?.recommendations?.length && <div><p className="font-medium">{t.contentFactory.items.aiReviewRecommendations}</p><ul className="list-disc pl-5">{item.aiReview.recommendations.map((recommendation, index) => <li key={index}>{recommendation}</li>)}</ul></div>}
-            {item.generatedText && ['ready', 'needs_review', 'failed'].includes(item.status) && !item.socialPostId && (
+            {item.generatedText && ['ready', 'needs_review', 'failed'].includes(item.status) && !linked && (
               <button onClick={review} disabled={busy !== null || dirty || reviewPassed} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">
                 {busy === 'review' ? t.contentFactory.items.aiReviewChecking : t.contentFactory.items.aiReviewAction}
               </button>
@@ -266,6 +275,7 @@ function ItemDetail({
                   <input
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
+                    disabled={linked}
                     className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
                   />
                 </label>
@@ -274,6 +284,7 @@ function ItemDetail({
                   <textarea
                     value={text}
                     onChange={(e) => setText(e.target.value)}
+                    disabled={linked}
                     rows={10}
                     className="resize-none border border-hairline bg-card p-3 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
                   />
@@ -290,7 +301,7 @@ function ItemDetail({
                 className="aspect-square w-full border border-hairline object-cover"
               />
             )}
-            {!isCopy && item.generatedText && (item.status === 'ready' || item.status === 'needs_review') && !item.socialPostId && (
+            {!isCopy && item.generatedText && (item.status === 'ready' || item.status === 'needs_review') && !linked && (
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={generateImage}
@@ -310,7 +321,7 @@ function ItemDetail({
             {error && <p className="text-sm text-destructive">{error}</p>}
 
             <div className="flex flex-wrap gap-2">
-              {!isCopy && canGenerate(item.status) && (
+              {!isCopy && canGenerate(item.status) && !linked && (
                 <button
                   onClick={generate}
                   disabled={busy !== null}
@@ -319,7 +330,7 @@ function ItemDetail({
                   {busy === 'generate' ? t.contentFactory.items.generating : item.generatedText ? t.contentFactory.items.actionRegenerate : t.contentFactory.items.actionGenerate}
                 </button>
               )}
-              {!isCopy && item.generatedText && (
+              {!isCopy && item.generatedText && !linked && (
                 <button
                   onClick={saveEdit}
                   disabled={busy !== null}
@@ -352,11 +363,16 @@ function ItemDetail({
             <span className="label-mono text-muted-foreground">{t.contentFactory.items.languagesTitle}</span>
             {isCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={copyCompared} onChange={(e) => setCopyCompared(e.target.checked)} />{t.contentFactory.items.confirmCopyText}</label>}
             {isCopy && item.originalImageUrls.length > 0 && <label className="flex items-start gap-2"><input type="checkbox" checked={imageRights} onChange={(e) => setImageRights(e.target.checked)} />{t.contentFactory.items.confirmImageRights}</label>}
+            <p>{t.contentFactory.items.sourceLanguage}: {item.sourceLanguage?.toUpperCase() ?? t.contentFactory.items.unknownLanguage}</p>
             {isCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={partnerTranslationRights} onChange={(e) => setPartnerTranslationRights(e.target.checked)} />{t.contentFactory.items.confirmTranslationRights}</label>}
             {(['ru', 'en'] as const).map((language) => {
               const account = language === 'ru' ? ruAccount : enAccount
               const approved = language === 'ru' ? item.ruApprovedAt : item.enApprovedAt
               const publication = channels[language]
+              const native = language === item.sourceLanguage
+              const translation = language === 'ru' ? ruText : enText
+              const savedTranslation = language === 'ru' ? item.ruText : item.enText
+              const nativeApproved = item.sourceLanguage === 'ru' ? item.ruApprovedAt : item.enApprovedAt
               return <div key={language} className="flex flex-col gap-2 border-t border-hairline pt-3">
                 <label className="flex items-center gap-2 font-medium"><input type="checkbox" checked={language === 'ru' ? selectedRu : selectedEn} onChange={(e) => language === 'ru' ? setSelectedRu(e.target.checked) : setSelectedEn(e.target.checked)} />{language.toUpperCase()}</label>
                 <select value={account} onChange={(e) => language === 'ru' ? setRuAccount(e.target.value) : setEnAccount(e.target.value)} className="border border-hairline bg-card px-3 py-2" disabled={publication?.status === 'published' || publication?.status === 'publishing'}>
@@ -366,12 +382,12 @@ function ItemDetail({
                 <p className="text-muted-foreground">{t.contentFactory.items.approvalStatus}: {approved ? t.contentFactory.items.approved : t.contentFactory.items.notApproved} · {t.contentFactory.items.publicationStatus}: {publication?.status || '—'}</p>
                 {publication?.error && <p className="text-destructive">{publication.error}</p>}
                 {publication?.external_url && <a href={publication.external_url} target="_blank" rel="noreferrer" className="text-blue underline">{t.contentFactory.items.publishedLinkLabel}</a>}
-                {language === 'en' && <>
-                  <button onClick={() => languageAction('translate')} disabled={busy !== null || !item.generatedText || !!item.enSocialPostId || (isCopy && !partnerTranslationRights)} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.translateEnglish}</button>
-                  <textarea rows={10} value={enText} onChange={(e) => setEnText(e.target.value)} className="w-full border border-hairline bg-card p-3" disabled={!!item.enSocialPostId} />
-                  <button onClick={() => languageAction('save_en', undefined, enText)} disabled={busy !== null || !item.enText || enText === item.enText || !!item.enSocialPostId} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.saveEnglish}</button>
+                {!native && item.sourceLanguage && <>
+                  <button onClick={() => languageAction('translate', language)} disabled={busy !== null || !nativeApproved || !item.generatedText || !!(language === 'ru' ? item.socialPostId : item.enSocialPostId) || (isCopy && !partnerTranslationRights)} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{language === 'ru' ? t.contentFactory.items.translateRussian : t.contentFactory.items.translateEnglish}</button>
+                  <textarea rows={10} value={translation} onChange={(e) => language === 'ru' ? setRuText(e.target.value) : setEnText(e.target.value)} className="w-full border border-hairline bg-card p-3" disabled={!!(language === 'ru' ? item.socialPostId : item.enSocialPostId)} />
+                  <button onClick={() => languageAction('save_translation', language, undefined, translation)} disabled={busy !== null || !savedTranslation || translation === savedTranslation || !!(language === 'ru' ? item.socialPostId : item.enSocialPostId)} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{language === 'ru' ? t.contentFactory.items.saveRussian : t.contentFactory.items.saveEnglish}</button>
                 </>}
-                <button onClick={() => languageAction(language === 'ru' ? 'approve_ru' : 'approve_en', account)} disabled={busy !== null || !account || (!!approved && account === (language === 'ru' ? item.ruAccountId : item.enAccountId)) || publication?.status === 'published' || publication?.status === 'publishing' || (language === 'ru' ? (!isCopy && (!reviewPassed || dirty || !['ready', 'failed', 'scheduled'].includes(item.status))) || (isCopy && (!copyCompared || (item.originalImageUrls.length > 0 && !imageRights))) : (!item.enText || enText !== item.enText || (isCopy && !partnerTranslationRights)))} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.actionApprove} {language.toUpperCase()}</button>
+                <button onClick={() => languageAction(language === 'ru' ? 'approve_ru' : 'approve_en', language, account)} disabled={busy !== null || !account || !item.sourceLanguage || (!!approved && account === (language === 'ru' ? item.ruAccountId : item.enAccountId)) || publication?.status === 'published' || publication?.status === 'publishing' || (native ? (!isCopy && (!reviewPassed || dirty || !['ready', 'failed', 'scheduled'].includes(item.status))) || (isCopy && (!copyCompared || (item.originalImageUrls.length > 0 && !imageRights))) : (!savedTranslation || translation !== savedTranslation || !nativeApproved || (isCopy && !partnerTranslationRights)))} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.actionApprove} {language.toUpperCase()}</button>
               </div>
             })}
             <button onClick={publish} disabled={busy !== null || (!selectedRu && !selectedEn) || (selectedRu && channels.ru?.status !== 'published' && (!item.ruApprovedAt || ruAccount !== item.ruAccountId)) || (selectedEn && channels.en?.status !== 'published' && (!item.enApprovedAt || enAccount !== item.enAccountId)) || ((!selectedRu || channels.ru?.status === 'published') && (!selectedEn || channels.en?.status === 'published'))} className="label-mono border border-foreground bg-foreground px-3 py-2 text-background disabled:opacity-50">{busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.publishSelected}</button>

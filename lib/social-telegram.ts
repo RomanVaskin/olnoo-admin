@@ -142,16 +142,18 @@ export async function publishSocialPublicationToTelegram(
   if (linkedRows[0]) {
     const item = await getItem(pool, projectId, linkedRows[0].id)
     const isEnglish = linkedRows[0].is_en
-    if (!item || (isEnglish
-      ? !item.enApprovedAt || (item.processingMode === 'copy' && !item.enRightsConfirmed) || item.enSourceText !== item.generatedText ||
-        (item.processingMode === 'ai' && !hasPassedAiReview(item))
-      : !item.ruApprovedAt || (item.processingMode === 'copy' && !hasApprovedPartnerCopy(item)))) {
+    const translated = item && (isEnglish ? item.sourceLanguage === 'ru' : item.sourceLanguage === 'en')
+    if (!item || !item.sourceLanguage || (isEnglish ? !item.enApprovedAt : !item.ruApprovedAt) ||
+        (item.processingMode === 'copy' && !hasApprovedPartnerCopy(item)) ||
+        (item.processingMode === 'ai' && !hasPassedAiReview(item)) ||
+        (translated && (isEnglish
+          ? item.enSourceText !== item.generatedText || (item.processingMode === 'copy' && !item.enRightsConfirmed)
+          : item.ruSourceText !== item.generatedText || (item.processingMode === 'copy' && !item.ruRightsConfirmed)))) {
       const error = 'Content Factory language approval, rights or Quality Gate is missing.'
       await recordPublicationPreflightFailure(pool, id, projectId, error)
       return { error, status: 409 }
     }
-    if (isEnglish) text = item.enText
-    else if (item.processingMode === 'copy') text = item.originalText
+    text = isEnglish ? (translated ? item.enText : item.generatedText) : (translated ? item.ruText : item.generatedText)
     try {
       const media = await loadLanguageMedia(item, projectSlug!, isEnglish ? 'en' : 'ru')
       copyImages = media.images

@@ -8,6 +8,16 @@ import type { SourceProcessingMode } from './content-factory-sources.ts'
 
 export class ContentFactoryItemError extends Error {}
 
+export type PostLanguage = 'ru' | 'en'
+export function detectPostLanguage(text: string): PostLanguage | null {
+  const prose = text.replace(/https?:\/\/\S+|@[a-z0-9_]+/gi, '')
+  const cyrillic = (prose.match(/[а-яё]/gi) ?? []).length
+  const latin = (prose.match(/[a-z]/gi) ?? []).length
+  if (cyrillic >= 5 && cyrillic > latin * 1.5) return 'ru'
+  if (latin >= 5 && latin > cyrillic * 1.5) return 'en'
+  return null
+}
+
 export const ITEM_STATUSES = ['new', 'processing', 'ready', 'scheduled', 'published', 'needs_review', 'rejected', 'failed'] as const
 export type ItemStatus = (typeof ITEM_STATUSES)[number]
 
@@ -56,6 +66,10 @@ export type ContentFactoryItem = {
   status: ItemStatus
   generatedTitle: string
   generatedText: string
+  sourceLanguage: PostLanguage | null
+  ruText: string
+  ruSourceText: string
+  ruRightsConfirmed: boolean
   reviewReason: string
   aiReview: ContentFactoryAiReview | null
   error: string
@@ -93,6 +107,10 @@ function fromRow(row: Record<string, unknown>): ContentFactoryItem {
     status: (row.status as ItemStatus) ?? 'new',
     generatedTitle: (row.generated_title as string) ?? '',
     generatedText: (row.generated_text as string) ?? '',
+    sourceLanguage: row.source_language === 'ru' || row.source_language === 'en' ? row.source_language : null,
+    ruText: (row.ru_text as string) ?? '',
+    ruSourceText: (row.ru_source_text as string) ?? '',
+    ruRightsConfirmed: row.ru_rights_confirmed === true,
     reviewReason: (row.review_reason as string) ?? '',
     aiReview: (row.ai_review as ContentFactoryAiReview | null) ?? null,
     error: (row.error as string) ?? '',
@@ -132,15 +150,16 @@ export async function storeNewSourceMessages(
       `INSERT INTO content_factory_items (
          id, project_id, source_id, external_id, original_url, original_text,
          original_image_urls, original_published_at, status, generated_text, review_reason,
-         processing_mode, copy_permission_confirmed
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         processing_mode, copy_permission_confirmed, source_language
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        ON CONFLICT (source_id, external_id) DO NOTHING
        RETURNING *`,
       [id, projectId, sourceId, msg.externalId, msg.url, msg.text, msg.imageUrls.join(','), msg.publishedAt || null,
         sourcePolicy.processingMode === 'copy' ? (msg.text ? 'needs_review' : 'failed') : 'new',
         sourcePolicy.processingMode === 'copy' ? msg.text : '',
         sourcePolicy.processingMode === 'copy' ? 'Compare the public preview text with the original Telegram post before approving; preview completeness is not verified.' : '',
-        sourcePolicy.processingMode, sourcePolicy.processingMode === 'copy' && sourcePolicy.copyPermissionConfirmed],
+        sourcePolicy.processingMode, sourcePolicy.processingMode === 'copy' && sourcePolicy.copyPermissionConfirmed,
+        sourcePolicy.processingMode === 'copy' ? detectPostLanguage(msg.text) : null],
     )
     if (rows[0]) created.push(fromRow(rows[0]))
   }
@@ -271,10 +290,10 @@ export async function setGeneratedContent(
 ): Promise<ContentFactoryItem | null> {
   const { rows } = await pool.query(
     `UPDATE content_factory_items
-     SET generated_title = $1, generated_text = $2, status = $3, review_reason = $4, ai_review = NULL, error = '', updated_at = now()
-     WHERE id = $5 AND project_id = $6
+     SET generated_title = $1, generated_text = $2, status = $3, review_reason = $4, source_language = $7, ai_review = NULL, error = '', updated_at = now()
+     WHERE id = $5 AND project_id = $6 AND social_post_id IS NULL AND en_social_post_id IS NULL AND en_publish_claimed = false
      RETURNING *`,
-    [content.title, content.text, content.status, content.reviewReason, id, projectId],
+    [content.title, content.text, content.status, content.reviewReason, id, projectId, detectPostLanguage(content.text)],
   )
   return rows[0] ? fromRow(rows[0]) : null
 }
@@ -284,7 +303,8 @@ export async function claimAiReview(pool: Pool, projectId: number, id: string): 
   const claimId = randomUUID()
   const { rows } = await pool.query(
     `UPDATE content_factory_items SET ai_review = $1::jsonb, updated_at = now()
-     WHERE id = $2 AND project_id = $3 AND status IN ('ready', 'needs_review', 'failed')
+     WHERE id = $2 AND project_id = $3 AND social_post_id IS NULL AND en_social_post_id IS NULL AND en_publish_claimed = false
+       AND status IN ('ready', 'needs_review', 'failed')
        AND (ai_review IS NULL OR COALESCE(ai_review->>'status', '') NOT IN ('checking', 'passed')
             OR (ai_review->>'status' = 'checking' AND updated_at < now() - interval '15 minutes'))
      RETURNING *`,
@@ -301,7 +321,8 @@ export async function finishAiReview(
 ): Promise<ContentFactoryItem | null> {
   const { rows } = await pool.query(
     `UPDATE content_factory_items SET ai_review = $1::jsonb, updated_at = now()
-     WHERE id = $2 AND project_id = $3 AND ai_review->>'status' = 'checking'
+     WHERE id = $2 AND project_id = $3 AND social_post_id IS NULL AND en_social_post_id IS NULL AND en_publish_claimed = false
+       AND ai_review->>'status' = 'checking'
        AND ai_review->>'claimId' = $4
        AND generated_title = $5 AND generated_text = $6 AND image_filename = $7
      RETURNING *`,
@@ -314,8 +335,8 @@ export async function finishAiReview(
  * needs_review item; see canApprove). */
 export async function editGeneratedContent(pool: Pool, projectId: number, id: string, content: { title: string; text: string }): Promise<ContentFactoryItem | null> {
   const { rows } = await pool.query(
-    `UPDATE content_factory_items SET generated_title = $1, generated_text = $2, ai_review = NULL, updated_at = now() WHERE id = $3 AND project_id = $4 RETURNING *`,
-    [content.title, content.text, id, projectId],
+    `UPDATE content_factory_items SET generated_title = $1, generated_text = $2, source_language = $5, ai_review = NULL, updated_at = now() WHERE id = $3 AND project_id = $4 AND social_post_id IS NULL AND en_social_post_id IS NULL AND en_publish_claimed = false AND status NOT IN ('scheduled', 'processing', 'published') RETURNING *`,
+    [content.title, content.text, id, projectId, detectPostLanguage(content.text)],
   )
   return rows[0] ? fromRow(rows[0]) : null
 }
@@ -330,7 +351,7 @@ export async function setItemSocialPostId(pool: Pool, projectId: number, id: str
 
 export async function setItemImageFilename(pool: Pool, projectId: number, id: string, filename: string): Promise<ContentFactoryItem | null> {
   const { rows } = await pool.query(
-    "UPDATE content_factory_items SET image_filename = $1, updated_at = now() WHERE id = $2 AND project_id = $3 AND status IN ('ready', 'needs_review') AND social_post_id IS NULL RETURNING *",
+    "UPDATE content_factory_items SET image_filename = $1, updated_at = now() WHERE id = $2 AND project_id = $3 AND status IN ('ready', 'needs_review') AND social_post_id IS NULL AND en_social_post_id IS NULL AND en_publish_claimed = false RETURNING *",
     [filename, id, projectId],
   )
   return rows[0] ? fromRow(rows[0]) : null

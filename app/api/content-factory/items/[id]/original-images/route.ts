@@ -12,7 +12,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params
   const item = await getItem(pool, projectId, id)
   if (!item || item.processingMode !== 'copy') return NextResponse.json({ error: 'Partner copy not found.' }, { status: 404 })
-  if (item.socialPostId || item.status === 'published' || item.status === 'scheduled') return NextResponse.json({ error: 'Published material cannot be changed.' }, { status: 409 })
+  if (item.socialPostId || item.enSocialPostId || item.enPublishClaimed || item.status === 'published' || item.status === 'scheduled') return NextResponse.json({ error: 'Published material cannot be changed.' }, { status: 409 })
   const source = await getSource(pool, projectId, item.sourceId)
   const handle = source?.type === 'telegram' ? normalizeTelegramHandle(source.handle) : null
   let freshUrls: string[] | undefined
