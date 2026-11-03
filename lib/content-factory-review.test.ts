@@ -49,9 +49,24 @@ test('review calibration separates common listing facts from copied creative exp
 
 test('quality is checked independently of copyright risk, including every substantial criterion', () => {
   const p = CONTENT_FACTORY_REVIEW_PROMPT
-  for (const phrase of ['central idea and conclusion', 'all substantial points, arguments, examples, exact figures, conditions and practical recommendations', 'several criteria each need a full explanation', 'shallow list or vague summary', 'quality.passed=false', 'even if copyright risk is low', 'specific missing or weakened source passage']) {
+  for (const phrase of ['central idea and conclusion', 'all substantial points, arguments, examples, exact figures, conditions and practical recommendations', 'helpful sections, numbering and lists', 'shallow list', 'quality.passed=false', 'even if copyright risk is low', 'specific missing or weakened source passage']) {
     assert.ok(p.includes(phrase), phrase)
   }
+})
+
+test('review detects flattened presentation and formulaic caveats without weakening fact checks', () => {
+  const p = CONTENT_FACTORY_REVIEW_PROMPT
+  for (const phrase of [
+    'helpful sections, numbering and lists',
+    'headline, opening, logical flow, short paragraphs, readability, expressiveness and practical value',
+    'dry fact sheet',
+    'less clear and engaging than a strong original',
+    'repetitive bureaucratic phrases',
+    'clear qualification of material unverified claims',
+    'necessary attribution for quotations or exclusive information',
+    'which good sections should stay unchanged',
+  ]) assert.ok(p.includes(phrase), phrase)
+  assert.doesNotMatch(p, /AURELMAR|Georgia|Cyprus|Potamos/i)
 })
 
 test('only a valid low-risk decision passes the current title, text and image', () => {
