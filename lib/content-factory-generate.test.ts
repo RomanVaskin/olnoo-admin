@@ -3,7 +3,10 @@ import assert from 'node:assert/strict'
 import { Pool } from 'pg'
 import {
   CONTENT_FACTORY_SYSTEM_PROMPT,
+  CONTENT_FACTORY_FACT_EXTRACTION_PROMPT,
+  buildFactExtractionPrompt,
   buildContentFactoryPrompt,
+  parseContentFactoryFactSheet,
   parseGenerationResult,
   hasVerbatimOverlap,
   generateContentFactoryArticle,
@@ -12,12 +15,18 @@ import {
 } from './content-factory-generate.ts'
 import { saveProjectBrandVoice } from './project-brand-voice.ts'
 
+const factSheet = { language: 'ru', facts: [{ statement: 'Банк предлагает ипотеку в Грузии', figures: ['12,5%'], conditions: ['Первый взнос 20%'], source: 'source_publication', confirmation: 'source_only' }], missingInfo: ['Подтверждение условий банка'] } as const
+const factSheetJson = JSON.stringify(factSheet)
+
 // --- Pure: prompt / parser ---
 
 test('generator preserves essential meaning while writing independent language', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
-  assert.match(p, /first identify the concrete facts/i)
-  assert.match(p, /never a repost, translation, shallow summary, or light paraphrase/i)
+  assert.match(p, /first identify the concrete facts in FACT SHEET/i)
+  assert.match(p, /never a repost, translation, summary, or light paraphrase/i)
+  assert.match(p, /new title, opening, and structure/i)
+  assert.match(p, /why it matters to the target audience/i)
+  assert.match(p, /practical takeaway that follows from the supported facts/i)
   assert.match(p, /central idea, essential points and practical meaning/i)
   assert.match(p, /do not copy distinctive phrasing or creative arrangement/i)
 })
@@ -55,12 +64,16 @@ test('generator keeps a strong original engaging without boilerplate attribution
 
 test('generation separates facts and supported figures from source framing before choosing a new analytical angle', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
-  assert.match(p, /separating reported facts and exact figures from the source's opinions, framing, and wording/i)
-  assert.match(p, /Preserve the central idea and all material meaning blocks/i)
+  assert.match(CONTENT_FACTORY_FACT_EXTRACTION_PROMPT, /neutral, checkable facts/i)
+  assert.match(CONTENT_FACTORY_FACT_EXTRACTION_PROMPT, /source and confirmation status/i)
+  assert.match(CONTENT_FACTORY_FACT_EXTRACTION_PROMPT, /every substantial factual point, supporting argument, concrete example/i)
   assert.match(p, /useful functional structure/i)
   assert.match(p, /do not copy expressive sentences or a distinctive creative arrangement/i)
-  assert.match(p, /Preserve exact figures when verified by PROJECT CONTEXT/i)
-  assert.match(p, /if they appear only in SOURCE TEXT, keep them exact and qualify material unconfirmed claims under rule 6/i)
+  assert.match(p, /Choose your own analytical angle based on what matters to the target audience/i)
+  assert.match(p, /not around the order of FACT SHEET entries/i)
+  assert.match(p, /Do not reconstruct a source announcement's headline, sequence of points, distinctive phrasing, or sentence-by-sentence argument even with synonyms/i)
+  assert.match(p, /Preserve exact figures and conditions from FACT SHEET/i)
+  assert.match(p, /if a figure is source_only, keep it exact and qualify material unconfirmed claims under rule 6/i)
   assert.match(p, /Do not round, alter, or invent figures/i)
 })
 
@@ -80,8 +93,8 @@ test('requirement: the prompt flags unconfirmed price, yield, statistics, legisl
 
 test('requirement: the prompt removes source promotion while using the project Brand Profile', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
-  assert.match(p, /remove the SOURCE channel's advertising, self-promotion, promotional links, and calls to action/i)
-  assert.match(p, /do not carry over its contact details or sales pitch/i)
+  assert.match(CONTENT_FACTORY_FACT_EXTRACTION_PROMPT, /Do not copy the source's advertising language, creative phrasing, narrative structure, author opinions, CTA, channel name or URLs/i)
+  assert.match(p, /Do not reproduce a source channel's advertising, self-promotion, promotional links, calls to action, contact details or sales pitch/i)
   assert.match(p, /use PROJECT CONTEXT's Brand Profile/i)
   assert.match(p, /never force one or copy the source's CTA/i)
 })
@@ -91,13 +104,13 @@ test('requirement: the system prompt forbids reusing a source image', () => {
 })
 
 test('requirement: ordinary posts omit the source channel while attribution cases require review', () => {
-  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /SOURCE URL is internal provenance/i)
+  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /Source provenance remains internal for the editor/i)
   assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /direct quote, exclusive information/i)
   assert.doesNotMatch(CONTENT_FACTORY_SYSTEM_PROMPT, /include SOURCE URL itself/i)
 })
 
 test('requirement: the prompt flags substantial copied wording for manual review', () => {
-  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /substantially copies the source's wording, set "needsReview": true/i)
+  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /distinctive promotional wording or an attribution-sensitive quote, do not reproduce it; set "needsReview": true/i)
 })
 
 test('Telegram format keeps readable depth without a forced template', () => {
@@ -123,11 +136,38 @@ test('Telegram format: plain text avoids markup that the current publisher would
   assert.match(p, /markers would appear literally/i)
 })
 
-test('buildContentFactoryPrompt includes source text, source URL, and the project context block', () => {
-  const prompt = buildContentFactoryPrompt({ sourceText: 'Original post text', sourceUrl: 'https://t.me/x/1', contextBlock: 'CTX-BLOCK' })
-  assert.ok(prompt.includes('Original post text'))
-  assert.ok(prompt.includes('https://t.me/x/1'))
-  assert.ok(prompt.includes('CTX-BLOCK'))
+test('only fact extraction receives the original and URL; writing receives facts and project context', () => {
+  const first = buildFactExtractionPrompt({ sourceText: 'Original post text', sourceUrl: 'https://t.me/x/1', contextBlock: 'CTX-BLOCK' })
+  const second = buildContentFactoryPrompt({ facts: parseContentFactoryFactSheet(factSheetJson, 'Unrelated original text', ''), contextBlock: 'CTX-BLOCK' })
+  assert.match(first, /Original post text/)
+  assert.match(first, /https:\/\/t.me\/x\/1/)
+  assert.match(second, /CTX-BLOCK/)
+  assert.match(second, /12,5%/)
+  assert.match(second, /Первый взнос 20%/)
+  assert.doesNotMatch(second, /Original post text|t\.me\/x\/1/)
+})
+
+test('fact extraction fails closed on invalid JSON, missing facts and leaked source wording or URL', () => {
+  assert.throws(() => parseContentFactoryFactSheet('not JSON', 'original', ''), ContentFactoryGenerateError)
+  assert.throws(() => parseContentFactoryFactSheet(JSON.stringify({ ...factSheet, facts: [] }), 'original', ''), ContentFactoryGenerateError)
+  assert.throws(() => parseContentFactoryFactSheet(JSON.stringify({ ...factSheet, facts: [{ ...factSheet.facts[0], statement: 'https://t.me/source/1' }] }), 'original', 'https://t.me/source/1'), ContentFactoryGenerateError)
+  assert.throws(() => parseContentFactoryFactSheet(JSON.stringify({ ...factSheet, facts: [{ ...factSheet.facts[0], statement: 'Follow @source_channel' }] }), 'original', 'https://t.me/source_channel/1'), ContentFactoryGenerateError)
+  assert.throws(() => parseContentFactoryFactSheet(JSON.stringify({ ...factSheet, facts: [{ ...factSheet.facts[0], source: 'project_context', confirmation: 'source_only' }] }), 'original', ''), ContentFactoryGenerateError)
+  const copied = 'This is a long copied sentence from the source that should never be passed into the writing stage.'
+  assert.throws(() => parseContentFactoryFactSheet(JSON.stringify({ ...factSheet, facts: [{ ...factSheet.facts[0], statement: copied }] }), copied, ''), ContentFactoryGenerateError)
+  const shortOriginal = 'An original slogan here'
+  assert.throws(() => parseContentFactoryFactSheet(JSON.stringify({ ...factSheet, facts: [{ ...factSheet.facts[0], statement: shortOriginal }] }), shortOriginal, ''), ContentFactoryGenerateError)
+})
+
+test('fact sheet removes source order while preserving each exact figure and condition', () => {
+  const reverse = { ...factSheet, facts: [
+    { ...factSheet.facts[0], statement: 'Zeta fact', figures: ['12,5%'], conditions: ['20 years'] },
+    { ...factSheet.facts[0], statement: 'Alpha fact', figures: ['20%'], conditions: ['First payment'] },
+  ] }
+  const parsed = parseContentFactoryFactSheet(JSON.stringify(reverse), 'Different source wording', '')
+  assert.deepEqual(parsed.facts.map((fact) => fact.statement), ['Alpha fact', 'Zeta fact'])
+  assert.deepEqual(parsed.facts[1].figures, ['12,5%'])
+  assert.deepEqual(parsed.facts[1].conditions, ['20 years'])
 })
 
 test('parseGenerationResult: an independent article does not acquire the source URL', () => {
@@ -247,29 +287,65 @@ test('hasVerbatimOverlap: forces needsReview true in parseGenerationResult even 
   assert.ok(/verbatim/i.test(result.reviewReason))
 })
 
-test('Content Factory uses the text preset while retaining Brand Profile, JSON parsing and review flag', async () => {
+test('two sequential calls use the text preset; second receives facts and Brand Profile but no original or URL', async () => {
   const pool = { query: async (sql: string) => {
     if (sql.includes('FROM projects')) return { rows: [{ name: 'Example', domain: 'example.com' }] }
     if (sql.includes('FROM project_brand_voice')) return { rows: [{ target_audience: 'Readers', tone_style: 'Measured', verified_facts: '', constraints: '', preferred_cta: '' }] }
     return { rows: [] }
   } } as unknown as Pool
   const originalFetch = globalThis.fetch
-  let sent: Record<string, unknown> = {}
+  const sent: Record<string, unknown>[] = []
   globalThis.fetch = (async (_url: string, init: RequestInit) => {
-    sent = JSON.parse(init.body as string)
-    return new Response(JSON.stringify({ provider: 'deepseek', content: JSON.stringify({ title: 'Analysis', body: 'Independent text', needsReview: true, reviewReason: 'Check a claim' }) }))
+    const request = JSON.parse(init.body as string) as Record<string, unknown>
+    sent.push(request)
+    const content = sent.length === 1 ? factSheetJson : JSON.stringify({ title: 'Analysis', body: 'Independent text with 12,5% and a 20% first payment.', needsReview: true, reviewReason: 'Check a claim' })
+    return new Response(JSON.stringify({ provider: 'deepseek', content }))
   }) as typeof fetch
   try {
-    const result = await generateContentFactoryArticle(pool, 1, { sourceText: 'Original report', sourceUrl: 'https://t.me/source/1' })
-    assert.equal(sent.service, 'content-factory')
-    assert.equal('provider' in sent, false)
-    assert.equal('model' in sent, false)
-    const prompt = (sent.messages as Array<{ content: string }>).map((message) => message.content).join('\n')
-    assert.match(prompt, /Measured/)
-    assert.match(prompt, /Original report/)
-    assert.deepEqual(result, { title: 'Analysis', body: 'Independent text', needsReview: true, reviewReason: 'Check a claim' })
+    const original = 'ORIGINAL_IMPERIAL_TEXT private source announcement'
+    const sourceUrl = 'https://t.me/orange_city_group/2614'
+    const result = await generateContentFactoryArticle(pool, 1, { sourceText: original, sourceUrl })
+    assert.equal(sent.length, 2)
+    for (const request of sent) {
+      assert.equal(request.service, 'content-factory')
+      assert.equal('provider' in request, false)
+      assert.equal('model' in request, false)
+    }
+    assert.equal((sent[0].metadata as { task: string }).task, 'content-factory-extract-facts')
+    assert.equal((sent[1].metadata as { task: string }).task, 'content-factory-generate')
+    const first = (sent[0].messages as Array<{ content: string }>).map((message) => message.content).join('\n')
+    const second = (sent[1].messages as Array<{ content: string }>).map((message) => message.content).join('\n')
+    assert.match(first, /ORIGINAL_IMPERIAL_TEXT/)
+    assert.match(first, /orange_city_group\/2614/)
+    assert.match(second, /Measured/)
+    assert.match(second, /12,5%/)
+    assert.match(second, /Первый взнос 20%/)
+    assert.doesNotMatch(second, /ORIGINAL_IMPERIAL_TEXT|orange_city_group|2614/)
+    assert.deepEqual(result, { title: 'Analysis', body: 'Independent text with 12,5% and a 20% first payment.', needsReview: true, reviewReason: 'Check a claim' })
   } finally {
     globalThis.fetch = originalFetch
+  }
+})
+
+test('invalid extraction, no facts, and either Router failure stop the pipeline before a partial result', async () => {
+  const pool = { query: async (sql: string) => {
+    if (sql.includes('FROM projects')) return { rows: [{ name: 'Example', domain: 'example.com' }] }
+    return { rows: [] }
+  } } as unknown as Pool
+  const input = { sourceText: 'An independent original announcement.', sourceUrl: 'https://t.me/source/1' }
+  for (const [firstResponse, secondResponse, expectedCalls] of [
+    [aiRouterOk('invalid JSON'), null, 1],
+    [aiRouterOk(JSON.stringify({ ...factSheet, facts: [] })), null, 1],
+    [new Response('{}', { status: 500 }), null, 1],
+    [aiRouterOk(factSheetJson), new Response('{}', { status: 500 }), 2],
+    [aiRouterOk(factSheetJson), aiRouterOk('invalid final JSON'), 2],
+  ] as const) {
+    let calls = 0
+    await assert.rejects(() => withFetch(() => {
+      calls++
+      return calls === 1 ? firstResponse : secondResponse!
+    }, () => generateContentFactoryArticle(pool, 1, input)))
+    assert.equal(calls, expectedCalls)
   }
 })
 
@@ -325,17 +401,22 @@ async function withFetch<T>(handler: (url: string, init?: RequestInit) => Respon
 }
 
 function aiRouterOk(content: string): Response {
-  return new Response(JSON.stringify({ id: 'r1', requestId: 'req1', provider: 'openai', model: 'gpt', content }), {
+  return new Response(JSON.stringify({ id: 'r1', requestId: 'req1', provider: 'deepseek', model: 'deepseek-flash', content }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+function aiRouterStages(init: RequestInit | undefined, finalContent: string): Response {
+  const request = JSON.parse(String(init?.body ?? '{}')) as { metadata?: { task?: string } }
+  return aiRouterOk(request.metadata?.task === 'content-factory-extract-facts' ? factSheetJson : finalContent)
 }
 
 test('generateContentFactoryArticle: returns the AI Router\'s parsed article', async (t) => {
   await withDb(t, async (pool, makeProject) => {
     const projectId = await makeProject('AURELMAR')
     const raw = JSON.stringify({ title: 'Новый проект на побережье', body: 'Полностью независимый пересказ фактов.', needsReview: false, reviewReason: '' })
-    const result = await withFetch(() => aiRouterOk(raw), () =>
+    const result = await withFetch((_url, init) => aiRouterStages(init, raw), () =>
       generateContentFactoryArticle(pool, projectId, { sourceText: 'Оригинальный пост Александра.', sourceUrl: 'https://t.me/alexander_realty/1' }),
     )
     assert.equal(result.title, 'Новый проект на побережье')
@@ -374,7 +455,7 @@ test('requirement: Brand Profile is applied — the prompt sent to the AI Router
       (_url, init) => {
         const body = JSON.parse(String(init?.body ?? '{}'))
         sentPrompt = body.messages.map((m: { content: string }) => m.content).join('\n')
-        return aiRouterOk(JSON.stringify({ title: 't', body: 'b', needsReview: false, reviewReason: '' }))
+        return aiRouterStages(init, JSON.stringify({ title: 't', body: 'b', needsReview: false, reviewReason: '' }))
       },
       () => generateContentFactoryArticle(pool, projectId, { sourceText: 'source text', sourceUrl: '' }),
     )
@@ -395,7 +476,7 @@ test('requirement: project isolation — generating for project A never sends pr
       (_url, init) => {
         const body = JSON.parse(String(init?.body ?? '{}'))
         sentPrompt = body.messages.map((m: { content: string }) => m.content).join('\n')
-        return aiRouterOk(JSON.stringify({ title: 't', body: 'b', needsReview: false, reviewReason: '' }))
+        return aiRouterStages(init, JSON.stringify({ title: 't', body: 'b', needsReview: false, reviewReason: '' }))
       },
       () => generateContentFactoryArticle(pool, projectA, { sourceText: 'source text', sourceUrl: '' }),
     )

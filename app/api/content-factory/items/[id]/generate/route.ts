@@ -6,7 +6,7 @@ import { generateContentFactoryArticle, reviseContentFactoryArticle, ContentFact
 import { AiRouterError } from '@/lib/ai-router'
 
 /**
- * "Сгенерировать материал" / "Перегенерировать" — one AI Router call per request (see
+ * "Сгенерировать материал" / "Перегенерировать" — two sequential AI Router calls per request (see
  * lib/content-factory-generate.ts). Sets status to 'processing' before the call so a slow
  * request shows as busy rather than stuck on 'new'/'ready'; a failure records the ORIGINAL
  * item's own 'failed' status with the error, never losing the item's source text (the AI call
