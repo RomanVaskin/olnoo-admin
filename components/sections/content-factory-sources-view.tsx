@@ -5,10 +5,10 @@ import { SectionHeader, HeaderActions, StatusPill, TableShell, Th, Td } from '@/
 import { ProjectSelector } from '@/components/project-selector'
 import { useI18n } from '@/components/i18n-provider'
 
-// Mirrors lib/content-factory-sources.ts's SOURCE_TYPES — kept as a local literal (not imported)
-// for the same client-bundle-hygiene reason social-view.tsx's EDITOR_ACTIONS already is.
-const SOURCE_TYPES = ['telegram', 'rss', 'website', 'youtube'] as const
-type SourceType = (typeof SOURCE_TYPES)[number]
+// Only currently offered source types; existing website/youtube sources remain visible.
+// Keep this local to avoid pulling server-only source registry into the client bundle.
+const SOURCE_TYPES = ['telegram', 'rss'] as const
+type SourceType = 'telegram' | 'rss' | 'website' | 'youtube'
 
 type Source = {
   id: string
@@ -156,7 +156,7 @@ export function ContentFactorySourcesView({
             <input
               value={newHandle}
               onChange={(e) => setNewHandle(e.target.value)}
-              placeholder={newType === 'rss' || newType === 'website' ? 'https://example.com/news/feed.xml' : t.contentFactory.sources.handlePlaceholder}
+              placeholder={newType === 'rss' ? 'https://example.com/news/feed.xml' : t.contentFactory.sources.handlePlaceholder}
               className="min-w-[220px] border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
             />
             <select value={newMode} onChange={(e) => { setNewMode(e.target.value as 'ai' | 'copy'); setNewCopyPermission(false) }} className="border border-hairline bg-card px-3 py-2.5 text-sm">
