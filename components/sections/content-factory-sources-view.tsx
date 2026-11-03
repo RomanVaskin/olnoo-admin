@@ -156,7 +156,7 @@ export function ContentFactorySourcesView({
             <input
               value={newHandle}
               onChange={(e) => setNewHandle(e.target.value)}
-              placeholder={t.contentFactory.sources.handlePlaceholder}
+              placeholder={newType === 'rss' || newType === 'website' ? 'https://example.com/news/feed.xml' : t.contentFactory.sources.handlePlaceholder}
               className="min-w-[220px] border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
             />
             <select value={newMode} onChange={(e) => { setNewMode(e.target.value as 'ai' | 'copy'); setNewCopyPermission(false) }} className="border border-hairline bg-card px-3 py-2.5 text-sm">

@@ -1,3 +1,4 @@
+import { publicSourceUrl } from './content-factory-web-fetch.ts'
 import type { Pool } from 'pg'
 import { randomUUID } from 'node:crypto'
 
@@ -8,6 +9,10 @@ import { randomUUID } from 'node:crypto'
 // the Social module already gives its own rows.
 
 export class ContentFactorySourceError extends Error {}
+
+function validateWebSourceUrl(value: string): void {
+  try { publicSourceUrl(value) } catch { throw new ContentFactorySourceError('Use a public HTTP(S) source URL without credentials.') }
+}
 
 // Open-ended by design (the task asks the architecture to allow RSS/website/YouTube/etc. later)
 // — only 'telegram' has an adapter implemented (lib/content-factory-telegram-source.ts). Any other
@@ -69,6 +74,7 @@ export async function createSource(
   const type = isSourceType(input.type) ? input.type : null
   if (!type) throw new ContentFactorySourceError('Unknown source type.')
   const handle = input.handle.trim()
+  if (['rss', 'website'].includes(type)) validateWebSourceUrl(handle)
   if (!handle) throw new ContentFactorySourceError('A source handle/URL is required.')
   const processingMode = input.processingMode ?? 'ai'
   if (processingMode !== 'ai' && processingMode !== 'copy') throw new ContentFactorySourceError('Unknown source processing mode.')
@@ -94,6 +100,7 @@ export async function updateSource(
   if (!existing) return null
 
   const handle = patch.handle !== undefined ? patch.handle.trim() : existing.handle
+  if (['rss', 'website'].includes(existing.type)) validateWebSourceUrl(handle)
   if (!handle) throw new ContentFactorySourceError('A source handle/URL is required.')
   const enabled = patch.enabled !== undefined ? patch.enabled : existing.enabled
   const processingMode = patch.processingMode ?? existing.processingMode
