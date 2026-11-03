@@ -16,6 +16,7 @@ export type ContentFactoryAiReview = {
   passed?: boolean
   issues?: { category: string; detail: string; example: string }[]
   recommendations?: string[]
+  quality?: { passed: boolean; issues: { category: string; detail: string; example: string }[]; recommendations: string[] }
   checkedAt?: string
   error?: string
   claimId?: string
@@ -26,7 +27,7 @@ export type ContentFactoryAiReview = {
 
 export function hasPassedAiReview(item: ContentFactoryItem): boolean {
   const review = item.aiReview
-  return review?.status === 'passed' && (review.risk === 'low' || review.risk === 'medium') && review.passed === true
+  return review?.status === 'passed' && (review.risk === 'low' || review.risk === 'medium') && review.passed === true && review.quality?.passed === true
     && review.reviewedTitle === item.generatedTitle
     && review.reviewedText === item.generatedText
     && review.reviewedImageFilename === item.imageFilename

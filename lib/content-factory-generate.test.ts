@@ -14,36 +14,35 @@ import { saveProjectBrandVoice } from './project-brand-voice.ts'
 
 // --- Pure: prompt / parser ---
 
-test('requirement: the prompt asks for an independent analytical article with its own structure and a practical takeaway', () => {
+test('generator preserves essential meaning while writing independent language', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   assert.match(p, /first identify the concrete facts/i)
-  assert.match(p, /never a repost, translation, summary, or light paraphrase/i)
-  assert.match(p, /new title, opening, and structure/i)
-  assert.match(p, /why it matters to the target audience/i)
-  assert.match(p, /practical takeaway that follows from the supported facts/i)
+  assert.match(p, /never a repost, translation, shallow summary, or light paraphrase/i)
+  assert.match(p, /central idea, essential points and practical meaning/i)
+  assert.match(p, /do not copy distinctive phrasing or creative arrangement/i)
 })
 
-test('editorial method selects one useful format and avoids mechanical rewrites', () => {
+test('generator keeps substantive criteria, examples and useful structure without artificial shortening', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   for (const phrase of [
-    'Select ONE format',
-    'news (event and relevance)',
-    'expert explainer (one practical question)',
-    'property overview (specific offer',
-    'Choose only the facts necessary',
-    'Outline by reader value',
-    'not independent findings',
-    'self-check every paragraph against the source',
-    "do not mechanically recreate the source's feature list"
+    "central idea, purpose, useful structure, every essential point",
+    'all four with their substantial arguments and practical advice',
+    'Keep a useful functional structure',
+    'Preserve concrete numbers, dates, names, conditions, examples, arguments and recommendations',
+    'Remove only real repetition, filler',
+    'do not make a strong original worse',
+    'no 1200–1800 character target',
+    'no padding or artificial shortening',
+    'preserve the depth of each essential criterion'
   ]) assert.ok(p.includes(phrase), phrase)
 })
 
 test('generation separates facts and supported figures from source framing before choosing a new analytical angle', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   assert.match(p, /separating reported facts and exact figures from the source's opinions, framing, and wording/i)
-  assert.match(p, /Choose your own analytical angle based on what matters to the target audience/i)
-  assert.match(p, /not around the source's paragraph order/i)
-  assert.match(p, /Do not copy the source's headline, sequence of points, distinctive phrasing, or sentence-by-sentence argument even with synonyms/i)
+  assert.match(p, /Preserve the central idea and all material meaning blocks/i)
+  assert.match(p, /useful functional structure/i)
+  assert.match(p, /do not copy expressive sentences or a distinctive creative arrangement/i)
   assert.match(p, /Preserve exact figures when verified by PROJECT CONTEXT/i)
   assert.match(p, /if they appear only in SOURCE TEXT, keep them exact but explicitly attributed and unconfirmed under rule 6/i)
   assert.match(p, /Do not round, alter, or invent figures/i)
@@ -85,23 +84,19 @@ test('requirement: the prompt flags substantial copied wording for manual review
   assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /substantially copies the source's wording, set "needsReview": true/i)
 })
 
-test('Telegram format: body contains the visible title, short paragraphs, emoji subheadings, and bullets', () => {
+test('Telegram format keeps readable depth without a forced template', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   assert.match(p, /publisher sends "body" alone, so put the exact "title" as its first line/i)
-  assert.match(p, /short paragraphs/i)
-  assert.match(p, /emoji-led subheadings/i)
+  assert.match(p, /readable paragraphs/i)
   assert.match(p, /plain-text bullets \(•\)/i)
-  assert.match(p, /practical takeaway easy to find/i)
+  assert.match(p, /Make practical advice easy to find/i)
 })
 
-test('Telegram format: default length and emoji density yield to the project Brand Profile', () => {
+test('Telegram length follows content and emojis follow Brand Profile', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
-  assert.match(p, /1200–1800 characters in "body" by default, including the title and any CTA/i)
-  assert.match(p, /different length if the project's Brand Profile specifies one/i)
-  assert.match(p, /shorter useful post rather than padding it/i)
-  assert.match(p, /3–6 relevant emojis across the whole post by default/i)
-  assert.match(p, /rather than in every paragraph/i)
-  assert.match(p, /Brand Profile calls for fewer or none, follow it/i)
+  assert.match(p, /Let the content determine length/i)
+  assert.match(p, /no 1200–1800 character target/i)
+  assert.match(p, /relevant emojis only where they serve the project's Brand Profile/i)
   assert.doesNotMatch(p, /AURELMAR/i)
 })
 
@@ -184,6 +179,11 @@ test('parseGenerationResult: strips a markdown code fence before parsing', () =>
 test('parseGenerationResult: missing title or body throws ContentFactoryGenerateError', () => {
   assert.throws(() => parseGenerationResult(JSON.stringify({ title: '', body: 'b', needsReview: false, reviewReason: '' }), 'o', ''), ContentFactoryGenerateError)
   assert.throws(() => parseGenerationResult(JSON.stringify({ title: 't', body: '', needsReview: false, reviewReason: '' }), 'o', ''), ContentFactoryGenerateError)
+})
+
+test('oversized post fails instead of silently losing essential material', () => {
+  const raw = JSON.stringify({ title: 't', body: 'Т'.repeat(4001), needsReview: false, reviewReason: '' })
+  assert.throws(() => parseGenerationResult(raw, 'original', ''), /no text was truncated/i)
 })
 
 test('parseGenerationResult: not valid JSON at all throws ContentFactoryGenerateError', () => {
@@ -428,6 +428,10 @@ test('targeted revision cannot change prices, quantities or dates', () => {
   assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [
     { field: 'body', original: '$45000', replacement: '$50000' },
   ] })), /factual numbers/i)
+})
+
+test('targeted revision reports when an issue cannot be fixed without rewriting the post', () => {
+  assert.throws(() => applyContentFactoryRevision({ title: 'Тема', body: 'Хороший текст.' }, JSON.stringify({ cannotFix: 'Не хватает подтверждённых фактов для восстановления четырёх критериев.' })), /Targeted correction is not possible/)
 })
 
 test('targeted revision system prompt uses a valid JSON example without union syntax', async () => {

@@ -42,6 +42,7 @@ type Item = {
     risk?: 'low' | 'medium' | 'high'
     issues?: { category: string; detail: string; example: string }[]
     recommendations?: string[]
+    quality?: { passed: boolean }
     checkedAt?: string
     error?: string
   } | null
@@ -73,7 +74,7 @@ function ItemDetail({
   const [busy, setBusy] = useState<'generate' | 'review' | 'publish' | 'save' | 'approve' | 'reject' | 'image' | 'deleteImage' | null>(null)
   const [error, setError] = useState('')
   const dirty = title !== item.generatedTitle || text !== item.generatedText
-  const reviewPassed = item.aiReview?.status === 'passed' && (item.aiReview.risk === 'low' || item.aiReview.risk === 'medium')
+  const reviewPassed = item.aiReview?.status === 'passed' && (item.aiReview.risk === 'low' || item.aiReview.risk === 'medium') && item.aiReview.quality?.passed === true
 
   useEffect(() => {
     setTitle(item.generatedTitle)
@@ -161,6 +162,7 @@ function ItemDetail({
             <span className="label-mono text-muted-foreground">{t.contentFactory.items.aiReviewLabel}</span>
             <p>{item.aiReview ? t.contentFactory.items.aiReviewStatuses[item.aiReview.status] : t.contentFactory.items.aiReviewNotRun}</p>
             {item.aiReview?.risk && <p>{t.contentFactory.items.aiReviewRisk}: {t.contentFactory.items.aiReviewRisks[item.aiReview.risk]}</p>}
+            {item.aiReview?.quality && <p>{t.contentFactory.items.aiReviewQuality}: {item.aiReview.quality.passed ? t.contentFactory.items.aiReviewQualityPassed : t.contentFactory.items.aiReviewQualityFailed}</p>}
             {item.aiReview?.checkedAt && <p className="text-muted-foreground">{formatDate(item.aiReview.checkedAt)}</p>}
             {item.aiReview?.error && <p className="text-destructive">{item.aiReview.error}</p>}
             {!!item.aiReview?.issues?.length && <div><p className="font-medium">{t.contentFactory.items.aiReviewIssues}</p><ul className="list-disc pl-5">{item.aiReview.issues.map((issue, index) => <li key={index}>{issue.detail} — {issue.example}</li>)}</ul></div>}
