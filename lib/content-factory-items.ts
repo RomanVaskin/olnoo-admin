@@ -55,6 +55,8 @@ export type ContentFactoryItem = {
   externalId: string
   originalUrl: string
   originalText: string
+  originKind?: 'source' | 'own'
+  ownBrief?: string
   originalImageUrls: string[]
   originalImageFiles: string[]
   originalImageError: string
@@ -96,6 +98,8 @@ function fromRow(row: Record<string, unknown>): ContentFactoryItem {
     externalId: row.external_id as string,
     originalUrl: (row.original_url as string) ?? '',
     originalText: (row.original_text as string) ?? '',
+    originKind: row.origin_kind === 'own' ? 'own' : 'source',
+    ownBrief: (row.own_brief as string) ?? '',
     originalImageUrls: ((row.original_image_urls as string) ?? '').split(',').filter(Boolean),
     originalImageFiles: Array.isArray(row.original_image_files) ? row.original_image_files as string[] : [],
     originalImageError: (row.original_image_error as string) ?? '',
@@ -355,4 +359,8 @@ export async function setItemImageFilename(pool: Pool, projectId: number, id: st
     [filename, id, projectId],
   )
   return rows[0] ? fromRow(rows[0]) : null
+}
+
+export function ownMaterialSourceText(item: ContentFactoryItem): string {
+  return item.originKind === 'own' && item.ownBrief ? `${item.originalText}\n\nOwner-provided context:\n${item.ownBrief}`.trim() : item.originalText
 }

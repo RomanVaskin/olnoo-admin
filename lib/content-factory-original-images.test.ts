@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { Pool } from 'pg'
-import { downloadOriginalImage, originalImagePath, readOriginalImage, syncOriginalImages } from './content-factory-original-images.ts'
+import { writeOriginalImage, downloadOriginalImage, originalImagePath, readOriginalImage, syncOriginalImages } from './content-factory-original-images.ts'
 import type { ContentFactoryItem } from './content-factory-items.ts'
 
 const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00])
@@ -97,4 +97,13 @@ test('four-photo retry uses fresh links only for missing photos and preserves th
   } finally {
     await rm(path.dirname(originalImagePath(1, id, `${randomUUID()}.jpg`)), { recursive: true, force: true })
   }
+})
+
+test('owner photo storage retains original delivered bytes and uses the existing media directory', async () => {
+  const id = randomUUID()
+  try {
+    const filename = await writeOriginalImage(1, id, jpeg)
+    assert.deepEqual(await readOriginalImage(1, id, filename), jpeg)
+    await assert.rejects(() => writeOriginalImage(1, id, Buffer.from('not an image')), /supported/)
+  } finally { await rm(path.dirname(originalImagePath(1, id, `${randomUUID()}.jpg`)), { recursive: true, force: true }) }
 })

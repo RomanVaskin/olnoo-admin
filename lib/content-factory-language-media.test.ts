@@ -26,3 +26,13 @@ test('AI posts reuse the same cover in both languages', async () => {
   assert.deepEqual(await loadLanguageMedia(item, 'aurelmar', 'en', { cover: reader }), { images: [], photo: cover })
   assert.deepEqual(await loadLanguageMedia(item, 'aurelmar', 'ru', { cover: reader }), { images: [], photo: cover })
 })
+
+test('own AI material reuses untouched owner photos in either language and refuses incomplete album', async () => {
+  const bytes = Buffer.from([255, 216, 255, 1])
+  const item = { id: 'item', projectId: 7, processingMode: 'ai', originKind: 'own', originalImageFiles: ['one.jpg'], originalImageUrls: ['telegram-file:one'], originalImageError: '', imageFilename: '' } as ContentFactoryItem
+  for (const language of ['ru', 'en'] as const) {
+    const result = await loadLanguageMedia(item, 'aurelmar', language, { original: async () => bytes })
+    assert.deepEqual(result.images.map((i) => i.bytes), [bytes])
+    await assert.rejects(() => loadLanguageMedia({ ...item, originalImageFiles: [] }, 'aurelmar', language), /incomplete/)
+  }
+})

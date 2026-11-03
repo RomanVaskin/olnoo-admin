@@ -33,6 +33,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const body = await req.json().catch(() => null)
   if (!body || typeof body !== 'object') return NextResponse.json({ error: 'invalid body' }, { status: 400 })
 
+  if (typeof body.ownBrief === 'string') {
+    if (item.originKind !== 'own' || body.ownBrief.length > 10000) return NextResponse.json({ error: 'Invalid own material brief.' }, { status: 422 })
+    const updated = await pool.query(`UPDATE content_factory_items SET own_brief = $1, updated_at = now()
+      WHERE id = $2 AND project_id = $3 AND origin_kind = 'own' AND status IN ('new', 'failed')
+        AND social_post_id IS NULL AND en_social_post_id IS NULL AND en_publish_claimed = false RETURNING id`, [body.ownBrief, id, projectId])
+    return updated.rowCount ? NextResponse.json(await getItem(pool, projectId, id)) : NextResponse.json({ error: 'The brief cannot be changed after preparation starts.' }, { status: 409 })
+  }
+
   if (body.action === 'approve') {
     if (!canApprove(item.status)) return NextResponse.json({ error: `Cannot approve from status "${item.status}".` }, { status: 409 })
     if (item.processingMode === 'copy') {

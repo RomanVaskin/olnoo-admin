@@ -57,7 +57,7 @@ function fromRow(row: Record<string, unknown>): ContentFactorySource {
 }
 
 export async function listSources(pool: Pool, projectId: number): Promise<ContentFactorySource[]> {
-  const { rows } = await pool.query('SELECT * FROM content_factory_sources WHERE project_id = $1 ORDER BY created_at DESC', [projectId])
+  const { rows } = await pool.query("SELECT * FROM content_factory_sources WHERE project_id = $1 AND handle NOT LIKE 'own-bot:%' ORDER BY created_at DESC", [projectId])
   return rows.map(fromRow)
 }
 
@@ -99,6 +99,7 @@ export async function updateSource(
   const existing = await getSource(pool, projectId, id)
   if (!existing) return null
 
+  if (existing.handle.startsWith('own-bot:')) throw new ContentFactorySourceError('Own material intake sources cannot be edited.')
   const handle = patch.handle !== undefined ? patch.handle.trim() : existing.handle
   if (['rss', 'website'].includes(existing.type)) validateWebSourceUrl(handle)
   if (!handle) throw new ContentFactorySourceError('A source handle/URL is required.')

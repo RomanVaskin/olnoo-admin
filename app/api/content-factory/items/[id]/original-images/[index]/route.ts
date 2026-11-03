@@ -10,7 +10,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { id, index } = await params
   if (!/^(?:0|[1-9]\d*)$/.test(index)) return new NextResponse(null, { status: 404 })
   const item = await getItem(pool, projectId, id)
-  const filename = item?.processingMode === 'copy' ? item.originalImageFiles[Number(index)] : undefined
+  const filename = item && (item.processingMode === 'copy' || item.originKind === 'own') ? item.originalImageFiles[Number(index)] : undefined
   if (!filename) return new NextResponse(null, { status: 404 })
   const bytes = await readOriginalImage(projectId, id, filename).catch(() => null)
   if (!bytes) return new NextResponse(null, { status: 404 })

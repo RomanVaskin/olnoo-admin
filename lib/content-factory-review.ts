@@ -1,3 +1,4 @@
+import { ownMaterialSourceText } from './content-factory-items.ts'
 import type { Pool } from 'pg'
 import { z } from 'zod'
 import { callAiRouter } from './ai-router.ts'
@@ -87,7 +88,8 @@ export async function reviewContentFactoryItem(pool: Pool, item: ContentFactoryI
     { role: 'system', content: CONTENT_FACTORY_REVIEW_PROMPT },
     { role: 'user', content: JSON.stringify({
       projectContext: context,
-      originalText: item.originalText,
+      originalText: ownMaterialSourceText(item),
+      ...(item.originKind === 'own' ? { provenance: 'Uploaded by an allowlisted project contributor as their own material; rights are claimed, not independently verified.' } : {}),
       originalUrl: item.originalUrl,
       originalImageUrls: item.originalImageUrls,
       generatedTitle: item.generatedTitle,
