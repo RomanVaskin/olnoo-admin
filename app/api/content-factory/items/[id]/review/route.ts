@@ -12,7 +12,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!item) return NextResponse.json({ error: 'not found' }, { status: 404 })
   if (item.processingMode === 'copy') return NextResponse.json({ error: 'Partner copy requires permission and manual approval, not an AI originality review.' }, { status: 409 })
   if (hasPassedAiReview(item)) return NextResponse.json(item)
-  if (!item.generatedText.trim() || !['ready', 'needs_review', 'failed'].includes(item.status) || item.socialPostId) {
+  if (!item.generatedText.trim() || !['ready', 'needs_review', 'failed'].includes(item.status) || item.socialPostId || item.enSocialPostId || item.enPublishClaimed) {
     return NextResponse.json({ error: 'This material cannot be reviewed in its current state.' }, { status: 409 })
   }
 

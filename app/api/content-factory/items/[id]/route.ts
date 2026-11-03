@@ -51,9 +51,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   if (typeof body.title === 'string' || typeof body.text === 'string') {
     if (item.processingMode === 'copy') return NextResponse.json({ error: 'Partner copy cannot be edited; use AI mode for a rewrite.' }, { status: 409 })
+    if (item.socialPostId || item.enSocialPostId || item.enPublishClaimed || item.status === 'scheduled' || item.status === 'processing') return NextResponse.json({ error: 'A linked or publishing post cannot be edited. Published versions remain unchanged.' }, { status: 409 })
     const title = typeof body.title === 'string' ? body.title : item.generatedTitle
     const text = typeof body.text === 'string' ? body.text : item.generatedText
-    return NextResponse.json(await editGeneratedContent(pool, projectId, id, { title, text }))
+    const updated = await editGeneratedContent(pool, projectId, id, { title, text })
+    return updated ? NextResponse.json(updated) : NextResponse.json({ error: 'The material changed. Reload it.' }, { status: 409 })
   }
 
   return NextResponse.json({ error: 'nothing to update' }, { status: 400 })

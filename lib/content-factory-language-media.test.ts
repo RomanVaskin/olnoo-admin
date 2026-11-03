@@ -19,10 +19,10 @@ test('four partner photos retain order and bytes for both RU and EN', async () =
   await assert.rejects(() => loadLanguageMedia({ ...item, originalImageFiles: names.slice(0, 3) }, 'aurelmar', 'en', { original: reader }), /incomplete/)
 })
 
-test('AI English post reuses the existing cover while RU keeps its established photo path', async () => {
+test('AI posts reuse the same cover in both languages', async () => {
   const cover = Buffer.from([5, 6, 7])
   const item = { processingMode: 'ai', imageFilename: 'cover.jpg' } as ContentFactoryItem
   const reader = async () => cover
   assert.deepEqual(await loadLanguageMedia(item, 'aurelmar', 'en', { cover: reader }), { images: [], photo: cover })
-  assert.deepEqual(await loadLanguageMedia(item, 'aurelmar', 'ru', { cover: reader }), { images: [] })
+  assert.deepEqual(await loadLanguageMedia(item, 'aurelmar', 'ru', { cover: reader }), { images: [], photo: cover })
 })

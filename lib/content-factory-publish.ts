@@ -5,7 +5,7 @@ import { publishSocialPublicationToTelegram } from '@/lib/social-telegram'
 import { getItem, setItemSocialPostId, setItemStatus, canPublish, hasPassedAiReview, hasApprovedPartnerCopy, claimPartnerCopyPublish, type ContentFactoryItem } from '@/lib/content-factory-items'
 import { telegramPublicationOutcome } from './content-factory-publish-outcome.ts'
 import { readContentFactoryCover } from './content-factory-image.ts'
-import { copyImagesReady, selectedTelegramAccount } from './content-factory-languages.ts'
+import { copyImagesReady, selectedTelegramAccount, languageText } from './content-factory-languages.ts'
 
 // Контент-завод hands each approved language to the existing Social module. RU and EN use
 // separate Social posts and publication rows, so their statuses and atomic send claims stay
@@ -40,6 +40,8 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
   if (!item) return { error: 'not found', status: 404 }
 
   if (language === 'en') return publishEnglishItem(projectSlug, item)
+  const ruText = languageText(item, 'ru')
+  const translated = item.sourceLanguage === 'en'
   if (!item.ruApprovedAt || !item.ruAccountId) return { error: 'Approve the Russian version and choose its Telegram channel first.', status: 409 }
   try { await selectedTelegramAccount(pool, projectId, item.ruAccountId, true) }
   catch (error) { return { error: error instanceof Error ? error.message : 'Channel verification failed.', status: 409 } }
@@ -48,17 +50,20 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
   if (!item.socialPostId && !canPublish(item.status) && item.status !== 'failed') {
     return { error: `Item is not ready to publish (status: ${item.status}). Approve it first.`, status: 409 }
   }
-  if (!item.generatedText.trim()) {
+  if (!ruText.trim()) {
     return { error: 'This item has no prepared text yet — generate one first.', status: 400 }
   }
   if (isCopy ? !hasApprovedPartnerCopy(item) : !hasPassedAiReview(item)) {
     return { error: isCopy ? 'Partner copy requires confirmed rights and manual approval of the unchanged original text.' : 'A successful AI review of the current material is required before publication.', status: 409 }
   }
-  if (isCopy && (item.generatedText !== item.originalText || item.generatedText !== item.generatedText.trim())) {
+  if (translated && (item.ruSourceText !== item.generatedText || (isCopy && !item.ruRightsConfirmed))) {
+    return { error: 'The Russian translation is stale or partner translation rights are missing.', status: 409 }
+  }
+  if (isCopy && item.generatedText !== item.originalText) {
     return { error: 'Partner text differs from the approved source preview. Publication is blocked.', status: 409 }
   }
-  if (isCopy && Array.from(item.originalText).length > 4096) {
-    return { error: 'The original text exceeds Telegram\'s 4096-character limit and cannot be copied without changes.', status: 422 }
+  if (isCopy && Array.from(ruText).length > 4096) {
+    return { error: 'The Russian text exceeds Telegram\'s 4096-character limit.', status: 422 }
   }
 
   let photo: Buffer | undefined
@@ -84,7 +89,7 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
     try {
       created = await createSocialPost(projectSlug, {
         topic: item.generatedTitle || 'Content Factory',
-        body: item.generatedText,
+        body: ruText,
         channels: ['telegram'],
         status: 'ready',
       })
@@ -135,9 +140,12 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
 
 async function publishEnglishItem(projectSlug: string, item: ContentFactoryItem): Promise<{ error: string; status: number } | { item: ContentFactoryItem }> {
   const projectId = item.projectId
-  if (!item.enApprovedAt || !item.enAccountId || !item.enText || item.enSourceText !== item.generatedText ||
-      (item.processingMode === 'copy' ? !copyImagesReady(item) || !item.enRightsConfirmed : !hasPassedAiReview(item))) {
-    return { error: 'Approve the current English translation and its rights before publishing.', status: 409 }
+  const enText = languageText(item, 'en')
+  const translated = item.sourceLanguage === 'ru'
+  if (!item.enApprovedAt || !item.enAccountId || !enText ||
+      (translated && (item.enSourceText !== item.generatedText || (item.processingMode === 'copy' && !item.enRightsConfirmed))) ||
+      (item.processingMode === 'copy' ? !copyImagesReady(item) || !hasApprovedPartnerCopy(item) : !hasPassedAiReview(item))) {
+    return { error: 'Approve the current English version and its rights before publishing.', status: 409 }
   }
   try { await selectedTelegramAccount(pool, projectId, item.enAccountId, true) }
   catch (error) { return { error: error instanceof Error ? error.message : 'Channel verification failed.', status: 409 } }
@@ -150,7 +158,7 @@ async function publishEnglishItem(projectSlug: string, item: ContentFactoryItem)
     if (!claim.rowCount) return { error: 'English publication is already being prepared. Reload its status.', status: 409 }
     try {
       const created = await createSocialPost(projectSlug, {
-        topic: item.generatedTitle || 'Content Factory EN', body: item.enText, channels: ['telegram'], status: 'ready',
+        topic: item.generatedTitle || 'Content Factory EN', body: enText, channels: ['telegram'], status: 'ready',
       })
       if ('error' in created) throw new ContentFactoryPublishError(created.error)
       socialPostId = created.row.id as string

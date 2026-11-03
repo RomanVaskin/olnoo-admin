@@ -10,6 +10,7 @@ import {
   listItems,
   getItem,
   setGeneratedContent,
+  editGeneratedContent,
   setItemStatus,
   countItemsByStatus,
   hasApprovedPartnerCopy,
@@ -80,9 +81,21 @@ test('copy intake snapshots the source mode and leaves the original text unchang
   assert.equal(queries[0].values[8], 'needs_review')
   assert.equal(queries[0].values[11], 'copy')
   assert.equal(queries[0].values[12], true)
+  assert.equal(queries[0].values[13], 'ru')
+  await storeNewSourceMessages(pool, 1, 'source', [{ ...message, externalId: '11', text: 'An original English partner announcement.' }], { processingMode: 'copy', copyPermissionConfirmed: true })
+  assert.equal(queries[1].values[13], 'en')
   await storeNewSourceMessages(pool, 1, 'source', [{ ...message, externalId: '10' }])
-  assert.equal(queries[1].values[11], 'ai')
-  assert.equal(queries[1].values[9], '')
+  assert.equal(queries[2].values[11], 'ai')
+  assert.equal(queries[2].values[9], '')
+})
+
+test('manual edit reclassifies the prepared language and refuses linked Social posts', async () => {
+  const queries: { sql: string; values: unknown[] }[] = []
+  const pool = { query: async (sql: string, values: unknown[]) => { queries.push({ sql, values }); return { rows: [] } } } as unknown as Pool
+  await editGeneratedContent(pool, 7, 'item', { title: 'Edited', text: 'A finished English post for publication.' })
+  assert.equal(queries[0].values[4], 'en')
+  assert.match(queries[0].sql, /social_post_id IS NULL AND en_social_post_id IS NULL/)
+  assert.match(queries[0].sql, /ai_review = NULL/)
 })
 
 test('manual copy approval and first publish claim require the snapshot and unchanged text', async () => {
