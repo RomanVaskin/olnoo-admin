@@ -60,6 +60,15 @@ export type ContentFactoryItem = {
   aiReview: ContentFactoryAiReview | null
   error: string
   socialPostId: string | null
+  ruAccountId: string | null
+  ruApprovedAt: string | null
+  enText: string
+  enSourceText: string
+  enApprovedAt: string | null
+  enRightsConfirmed: boolean
+  enAccountId: string | null
+  enSocialPostId: string | null
+  enPublishClaimed: boolean
   imageFilename: string
   createdAt: string
   updatedAt: string
@@ -88,6 +97,15 @@ function fromRow(row: Record<string, unknown>): ContentFactoryItem {
     aiReview: (row.ai_review as ContentFactoryAiReview | null) ?? null,
     error: (row.error as string) ?? '',
     socialPostId: (row.social_post_id as string) ?? null,
+    ruAccountId: (row.ru_account_id as string) ?? null,
+    ruApprovedAt: (row.ru_approved_at as string) ?? null,
+    enText: (row.en_text as string) ?? '',
+    enSourceText: (row.en_source_text as string) ?? '',
+    enApprovedAt: (row.en_approved_at as string) ?? null,
+    enRightsConfirmed: row.en_rights_confirmed === true,
+    enAccountId: (row.en_account_id as string) ?? null,
+    enSocialPostId: (row.en_social_post_id as string) ?? null,
+    enPublishClaimed: row.en_publish_claimed === true,
     imageFilename: (row.image_filename as string) ?? '',
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,

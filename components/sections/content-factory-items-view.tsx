@@ -19,9 +19,6 @@ function canGenerate(status: ItemStatus): boolean {
 function canApprove(status: ItemStatus): boolean {
   return status === 'needs_review'
 }
-function canPublish(status: ItemStatus): boolean {
-  return status === 'ready'
-}
 function canReject(status: ItemStatus): boolean {
   return status === 'new' || status === 'ready' || status === 'needs_review' || status === 'failed'
 }
@@ -55,6 +52,14 @@ type Item = {
   } | null
   error: string
   socialPostId: string | null
+  ruAccountId: string | null
+  ruApprovedAt: string | null
+  enText: string
+  enSourceText: string
+  enApprovedAt: string | null
+  enRightsConfirmed: boolean
+  enAccountId: string | null
+  enSocialPostId: string | null
   imageFilename: string
   createdAt: string
 }
@@ -62,6 +67,12 @@ type Item = {
 function formatDate(iso: string | null): string {
   if (!iso) return '—'
   return new Date(iso).toLocaleString()
+}
+
+type ChannelData = {
+  accounts: { id: string; name: string; username: string; status: string; active: boolean }[]
+  ru: { status: string; error: string; external_url: string } | null
+  en: { status: string; error: string; external_url: string } | null
 }
 
 function ItemDetail({
@@ -78,7 +89,14 @@ function ItemDetail({
   const { t } = useI18n()
   const [title, setTitle] = useState(item.generatedTitle)
   const [text, setText] = useState(item.generatedText)
-  const [busy, setBusy] = useState<'generate' | 'review' | 'publish' | 'save' | 'approve' | 'reject' | 'image' | 'deleteImage' | 'originalImages' | null>(null)
+  const [enText, setEnText] = useState(item.enText)
+  const [channels, setChannels] = useState<ChannelData>({ accounts: [], ru: null, en: null })
+  const [ruAccount, setRuAccount] = useState(item.ruAccountId ?? '')
+  const [enAccount, setEnAccount] = useState(item.enAccountId ?? '')
+  const [selectedRu, setSelectedRu] = useState(false)
+  const [selectedEn, setSelectedEn] = useState(false)
+  const [partnerTranslationRights, setPartnerTranslationRights] = useState(false)
+  const [busy, setBusy] = useState<'generate' | 'review' | 'publish' | 'save' | 'approve' | 'translate' | 'reject' | 'image' | 'deleteImage' | 'originalImages' | null>(null)
   const [error, setError] = useState('')
   const [copyCompared, setCopyCompared] = useState(false)
   const [imageRights, setImageRights] = useState(false)
@@ -94,6 +112,24 @@ function ItemDetail({
     setImageRights(false)
   }, [item])
 
+  useEffect(() => {
+    setRuAccount(item.ruAccountId ?? '')
+    setEnAccount(item.enAccountId ?? '')
+    setSelectedRu(false)
+    setSelectedEn(false)
+    setPartnerTranslationRights(false)
+  }, [item.id])
+
+  useEffect(() => { setEnText(item.enText) }, [item.enText])
+
+  async function loadChannels() {
+    try {
+      const res = await fetch(`/api/content-factory/items/${item.id}/languages?project=${encodeURIComponent(project)}`)
+      if (res.ok) setChannels(await res.json())
+    } catch { setError(t.contentFactory.items.channelLoadError) }
+  }
+  useEffect(() => { void loadChannels() }, [item.id, project, item.socialPostId, item.enSocialPostId])
+
   async function call(path: string, init: RequestInit, busyKind: typeof busy) {
     setBusy(busyKind)
     setError('')
@@ -102,6 +138,7 @@ function ItemDetail({
       const data = await res.json().catch(() => null)
       if (!res.ok) throw new Error((data && data.error) || 'Request failed.')
       onUpdated(data as Item)
+      void loadChannels()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Request failed.')
     } finally {
@@ -123,7 +160,28 @@ function ItemDetail({
     call(`/api/content-factory/items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reject' }) }, 'reject')
   }
   function publish() {
-    call(`/api/content-factory/items/${item.id}/publish`, { method: 'POST' }, 'publish')
+    void publishSelected()
+  }
+  function languageAction(action: string, accountId?: string, textValue?: string) {
+    call(`/api/content-factory/items/${item.id}/languages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, accountId, text: textValue, confirmRights: isCopy && (action === 'approve_ru' ? copyCompared && (item.originalImageUrls.length === 0 || imageRights) : partnerTranslationRights), confirmPartnerTranslationRights: isCopy && partnerTranslationRights }) }, action === 'translate' ? 'translate' : 'approve')
+  }
+  async function publishSelected() {
+    setBusy('publish')
+    setError('')
+    const errors: string[] = []
+    for (const language of (['ru', 'en'] as const)) {
+      if (language === 'ru' ? !selectedRu : !selectedEn) continue
+      if (channels[language]?.status === 'published') continue
+      try {
+        const res = await fetch(`/api/content-factory/items/${item.id}/publish?project=${encodeURIComponent(project)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ language }) })
+        const data = await res.json()
+        if (!res.ok) errors.push(`${language.toUpperCase()}: ${data.error || 'Publication failed.'}`)
+        else onUpdated(data as Item)
+      } catch (err) { errors.push(`${language.toUpperCase()}: ${err instanceof Error ? err.message : 'Publication failed.'}`) }
+    }
+    setError(errors.join('\n'))
+    await loadChannels()
+    setBusy(null)
   }
   function review() {
     call(`/api/content-factory/items/${item.id}/review`, { method: 'POST' }, 'review')
@@ -270,24 +328,13 @@ function ItemDetail({
                   {t.contentFactory.items.saveEdit}
                 </button>
               )}
-              {isCopy && canApprove(item.status) && <label className="flex w-full items-start gap-2 text-sm"><input type="checkbox" checked={copyCompared} onChange={(e) => setCopyCompared(e.target.checked)} />{t.contentFactory.items.confirmCopyText}</label>}
-              {isCopy && canApprove(item.status) && item.originalImageUrls.length > 0 && <label className="flex w-full items-start gap-2 text-sm"><input type="checkbox" checked={imageRights} onChange={(e) => setImageRights(e.target.checked)} />{t.contentFactory.items.confirmImageRights}</label>}
-              {canApprove(item.status) && (
+              {!isCopy && canApprove(item.status) && (
                 <button
                   onClick={approve}
-                  disabled={busy !== null || (isCopy && (!copyCompared || (item.originalImageUrls.length > 0 && (!imageRights || item.originalImageFiles.length !== item.originalImageUrls.length || !!item.originalImageError))))}
+                  disabled={busy !== null}
                   className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
                 >
                   {t.contentFactory.items.actionApprove}
-                </button>
-              )}
-              {canPublish(item.status) && (
-                <button
-                  onClick={publish}
-                  disabled={busy !== null || (!isCopy && (dirty || !reviewPassed)) || (isCopy && !item.copyApprovedAt)}
-                  className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
-                >
-                  {busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.actionPublish}
                 </button>
               )}
               {canReject(item.status) && (
@@ -300,6 +347,34 @@ function ItemDetail({
                 </button>
               )}
             </div>
+          </div>
+          <div className="flex flex-col gap-4 border border-hairline bg-card p-4 text-sm">
+            <span className="label-mono text-muted-foreground">{t.contentFactory.items.languagesTitle}</span>
+            {isCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={copyCompared} onChange={(e) => setCopyCompared(e.target.checked)} />{t.contentFactory.items.confirmCopyText}</label>}
+            {isCopy && item.originalImageUrls.length > 0 && <label className="flex items-start gap-2"><input type="checkbox" checked={imageRights} onChange={(e) => setImageRights(e.target.checked)} />{t.contentFactory.items.confirmImageRights}</label>}
+            {isCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={partnerTranslationRights} onChange={(e) => setPartnerTranslationRights(e.target.checked)} />{t.contentFactory.items.confirmTranslationRights}</label>}
+            {(['ru', 'en'] as const).map((language) => {
+              const account = language === 'ru' ? ruAccount : enAccount
+              const approved = language === 'ru' ? item.ruApprovedAt : item.enApprovedAt
+              const publication = channels[language]
+              return <div key={language} className="flex flex-col gap-2 border-t border-hairline pt-3">
+                <label className="flex items-center gap-2 font-medium"><input type="checkbox" checked={language === 'ru' ? selectedRu : selectedEn} onChange={(e) => language === 'ru' ? setSelectedRu(e.target.checked) : setSelectedEn(e.target.checked)} />{language.toUpperCase()}</label>
+                <select value={account} onChange={(e) => language === 'ru' ? setRuAccount(e.target.value) : setEnAccount(e.target.value)} className="border border-hairline bg-card px-3 py-2" disabled={publication?.status === 'published' || publication?.status === 'publishing'}>
+                  <option value="">{t.contentFactory.items.chooseChannel}</option>
+                  {channels.accounts.filter((a) => a.status === 'connected' && a.active).map((a) => <option key={a.id} value={a.id}>{a.name || a.username} ({a.username})</option>)}
+                </select>
+                <p className="text-muted-foreground">{t.contentFactory.items.approvalStatus}: {approved ? t.contentFactory.items.approved : t.contentFactory.items.notApproved} · {t.contentFactory.items.publicationStatus}: {publication?.status || '—'}</p>
+                {publication?.error && <p className="text-destructive">{publication.error}</p>}
+                {publication?.external_url && <a href={publication.external_url} target="_blank" rel="noreferrer" className="text-blue underline">{t.contentFactory.items.publishedLinkLabel}</a>}
+                {language === 'en' && <>
+                  <button onClick={() => languageAction('translate')} disabled={busy !== null || !item.generatedText || !!item.enSocialPostId || (isCopy && !partnerTranslationRights)} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.translateEnglish}</button>
+                  <textarea rows={10} value={enText} onChange={(e) => setEnText(e.target.value)} className="w-full border border-hairline bg-card p-3" disabled={!!item.enSocialPostId} />
+                  <button onClick={() => languageAction('save_en', undefined, enText)} disabled={busy !== null || !item.enText || enText === item.enText || !!item.enSocialPostId} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.saveEnglish}</button>
+                </>}
+                <button onClick={() => languageAction(language === 'ru' ? 'approve_ru' : 'approve_en', account)} disabled={busy !== null || !account || (!!approved && account === (language === 'ru' ? item.ruAccountId : item.enAccountId)) || publication?.status === 'published' || publication?.status === 'publishing' || (language === 'ru' ? (!isCopy && (!reviewPassed || dirty || !['ready', 'failed', 'scheduled'].includes(item.status))) || (isCopy && (!copyCompared || (item.originalImageUrls.length > 0 && !imageRights))) : (!item.enText || enText !== item.enText || (isCopy && !partnerTranslationRights)))} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.actionApprove} {language.toUpperCase()}</button>
+              </div>
+            })}
+            <button onClick={publish} disabled={busy !== null || (!selectedRu && !selectedEn) || (selectedRu && (!item.ruApprovedAt || ruAccount !== item.ruAccountId)) || (selectedEn && (!item.enApprovedAt || enAccount !== item.enAccountId)) || ((!selectedRu || channels.ru?.status === 'published') && (!selectedEn || channels.en?.status === 'published'))} className="label-mono border border-foreground bg-foreground px-3 py-2 text-background disabled:opacity-50">{busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.publishSelected}</button>
           </div>
         </div>
       </aside>
