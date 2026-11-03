@@ -22,6 +22,17 @@ test('requirement: the prompt asks for an independent analytical article with it
   assert.match(p, /practical takeaway that follows from the supported facts/i)
 })
 
+test('generation separates facts and supported figures from source framing before choosing a new analytical angle', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  assert.match(p, /separating reported facts and exact figures from the source's opinions, framing, and wording/i)
+  assert.match(p, /Choose your own analytical angle based on what matters to the target audience/i)
+  assert.match(p, /not around the source's paragraph order/i)
+  assert.match(p, /Do not copy the source's headline, sequence of points, distinctive phrasing, or sentence-by-sentence argument even with synonyms/i)
+  assert.match(p, /Preserve exact figures when verified by PROJECT CONTEXT/i)
+  assert.match(p, /if they appear only in SOURCE TEXT, keep them exact but explicitly attributed and unconfirmed under rule 6/i)
+  assert.match(p, /Do not round, alter, or invent figures/i)
+})
+
 test('requirement: the prompt separates interpretation from evidence and forbids invented claims', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   assert.match(p, /never invent facts, numbers, prices, statistics, laws, outcomes, or claims/i)
