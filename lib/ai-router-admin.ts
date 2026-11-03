@@ -17,6 +17,13 @@ const catalog = z.object({
   })),
 })
 
+const editablePreset = z.object({
+  key: z.enum(['content-factory.text', 'content-factory.review']),
+  provider: providerName,
+  model: z.string().min(1).max(128),
+}).strict()
+
+export type AiRouterPresetSelection = z.infer<typeof editablePreset>
 export type AiRouterProvider = z.infer<typeof providerName>
 export type AiRouterProviderStatus = z.infer<typeof status>
 export type AiRouterCatalog = z.infer<typeof catalog>
@@ -36,13 +43,14 @@ export function isAiRouterProvider(value: unknown): value is AiRouterProvider {
   return providerName.safeParse(value).success
 }
 
-async function routerRequest(path: string, method: 'GET' | 'POST'): Promise<unknown> {
+async function routerRequest(path: string, method: 'GET' | 'POST', body?: unknown): Promise<unknown> {
   const token = process.env.OLNOO_ROUTER_TOKEN
   if (!token) throw new Error('AI Router token is not configured.')
   const base = (process.env.AI_ROUTER_URL || 'http://127.0.0.1:3010').replace(/\/$/, '')
   const response = await fetch(`${base}${path}`, {
     method,
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
     cache: 'no-store',
     signal: AbortSignal.timeout(25_000),
   })
@@ -57,4 +65,10 @@ export async function readAiRouterCatalog() {
 
 export async function checkAiRouterProvider(name: AiRouterProvider) {
   return status.parse(await routerRequest(`/v1/admin/providers/${name}/check`, 'POST'))
+}
+
+/** Router remains the single source of truth for model assignments. */
+export async function updateAiRouterPreset(selection: AiRouterPresetSelection): Promise<AiRouterPresetSelection> {
+  const valid = editablePreset.parse(selection)
+  return editablePreset.parse(await routerRequest('/v1/admin/presets', 'POST', valid))
 }
