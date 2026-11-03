@@ -275,10 +275,15 @@ export function applyContentFactoryRevision(
         typeof obj.replacement !== 'string' || !obj.replacement.trim() ||
         obj.original === obj.replacement) throw new ContentFactoryGenerateError('Invalid revision edit.')
     const previous = obj.field === 'title' ? title : body
+    if (obj.field === 'body' && obj.original.length > 600) throw new ContentFactoryGenerateError('Revision edit is too broad; correct only the flagged passage.')
     if (previous.split(obj.original).length !== 2) throw new ContentFactoryGenerateError('Revision fragment must occur exactly once in the current draft.')
     const updated = previous.replace(obj.original, obj.replacement)
     if (obj.field === 'title') title = updated
     else body = updated
+  }
+  const numbers = (text: string) => (text.match(/\\d+(?:[.,]\\d+)*/g) ?? []).sort().join('|')
+  if (numbers(current.title + current.body) !== numbers(title + body)) {
+    throw new ContentFactoryGenerateError('Revision changed the factual numbers in the original draft.')
   }
   if (title.length > TITLE_MAX || body.length > BODY_MAX || !title.trim() || !body.trim()) {
     throw new ContentFactoryGenerateError('Revised draft exceeds the existing size limits.')
