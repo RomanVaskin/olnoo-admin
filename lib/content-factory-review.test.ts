@@ -33,6 +33,19 @@ test('review uses the publication language and distinguishes factual overlap fro
   assert.match(p, /unsupported facts, numbers, prices, yields, investment promises/i)
 })
 
+test('review calibration separates common listing facts from copied creative expression', () => {
+  const p = CONTENT_FACTORY_REVIEW_PROMPT
+  for (const phrase of [
+    'separate copyrighted expression from facts',
+    'Property names, floor, area, location, prices',
+    'Conventional ordering',
+    'quote the specific matching passages',
+    'the advertisement states X',
+    'Require evidence in each copying issue',
+    'deterministic verbatim guard stays mandatory'
+  ]) assert.ok(p.includes(phrase), phrase)
+})
+
 test('only a valid low-risk decision passes the current title, text and image', () => {
   const review = parseContentFactoryReview(low, item)
   assert.equal(review.status, 'passed')
