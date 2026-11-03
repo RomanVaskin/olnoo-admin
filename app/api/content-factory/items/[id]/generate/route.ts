@@ -31,7 +31,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   try {
     const flaggedIssues = item.aiReview?.issues ?? []
     const isTargetedRevision = !!item.generatedText.trim() && flaggedIssues.length > 0
-      && (item.aiReview?.risk === 'high' || item.aiReview?.risk === 'medium')
+      && (item.aiReview?.risk === 'high' || item.aiReview?.risk === 'medium' || item.aiReview?.quality?.passed === false || item.aiReview?.passed === false)
       && item.aiReview?.reviewedTitle === item.generatedTitle
       && item.aiReview?.reviewedText === item.generatedText
     const generated = isTargetedRevision

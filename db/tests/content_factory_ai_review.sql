@@ -1,4 +1,4 @@
--- Isolated regression fixture: run in a disposable PostgreSQL database after 0031.
+-- Isolated regression fixture: run in a disposable PostgreSQL database after 0031–0033.
 BEGIN;
 INSERT INTO social_posts (id, project_id, body, telegram_text) VALUES ('review-post', 1, 'Reviewed text', '');
 INSERT INTO content_factory_items (id, project_id, source_id, external_id, generated_title, generated_text, image_filename, status, social_post_id)
@@ -42,6 +42,30 @@ END;
 $$;
 
 UPDATE content_factory_items SET ai_review = '{"status":"passed","risk":"low","passed":true,"reviewedTitle":"Title","reviewedText":"Reviewed text","reviewedImageFilename":""}'::jsonb WHERE id = 'review-item';
+DO $$
+BEGIN
+  BEGIN
+    UPDATE social_publications SET status = 'publishing' WHERE id = 'review-publication';
+    RAISE EXCEPTION 'legacy review without quality bypassed the block';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'Content Factory AI review is required before publication' THEN RAISE; END IF;
+  END;
+END;
+$$;
+
+UPDATE content_factory_items SET ai_review = '{"status":"changes_required","risk":"low","passed":false,"quality":{"passed":false},"reviewedTitle":"Title","reviewedText":"Reviewed text","reviewedImageFilename":""}'::jsonb WHERE id = 'review-item';
+DO $$
+BEGIN
+  BEGIN
+    UPDATE social_publications SET status = 'publishing' WHERE id = 'review-publication';
+    RAISE EXCEPTION 'failed editorial quality bypassed the block';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM <> 'Content Factory AI review is required before publication' THEN RAISE; END IF;
+  END;
+END;
+$$;
+
+UPDATE content_factory_items SET ai_review = '{"status":"passed","risk":"medium","passed":true,"quality":{"passed":true},"reviewedTitle":"Title","reviewedText":"Reviewed text","reviewedImageFilename":""}'::jsonb WHERE id = 'review-item';
 UPDATE social_publications SET status = 'publishing' WHERE id = 'review-publication';
 UPDATE social_publications SET status = 'draft' WHERE id = 'review-publication';
 UPDATE content_factory_items SET generated_text = 'Edited after review' WHERE id = 'review-item';
