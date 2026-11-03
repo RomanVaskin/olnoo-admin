@@ -46,7 +46,7 @@ export function parseContentFactoryReview(raw: string, item: ContentFactoryItem)
   }
   const overlap = hasVerbatimOverlap(item.generatedText, item.originalText)
   const risk = overlap ? 'high' : result.risk
-  const passed = risk !== 'high' && result.passed
+  const passed = risk === 'medium' || (risk === 'low' && result.passed)
   const issues = overlap ? [...result.issues, {
     category: 'verbatim_copy',
     detail: 'A substantial passage matches the source verbatim.',
