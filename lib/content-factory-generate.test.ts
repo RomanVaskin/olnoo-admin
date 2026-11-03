@@ -429,3 +429,24 @@ test('targeted revision cannot change prices, quantities or dates', () => {
     { field: 'body', original: '$45000', replacement: '$50000' },
   ] })), /factual numbers/i)
 })
+
+test('targeted revision system prompt uses a valid JSON example without union syntax', async () => {
+  const pool = { query: async (sql: string) => {
+    if (sql.includes('FROM projects')) return { rows: [{ name: 'Example', domain: 'example.com' }] }
+    if (sql.includes('FROM project_brand_voice')) return { rows: [] }
+    return { rows: [] }
+  } } as unknown as Pool
+  const originalFetch = globalThis.fetch
+  let systemPrompt = ''
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    const request = JSON.parse(init.body as string)
+    systemPrompt = request.messages[0].content
+    return new Response(JSON.stringify({ content: JSON.stringify({ edits: [{ field: 'body', original: 'Old sentence.', replacement: 'New sentence.' }] }) }))
+  }) as typeof fetch
+  try {
+    const { reviseContentFactoryArticle } = await import('./content-factory-generate.ts')
+    await reviseContentFactoryArticle(pool, 1, { sourceText: 'Source facts here.', sourceUrl: '', title: 'Title', body: 'Old sentence.', issues: [{category:'copy',detail:'wording',example:'Old sentence.'}], recommendations:['Change wording'] })
+    assert.ok(systemPrompt.includes('{"edits":[{"field":"body"'))
+    assert.ok(!systemPrompt.includes('"title"|"body"'))
+  } finally { globalThis.fetch = originalFetch }
+})
