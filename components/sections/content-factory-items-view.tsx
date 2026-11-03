@@ -73,7 +73,7 @@ function ItemDetail({
   const [busy, setBusy] = useState<'generate' | 'review' | 'publish' | 'save' | 'approve' | 'reject' | 'image' | 'deleteImage' | null>(null)
   const [error, setError] = useState('')
   const dirty = title !== item.generatedTitle || text !== item.generatedText
-  const reviewPassed = item.aiReview?.status === 'passed' && item.aiReview.risk === 'low'
+  const reviewPassed = item.aiReview?.status === 'passed' && (item.aiReview.risk === 'low' || item.aiReview.risk === 'medium')
 
   useEffect(() => {
     setTitle(item.generatedTitle)
