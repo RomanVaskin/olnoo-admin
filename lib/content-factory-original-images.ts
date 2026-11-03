@@ -5,6 +5,7 @@ import type { Pool } from 'pg'
 import type { ContentFactoryItem } from './content-factory-items.ts'
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const RETRY_DELAYS_MS = [250, 750]
 const FILE = /^[0-9a-f-]{36}\.(?:jpg|png|webp)$/
 const ITEM = /^[0-9a-f-]{36}$/
 const ROOT = path.join(process.cwd(), 'uploads', 'content-factory', 'originals')
@@ -39,7 +40,19 @@ function imageExtension(bytes: Buffer): 'jpg' | 'png' | 'webp' {
 
 export async function downloadOriginalImage(rawUrl: string, fetchImpl: typeof fetch = fetch): Promise<{ bytes: Buffer; extension: 'jpg' | 'png' | 'webp' }> {
   const url = telegramImageUrl(rawUrl)
-  const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(15_000) })
+  let response: Response
+  for (let attempt = 0; ; attempt++) {
+    try {
+      response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(15_000) })
+    } catch (error) {
+      if (attempt >= RETRY_DELAYS_MS.length) throw error
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]))
+      continue
+    }
+    if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt >= RETRY_DELAYS_MS.length) break
+    await response.body?.cancel().catch(() => {})
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]))
+  }
   if (!response.ok) throw new ContentFactoryOriginalImageError(`Telegram image download failed (HTTP ${response.status}).`)
   const length = Number(response.headers.get('content-length') ?? 0)
   if (length > MAX_IMAGE_BYTES) throw new ContentFactoryOriginalImageError('Telegram image exceeds the 10 MB photo limit.')
@@ -65,8 +78,8 @@ export async function readOriginalImage(projectId: number, itemId: string, filen
 }
 
 /** Persist each successful image in source order. A later failure leaves previous files and
- * original URLs intact; a repeat check or manual retry resumes at the first missing index. */
-export async function syncOriginalImages(pool: Pool, item: ContentFactoryItem, fetchImpl: typeof fetch = fetch): Promise<string> {
+ * original URLs intact; a manual retry resumes at the first missing index. */
+export async function syncOriginalImages(pool: Pool, item: ContentFactoryItem, fetchImpl: typeof fetch = fetch, freshImageUrls?: string[]): Promise<string> {
   if (item.processingMode !== 'copy') return ''
   const files = [...item.originalImageFiles]
   if (files.length > item.originalImageUrls.length || item.originalImageUrls.length > 10) {
@@ -74,11 +87,16 @@ export async function syncOriginalImages(pool: Pool, item: ContentFactoryItem, f
     await pool.query('UPDATE content_factory_items SET original_image_error = $1 WHERE id = $2 AND project_id = $3', [error, item.id, item.projectId])
     return error
   }
+  if (freshImageUrls && freshImageUrls.length !== item.originalImageUrls.length) {
+    const error = 'The source post now shows a different number of photos. Compare the original post before retrying; the saved album was kept.'
+    await pool.query('UPDATE content_factory_items SET original_image_error = $1 WHERE id = $2 AND project_id = $3', [error, item.id, item.projectId])
+    return error
+  }
   for (let index = files.length; index < item.originalImageUrls.length; index++) {
     let filename = ''
     let target = ''
     try {
-      const { bytes, extension } = await downloadOriginalImage(item.originalImageUrls[index], fetchImpl)
+      const { bytes, extension } = await downloadOriginalImage(freshImageUrls?.[index] ?? item.originalImageUrls[index], fetchImpl)
       filename = `${randomUUID()}.${extension}`
       target = originalImagePath(item.projectId, item.id, filename)
       await mkdir(path.dirname(target), { recursive: true })
