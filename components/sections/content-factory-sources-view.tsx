@@ -8,6 +8,7 @@ import { useI18n } from '@/components/i18n-provider'
 // Mirrors lib/content-factory-sources.ts's SOURCE_TYPES — kept as a local literal (not imported)
 // for the same client-bundle-hygiene reason social-view.tsx's EDITOR_ACTIONS already is.
 const SOURCE_TYPES = ['telegram', 'rss', 'website', 'youtube'] as const
+const CREATE_SOURCE_TYPES = ['telegram', 'rss'] as const
 type SourceType = (typeof SOURCE_TYPES)[number]
 
 type Source = {
@@ -147,7 +148,7 @@ export function ContentFactorySourcesView({
               onChange={(e) => { setNewType(e.target.value as SourceType); setNewMode('ai'); setNewCopyPermission(false) }}
               className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
             >
-              {SOURCE_TYPES.map((type) => (
+              {CREATE_SOURCE_TYPES.map((type) => (
                 <option key={type} value={type}>
                   {t.contentFactory.sourceType[type]}
                 </option>
