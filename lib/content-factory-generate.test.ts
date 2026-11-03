@@ -27,14 +27,30 @@ test('generator keeps substantive criteria, examples and useful structure withou
   for (const phrase of [
     "central idea, purpose, useful structure, every essential point",
     'all four with their substantial arguments and practical advice',
-    'Keep a useful functional structure',
+    'Keep useful sections, numbering and lists',
     'Preserve concrete numbers, dates, names, conditions, examples, arguments and recommendations',
     'Remove only real repetition, filler',
-    'do not make a strong original worse',
+    'keep its strengths and improve weak passages',
     'no 1200–1800 character target',
     'no padding or artificial shortening',
-    'preserve the depth of each essential criterion'
+    'Keep each essential criterion fully explained'
   ]) assert.ok(p.includes(phrase), phrase)
+})
+
+test('generator keeps a strong original engaging without boilerplate attribution', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  for (const phrase of [
+    'Keep useful sections, numbering and lists',
+    'keep its strengths and improve weak passages',
+    'dry fact sheet',
+    'opening, logic, precision, readability, persuasive force and layout',
+    'short readable paragraphs',
+    'fitting emojis',
+    'without repetitive source-attribution boilerplate',
+    'qualify material unconfirmed claims',
+    'preserve necessary attribution for quotations or exclusive claims',
+  ]) assert.ok(p.includes(phrase), phrase)
+  assert.doesNotMatch(p, /AURELMAR|Georgia|Cyprus|Potamos/i)
 })
 
 test('generation separates facts and supported figures from source framing before choosing a new analytical angle', () => {
@@ -44,7 +60,7 @@ test('generation separates facts and supported figures from source framing befor
   assert.match(p, /useful functional structure/i)
   assert.match(p, /do not copy expressive sentences or a distinctive creative arrangement/i)
   assert.match(p, /Preserve exact figures when verified by PROJECT CONTEXT/i)
-  assert.match(p, /if they appear only in SOURCE TEXT, keep them exact but explicitly attributed and unconfirmed under rule 6/i)
+  assert.match(p, /if they appear only in SOURCE TEXT, keep them exact and qualify material unconfirmed claims under rule 6/i)
   assert.match(p, /Do not round, alter, or invent figures/i)
 })
 
@@ -89,14 +105,14 @@ test('Telegram format keeps readable depth without a forced template', () => {
   assert.match(p, /publisher sends "body" alone, so put the exact "title" as its first line/i)
   assert.match(p, /readable paragraphs/i)
   assert.match(p, /plain-text bullets \(•\)/i)
-  assert.match(p, /Make practical advice easy to find/i)
+  assert.match(p, /practical advice easy to find/i)
 })
 
 test('Telegram length follows content and emojis follow Brand Profile', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   assert.match(p, /Let the content determine length/i)
   assert.match(p, /no 1200–1800 character target/i)
-  assert.match(p, /relevant emojis only where they serve the project's Brand Profile/i)
+  assert.match(p, /fitting emojis where they improve navigation and match the project's Brand Profile/i)
   assert.doesNotMatch(p, /AURELMAR/i)
 })
 
@@ -452,5 +468,8 @@ test('targeted revision system prompt uses a valid JSON example without union sy
     await reviseContentFactoryArticle(pool, 1, { sourceText: 'Source facts here.', sourceUrl: '', title: 'Title', body: 'Old sentence.', issues: [{category:'copy',detail:'wording',example:'Old sentence.'}], recommendations:['Change wording'] })
     assert.ok(systemPrompt.includes('{"edits":[{"field":"body"'))
     assert.ok(!systemPrompt.includes('"title"|"body"'))
+    assert.match(systemPrompt, /missing editorial substance or weak presentation/i)
+    assert.match(systemPrompt, /improve only that passage while retaining necessary factual qualification and attribution/i)
+    assert.match(systemPrompt, /Preserve every other character/i)
   } finally { globalThis.fetch = originalFetch }
 })
