@@ -37,6 +37,14 @@ type Item = {
   generatedTitle: string
   generatedText: string
   reviewReason: string
+  aiReview: {
+    status: 'checking' | 'passed' | 'changes_required' | 'blocked' | 'error'
+    risk?: 'low' | 'medium' | 'high'
+    issues?: { category: string; detail: string; example: string }[]
+    recommendations?: string[]
+    checkedAt?: string
+    error?: string
+  } | null
   error: string
   socialPostId: string | null
   imageFilename: string
@@ -62,8 +70,10 @@ function ItemDetail({
   const { t } = useI18n()
   const [title, setTitle] = useState(item.generatedTitle)
   const [text, setText] = useState(item.generatedText)
-  const [busy, setBusy] = useState<'generate' | 'publish' | 'save' | 'approve' | 'reject' | 'image' | 'deleteImage' | null>(null)
+  const [busy, setBusy] = useState<'generate' | 'review' | 'publish' | 'save' | 'approve' | 'reject' | 'image' | 'deleteImage' | null>(null)
   const [error, setError] = useState('')
+  const dirty = title !== item.generatedTitle || text !== item.generatedText
+  const reviewPassed = item.aiReview?.status === 'passed' && item.aiReview.risk === 'low'
 
   useEffect(() => {
     setTitle(item.generatedTitle)
@@ -101,6 +111,9 @@ function ItemDetail({
   }
   function publish() {
     call(`/api/content-factory/items/${item.id}/publish`, { method: 'POST' }, 'publish')
+  }
+  function review() {
+    call(`/api/content-factory/items/${item.id}/review`, { method: 'POST' }, 'review')
   }
   function generateImage() {
     call(`/api/content-factory/items/${item.id}/image`, { method: 'POST' }, 'image')
@@ -143,6 +156,21 @@ function ItemDetail({
               {item.error}
             </p>
           )}
+
+          <div className="flex flex-col gap-2 border border-hairline bg-background p-3 text-sm">
+            <span className="label-mono text-muted-foreground">{t.contentFactory.items.aiReviewLabel}</span>
+            <p>{item.aiReview ? t.contentFactory.items.aiReviewStatuses[item.aiReview.status] : t.contentFactory.items.aiReviewNotRun}</p>
+            {item.aiReview?.risk && <p>{t.contentFactory.items.aiReviewRisk}: {t.contentFactory.items.aiReviewRisks[item.aiReview.risk]}</p>}
+            {item.aiReview?.checkedAt && <p className="text-muted-foreground">{formatDate(item.aiReview.checkedAt)}</p>}
+            {item.aiReview?.error && <p className="text-destructive">{item.aiReview.error}</p>}
+            {!!item.aiReview?.issues?.length && <div><p className="font-medium">{t.contentFactory.items.aiReviewIssues}</p><ul className="list-disc pl-5">{item.aiReview.issues.map((issue, index) => <li key={index}>{issue.detail} — {issue.example}</li>)}</ul></div>}
+            {!!item.aiReview?.recommendations?.length && <div><p className="font-medium">{t.contentFactory.items.aiReviewRecommendations}</p><ul className="list-disc pl-5">{item.aiReview.recommendations.map((recommendation, index) => <li key={index}>{recommendation}</li>)}</ul></div>}
+            {item.generatedText && ['ready', 'needs_review', 'failed'].includes(item.status) && !item.socialPostId && (
+              <button onClick={review} disabled={busy !== null || dirty || reviewPassed} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">
+                {busy === 'review' ? t.contentFactory.items.aiReviewChecking : t.contentFactory.items.aiReviewAction}
+              </button>
+            )}
+          </div>
 
           <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
             <span className="label-mono text-muted-foreground">{t.contentFactory.items.prepared}</span>
@@ -227,7 +255,7 @@ function ItemDetail({
               {canPublish(item.status) && (
                 <button
                   onClick={publish}
-                  disabled={busy !== null}
+                  disabled={busy !== null || dirty || !reviewPassed}
                   className="label-mono border border-foreground bg-foreground px-3 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
                 >
                   {busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.actionPublish}
