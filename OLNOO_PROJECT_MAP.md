@@ -434,6 +434,9 @@ Regression tests: `lib/social-publication-status-transition.test.ts` extended (e
 
 ## Content Factory (Контент-завод)
 
+**Editorial risk policy (2026-11-03):** AI review compares actual protected creative expression, quotations/attribution and image rights separately from unprotected source facts. Names, dates, figures, prices and factual claims are preserved or explicitly qualified, not invented or changed. Both **low** and **medium** AI-review risks allow the existing human approval/publishing path (medium recommendations remain visible); **high**, invalid/error/unreviewed or stale AI review blocks publication. Deterministic long verbatim overlap forces high risk. Re-generating a draft whose current AI review reports medium/high with specific issues uses the existing Content Factory generation endpoint and AI Router, but requests only exact targeted substring substitutions; unchanged text is preserved by deterministic replacement, with a size limit and numeric-token guard. After any new generation/manual edit, `ai_review` is cleared, so a fresh check is required. No new table/service/route or automatic publishing. This is a risk screen, not a legal determination.
+
+
 A standalone module, not nested inside Social — own top-level sidebar entry (МОДУЛИ → Контент-завод), four screens (Обзор/Источники/Материалы/Автоматизация). Universal: works with any project the same way, nothing in it is AURELMAR-specific. It only ever **discovers and prepares** material; publishing itself is entirely delegated to the EXISTING Social Posts/Publications module above — this section adds no new publishing system, no new provider, no new background-job framework. First working stage, end-to-end for one real scenario: a public Telegram partner channel → AI-rewritten, independent article → the existing "Publish to Telegram" mechanism.
 
 **Schema (migration `0029_content_factory.sql`, applied manually like every migration so far):**

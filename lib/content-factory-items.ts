@@ -26,7 +26,7 @@ export type ContentFactoryAiReview = {
 
 export function hasPassedAiReview(item: ContentFactoryItem): boolean {
   const review = item.aiReview
-  return review?.status === 'passed' && review.risk === 'low' && review.passed === true
+  return review?.status === 'passed' && (review.risk === 'low' || review.risk === 'medium') && review.passed === true
     && review.reviewedTitle === item.generatedTitle
     && review.reviewedText === item.generatedText
     && review.reviewedImageFilename === item.imageFilename
@@ -193,7 +193,7 @@ export async function setGeneratedContent(
 ): Promise<ContentFactoryItem | null> {
   const { rows } = await pool.query(
     `UPDATE content_factory_items
-     SET generated_title = $1, generated_text = $2, status = $3, review_reason = $4, error = '', updated_at = now()
+     SET generated_title = $1, generated_text = $2, status = $3, review_reason = $4, ai_review = NULL, error = '', updated_at = now()
      WHERE id = $5 AND project_id = $6
      RETURNING *`,
     [content.title, content.text, content.status, content.reviewReason, id, projectId],
@@ -236,7 +236,7 @@ export async function finishAiReview(
  * needs_review item; see canApprove). */
 export async function editGeneratedContent(pool: Pool, projectId: number, id: string, content: { title: string; text: string }): Promise<ContentFactoryItem | null> {
   const { rows } = await pool.query(
-    `UPDATE content_factory_items SET generated_title = $1, generated_text = $2, updated_at = now() WHERE id = $3 AND project_id = $4 RETURNING *`,
+    `UPDATE content_factory_items SET generated_title = $1, generated_text = $2, ai_review = NULL, updated_at = now() WHERE id = $3 AND project_id = $4 RETURNING *`,
     [content.title, content.text, id, projectId],
   )
   return rows[0] ? fromRow(rows[0]) : null

@@ -31,7 +31,9 @@ Review calibration — separate copyrighted expression from facts and editorial 
 
 Consider copyright and the applicable jurisdiction only when the supplied context establishes them. If jurisdiction, licence, permission, or an image's provenance is unknown, state that uncertainty and a practical verification step; do not invent legal conclusions or a numerical originality score. Independent reporting of facts is not automatically infringement merely because the source licence is unknown.
 
-Low risk means the draft may proceed to the existing human approval step; set passed=true only when no material issue needs correction. Medium risk means changes and a new review are required. High risk blocks publication until changes and a new review. For medium/high, include concrete issues with examples from the supplied text and actionable recommendations. This is a risk screen, not a legal opinion.`
+Copyright checks: verbatim passages, sentence-by-sentence rewrites, distinctive metaphors and turns of phrase, creative selection and arrangement, original examples or narratives, headings, quotations, and image rights. Distinguish independent reuse of unprotected facts from copied expression. Give a concrete excerpt and the smallest necessary revision for each actual issue. Do not flag unchanged dates, names, figures, prices, locations, payment terms, the factual event, its meaning, or accurately attributed unverified source claims as copied expression. Never manufacture facts or turn forecasts into guarantees.
+
+Low risk: publishing may proceed after human approval. Medium risk: publishing may also proceed after human approval, while showing all specific issues and recommendations; changes are optional. High risk: publication must be blocked pending a corrected draft and fresh review. Set passed=true for low or medium when there is no independent hard blocker (e.g. unlicensed reused images or substantial copied passages); if there is an actual hard blocker, use high. For medium/high include concrete issues and actionable recommendations. This is a risk screen, not a legal opinion.`
 
 export function parseContentFactoryReview(raw: string, item: ContentFactoryItem): ContentFactoryAiReview {
   let data: unknown
@@ -44,7 +46,7 @@ export function parseContentFactoryReview(raw: string, item: ContentFactoryItem)
   }
   const overlap = hasVerbatimOverlap(item.generatedText, item.originalText)
   const risk = overlap ? 'high' : result.risk
-  const passed = risk === 'low' && result.passed
+  const passed = risk === 'low' || risk === 'medium'
   const issues = overlap ? [...result.issues, {
     category: 'verbatim_copy',
     detail: 'A substantial passage matches the source verbatim.',
@@ -52,7 +54,7 @@ export function parseContentFactoryReview(raw: string, item: ContentFactoryItem)
   }] : result.issues
   const recommendations = overlap ? [...result.recommendations, 'Rewrite the copied passage and repeat the review.'] : result.recommendations
   return {
-    status: passed ? 'passed' : risk === 'high' ? 'blocked' : 'changes_required',
+    status: risk === 'high' ? 'blocked' : passed ? 'passed' : 'changes_required',
     risk, passed, issues, recommendations,
     checkedAt: new Date().toISOString(),
     reviewedTitle: item.generatedTitle,

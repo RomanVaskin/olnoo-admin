@@ -8,6 +8,7 @@ import {
   hasVerbatimOverlap,
   generateContentFactoryArticle,
   ContentFactoryGenerateError,
+  applyContentFactoryRevision,
 } from './content-factory-generate.ts'
 import { saveProjectBrandVoice } from './project-brand-voice.ts'
 
@@ -399,4 +400,32 @@ test('requirement: an AI Router failure never loses the original source text —
       /AI Router|ContentFactoryGenerateError/,
     )
   })
+})
+
+
+test('targeted revision changes only the unique flagged fragment, preserving all other text', () => {
+  const current = { title: 'Обзор недвижимости', body: 'Первый абзац без замечаний.\n\nПроблемная авторская фраза.\n\nИтог и CTA остаются на месте.' }
+  const revised = applyContentFactoryRevision(current, JSON.stringify({ edits: [
+    { field: 'body', original: 'Проблемная авторская фраза.', replacement: 'Самостоятельно сформулированный вывод.' },
+  ] }))
+  assert.equal(revised.title, current.title)
+  assert.equal(revised.body, 'Первый абзац без замечаний.\n\nСамостоятельно сформулированный вывод.\n\nИтог и CTA остаются на месте.')
+})
+
+test('targeted revision refuses ambiguous or unsupported full-post replacements', () => {
+  const current = { title: 'Тема', body: 'Повтор. Повтор. Остальной текст.' }
+  assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [
+    { field: 'body', original: 'Повтор.', replacement: 'Иная фраза.' },
+  ] })), /exactly once/i)
+  assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [
+    { field: 'body', original: 'Нет такого текста', replacement: 'Что-то другое' },
+  ] })), /exactly once/i)
+  assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [] })), /1–8/)
+})
+
+test('targeted revision cannot change prices, quantities or dates', () => {
+  const current = { title: 'Проект', body: 'Цена $45000, первый взнос 20%, срок 2027.' }
+  assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [
+    { field: 'body', original: '$45000', replacement: '$50000' },
+  ] })), /factual numbers/i)
 })

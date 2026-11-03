@@ -56,13 +56,19 @@ test('only a valid low-risk decision passes the current title, text and image', 
   assert.equal(hasPassedAiReview({ ...item, aiReview: null }), false)
 })
 
-test('medium and high risk block publication until a corrected draft is reviewed again', () => {
-  for (const risk of ['medium', 'high'] as const) {
-    const result = parseContentFactoryReview(JSON.stringify({ risk, passed: true, issues: [{ category: 'copy', detail: 'Similar structure', example: 'Same section order' }], recommendations: ['Rewrite the structure'] }), item)
-    assert.equal(result.passed, false)
-    assert.equal(hasPassedAiReview({ ...item, aiReview: result }), false)
-    assert.equal(result.status, risk === 'high' ? 'blocked' : 'changes_required')
-  }
+test('medium review permits publication with visible issues; high blocks publication', () => {
+  const issues = [{ category: 'copy', detail: 'Similar structure', example: 'Same section order' }]
+  const medium = parseContentFactoryReview(JSON.stringify({ risk: 'medium', passed: false, issues, recommendations: ['Rewrite the structure'] }), item)
+  assert.equal(medium.passed, true)
+  assert.equal(medium.status, 'passed')
+  assert.equal(medium.risk, 'medium')
+  assert.equal(medium.issues?.length, 1)
+  assert.equal(hasPassedAiReview({ ...item, aiReview: medium }), true)
+  assert.equal(hasPassedAiReview({ ...item, generatedText: 'Changed', aiReview: medium }), false)
+  const high = parseContentFactoryReview(JSON.stringify({ risk: 'high', passed: true, issues, recommendations: ['Rewrite the structure'] }), item)
+  assert.equal(high.passed, false)
+  assert.equal(high.status, 'blocked')
+  assert.equal(hasPassedAiReview({ ...item, aiReview: high }), false)
 })
 
 test('invalid JSON, missing evidence and schema drift fail closed', () => {
@@ -107,4 +113,11 @@ test('review sends source, draft and project context through the Router preset w
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+
+test('review prompt permits medium and blocks high while preserving concrete evidence', () => {
+  assert.match(CONTENT_FACTORY_REVIEW_PROMPT, /Medium risk: publishing may also proceed/i)
+  assert.match(CONTENT_FACTORY_REVIEW_PROMPT, /High risk: publication must be blocked/i)
+  assert.match(CONTENT_FACTORY_REVIEW_PROMPT, /Distinguish independent reuse of unprotected facts/i)
 })
