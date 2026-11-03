@@ -281,7 +281,7 @@ export function applyContentFactoryRevision(
     if (obj.field === 'title') title = updated
     else body = updated
   }
-  const numbers = (text: string) => (text.match(/\\d+(?:[.,]\\d+)*/g) ?? []).sort().join('|')
+  const numbers = (text: string) => (text.match(/\d+(?:[.,]\d+)*/g) ?? []).sort().join('|')
   if (numbers(current.title + current.body) !== numbers(title + body)) {
     throw new ContentFactoryGenerateError('Revision changed the factual numbers in the original draft.')
   }
