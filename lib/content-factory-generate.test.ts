@@ -422,3 +422,10 @@ test('targeted revision refuses ambiguous or unsupported full-post replacements'
   ] })), /exactly once/i)
   assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [] })), /1–8/)
 })
+
+test('targeted revision cannot change prices, quantities or dates', () => {
+  const current = { title: 'Проект', body: 'Цена $45000, первый взнос 20%, срок 2027.' }
+  assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [
+    { field: 'body', original: '$45000', replacement: '$50000' },
+  ] })), /factual numbers/i)
+})
