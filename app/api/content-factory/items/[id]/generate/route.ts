@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { getItem, setItemStatus, setGeneratedContent, canGenerate } from '@/lib/content-factory-items'
-import { generateContentFactoryArticle, ContentFactoryGenerateError } from '@/lib/content-factory-generate'
+import { generateContentFactoryArticle, reviseContentFactoryArticle, ContentFactoryGenerateError } from '@/lib/content-factory-generate'
 import { AiRouterError } from '@/lib/ai-router'
 
 /**
@@ -29,7 +29,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   await setItemStatus(pool, projectId, id, { status: 'processing' })
 
   try {
-    const generated = await generateContentFactoryArticle(pool, projectId, { sourceText: item.originalText, sourceUrl: item.originalUrl })
+    const flaggedIssues = item.aiReview?.issues ?? []
+    const isTargetedRevision = !!item.generatedText.trim() && flaggedIssues.length > 0
+      && (item.aiReview?.risk === 'high' || item.aiReview?.risk === 'medium')
+      && item.aiReview.reviewedTitle === item.generatedTitle
+      && item.aiReview.reviewedText === item.generatedText
+    const generated = isTargetedRevision
+      ? await reviseContentFactoryArticle(pool, projectId, {
+          sourceText: item.originalText, sourceUrl: item.originalUrl,
+          title: item.generatedTitle, body: item.generatedText,
+          issues: flaggedIssues, recommendations: item.aiReview?.recommendations ?? [],
+        })
+      : await generateContentFactoryArticle(pool, projectId, { sourceText: item.originalText, sourceUrl: item.originalUrl })
     const status = generated.needsReview ? 'needs_review' : 'ready'
     const updated = await setGeneratedContent(pool, projectId, id, {
       title: generated.title,
