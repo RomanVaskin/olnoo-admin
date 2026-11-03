@@ -1,3 +1,5 @@
+import { handleOwnTelegramUpdate } from '@/lib/content-factory-telegram-intake'
+import { ownMaterialBotCall, ownMaterialPhoto } from '@/lib/content-factory-telegram-bot'
 import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
@@ -115,6 +117,7 @@ export async function POST(req: Request) {
 
   const update = await req.json().catch(() => null)
   try {
+    if (await handleOwnTelegramUpdate(pool, update, { bot: ownMaterialBotCall, photo: ownMaterialPhoto })) return NextResponse.json({ ok: true })
     const outcome = await handleTelegramCommentsUpdate(update, deps)
     await retryUnnotifiedComments()
     return NextResponse.json({ ok: true, ...outcome })

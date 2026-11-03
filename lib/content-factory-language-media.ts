@@ -13,7 +13,7 @@ export async function loadLanguageMedia(
     cover?: typeof readContentFactoryCover
   } = {},
 ): Promise<{ images: { bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }[]; photo?: Buffer }> {
-  if (item.processingMode === 'copy') {
+  if (item.processingMode === 'copy' || (item.originKind === 'own' && !item.imageFilename)) {
     if (item.originalImageError || item.originalImageFiles.length !== item.originalImageUrls.length) throw new Error('Source album is incomplete.')
     const images = await Promise.all(item.originalImageFiles.map(async (filename) => {
       const bytes = await (readers.original ?? readOriginalImage)(item.projectId, item.id, filename)

@@ -963,6 +963,8 @@ export const en = {
       description: 'Source publications: independent articles after AI review and partner text after manual comparison.',
       filterAllStatuses: 'All statuses',
       original: 'Original (source)',
+      ownBrief: 'AI brief (original stays unchanged)',
+      ownMaterial: 'Own material',
       partnerCopy: 'Partner text · no AI rewrite',
       previewWarning: 'This text comes from Telegram’s public HTML preview. Completeness and formatting are not verified automatically. Open the original and compare it before approval.',
       originalImages: 'Original images',

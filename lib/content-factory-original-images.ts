@@ -124,3 +124,13 @@ export async function syncOriginalImages(pool: Pool, item: ContentFactoryItem, f
   if (item.originalImageError) await pool.query('UPDATE content_factory_items SET original_image_error = \'\' WHERE id = $1 AND project_id = $2', [item.id, item.projectId])
   return ''
 }
+
+/** Store owner-uploaded bytes unchanged using the existing originals layout and validation. */
+export async function writeOriginalImage(projectId: number, itemId: string, bytes: Buffer): Promise<string> {
+  if (bytes.length > MAX_IMAGE_BYTES) throw new ContentFactoryOriginalImageError('Image exceeds 10 MB.')
+  const filename = `${randomUUID()}.${imageExtension(bytes)}`
+  const target = originalImagePath(projectId, itemId, filename)
+  await mkdir(path.dirname(target), { recursive: true })
+  try { await writeFile(target, bytes, { flag: 'wx' }) } catch (error) { await unlink(target).catch(() => {}); throw error }
+  return filename
+}
