@@ -8,6 +8,7 @@ import {
   hasVerbatimOverlap,
   generateContentFactoryArticle,
   ContentFactoryGenerateError,
+  applyContentFactoryRevision,
 } from './content-factory-generate.ts'
 import { saveProjectBrandVoice } from './project-brand-voice.ts'
 
