@@ -26,7 +26,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const owned = await ownItem(req, params)
   if (!owned) return NextResponse.json({ error: 'Material not found for this project.' }, { status: 404 })
   const { item, project, projectId } = owned
-  if (!item.generatedText.trim() || !['ready', 'needs_review'].includes(item.status) || item.socialPostId) {
+  if (item.processingMode === 'copy') return NextResponse.json({ error: 'Partner copy does not use AI image generation.' }, { status: 409 })
+  if (!item.generatedText.trim() || !['ready', 'needs_review'].includes(item.status) || item.socialPostId || item.enSocialPostId || item.enPublishClaimed) {
     return NextResponse.json({ error: 'Prepare the material before generating an image; published materials cannot be changed.' }, { status: 409 })
   }
 
@@ -52,7 +53,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   const owned = await ownItem(req, params)
   if (!owned) return NextResponse.json({ error: 'Material not found for this project.' }, { status: 404 })
   const { item, project, projectId } = owned
-  if (!['ready', 'needs_review'].includes(item.status) || item.socialPostId) {
+  if (!['ready', 'needs_review'].includes(item.status) || item.socialPostId || item.enSocialPostId || item.enPublishClaimed) {
     return NextResponse.json({ error: 'Published materials cannot be changed.' }, { status: 409 })
   }
   if (!item.imageFilename) return NextResponse.json(item)

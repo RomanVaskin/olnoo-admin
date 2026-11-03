@@ -4,7 +4,9 @@ import { syncPostStatusFromPublications } from '@/lib/social'
 import { recordPublicationPreflightFailure } from '@/lib/social-publication-preflight-failure'
 import { claimPublicationForSending, publicationClaimConflictResult } from '@/lib/social-publication-claim'
 import { resolvePendingAutoForwardForPublication } from '@/lib/social-comments'
-import { sendTelegramPhotoWithText } from '@/lib/social-telegram-photo'
+import { sendTelegramPhotoWithText, sendTelegramAlbumWithText } from '@/lib/social-telegram-photo'
+import { getItem, hasApprovedPartnerCopy, hasPassedAiReview } from '@/lib/content-factory-items'
+import { loadLanguageMedia } from '@/lib/content-factory-language-media'
 
 // Server-side only. TELEGRAM_BOT_TOKEN must never be sent to the browser — it is read here and
 // only here, inside a function called exclusively from a server route handler.
@@ -88,7 +90,7 @@ export async function publishSocialPublicationToTelegram(
     [publication.social_post_id, projectId],
   )
   const post = postRows[0]
-  const text = post?.telegram_text?.trim() || post?.body?.trim() || ''
+  let text = post?.telegram_text?.trim() || post?.body?.trim() || ''
   if (!text) {
     const error = 'post has no content to publish'
     await recordPublicationPreflightFailure(pool, id, projectId, error)
@@ -129,6 +131,42 @@ export async function publishSocialPublicationToTelegram(
 
   const chatId = chatIdFor(account.username)
 
+  // Also applies to direct Social API calls: copy-mode images and rights cannot be bypassed.
+  const { rows: linkedRows } = await pool.query<{ id: string; is_en: boolean }>(
+    `SELECT id, en_social_post_id = $1 AS is_en FROM content_factory_items
+     WHERE project_id = $2 AND (social_post_id = $1 OR en_social_post_id = $1)`,
+    [publication.social_post_id, projectId],
+  )
+  let copyImages: { bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }[] = []
+  let outgoingPhoto = photo
+  if (linkedRows[0]) {
+    const item = await getItem(pool, projectId, linkedRows[0].id)
+    const isEnglish = linkedRows[0].is_en
+    const translated = item && (isEnglish ? item.sourceLanguage === 'ru' : item.sourceLanguage === 'en')
+    if (!item || !item.sourceLanguage || (isEnglish ? !item.enApprovedAt : !item.ruApprovedAt) ||
+        (item.processingMode === 'copy' && !hasApprovedPartnerCopy(item)) ||
+        (item.processingMode === 'ai' && !hasPassedAiReview(item)) ||
+        (translated && (isEnglish
+          ? item.enSourceText !== item.generatedText || (item.processingMode === 'copy' && !item.enRightsConfirmed)
+          : item.ruSourceText !== item.generatedText || (item.processingMode === 'copy' && !item.ruRightsConfirmed)))) {
+      const error = 'Content Factory language approval, rights or Quality Gate is missing.'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 409 }
+    }
+    text = isEnglish ? (translated ? item.enText : item.generatedText) : (translated ? item.ruText : item.generatedText)
+    try {
+      const media = await loadLanguageMedia(item, projectSlug!, isEnglish ? 'en' : 'ru')
+      copyImages = media.images
+      outgoingPhoto = media.photo ?? outgoingPhoto
+    } catch {
+      const error = item.processingMode === 'copy'
+        ? 'A saved source image is unavailable. Restore it before publishing the complete post.'
+        : 'The generated cover is unavailable. Restore it before publishing the English post.'
+      await recordPublicationPreflightFailure(pool, id, projectId, error)
+      return { error, status: 409 }
+    }
+  }
+
   // Atomic claim, right before the one irreversible call — see claimPublicationForSending's own
   // comment. Every pre-flight check above is a safe-to-repeat local read; only the Bot API send
   // can actually cause a duplicate, so only it needs to be guarded.
@@ -138,8 +176,10 @@ export async function publishSocialPublicationToTelegram(
   let telegramError: string | null = null
   let messageId: number | null = null
   let sendOutcomeUnknown = false
-  if (photo) {
-    const result = await sendTelegramPhotoWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, image: photo })
+  if (outgoingPhoto || copyImages.length) {
+    const result = copyImages.length > 1
+      ? await sendTelegramAlbumWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, images: copyImages })
+      : await sendTelegramPhotoWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, image: copyImages[0]?.bytes ?? outgoingPhoto!, mimeType: copyImages[0]?.mimeType })
     if (result.kind === 'sent') messageId = result.messageId
     else {
       telegramError = result.error

@@ -15,6 +15,8 @@ type Source = {
   type: SourceType
   handle: string
   enabled: boolean
+  processingMode: 'ai' | 'copy'
+  copyPermissionConfirmed: boolean
   lastCheckedAt: string | null
   lastError: string
 }
@@ -38,6 +40,8 @@ export function ContentFactorySourcesView({
   const [createError, setCreateError] = useState('')
   const [newType, setNewType] = useState<SourceType>('telegram')
   const [newHandle, setNewHandle] = useState('')
+  const [newMode, setNewMode] = useState<'ai' | 'copy'>('ai')
+  const [newCopyPermission, setNewCopyPermission] = useState(false)
   const [checkingId, setCheckingId] = useState<string | null>(null)
   const [checkMessage, setCheckMessage] = useState<Record<string, string>>({})
 
@@ -68,11 +72,13 @@ export function ContentFactorySourcesView({
       const res = await fetch(`/api/content-factory/sources?project=${encodeURIComponent(project)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: newType, handle: newHandle }),
+        body: JSON.stringify({ type: newType, handle: newHandle, processingMode: newMode, copyPermissionConfirmed: newCopyPermission }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) throw new Error((data && data.error) || t.contentFactory.sources.createError)
       setNewHandle('')
+      setNewMode('ai')
+      setNewCopyPermission(false)
       await load()
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : t.contentFactory.sources.createError)
@@ -86,6 +92,15 @@ export function ContentFactorySourcesView({
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: !source.enabled }),
+    })
+    if (res.ok) await load()
+  }
+
+  async function changeMode(source: Source, mode: 'ai' | 'copy') {
+    if (mode === 'copy' && !window.confirm(t.contentFactory.sources.confirmCopyPermission)) return
+    const res = await fetch(`/api/content-factory/sources/${source.id}?project=${encodeURIComponent(project)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ processingMode: mode, copyPermissionConfirmed: mode === 'copy' }),
     })
     if (res.ok) await load()
   }
@@ -129,7 +144,7 @@ export function ContentFactorySourcesView({
           <HeaderActions>
             <select
               value={newType}
-              onChange={(e) => setNewType(e.target.value as SourceType)}
+              onChange={(e) => { setNewType(e.target.value as SourceType); setNewMode('ai'); setNewCopyPermission(false) }}
               className="border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
             >
               {SOURCE_TYPES.map((type) => (
@@ -141,12 +156,17 @@ export function ContentFactorySourcesView({
             <input
               value={newHandle}
               onChange={(e) => setNewHandle(e.target.value)}
-              placeholder={t.contentFactory.sources.handlePlaceholder}
+              placeholder={newType === 'rss' || newType === 'website' ? 'https://example.com/news/feed.xml' : t.contentFactory.sources.handlePlaceholder}
               className="min-w-[220px] border border-hairline bg-card px-3 py-2.5 text-sm text-foreground focus:border-foreground/40 focus:outline-none"
             />
+            <select value={newMode} onChange={(e) => { setNewMode(e.target.value as 'ai' | 'copy'); setNewCopyPermission(false) }} className="border border-hairline bg-card px-3 py-2.5 text-sm">
+              <option value="ai">{t.contentFactory.sources.modeAi}</option>
+              <option value="copy" disabled={newType !== 'telegram'}>{t.contentFactory.sources.modeCopy}</option>
+            </select>
+            {newMode === 'copy' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={newCopyPermission} onChange={(e) => setNewCopyPermission(e.target.checked)} />{t.contentFactory.sources.copyPermission}</label>}
             <button
               onClick={addSource}
-              disabled={creating || !newHandle.trim()}
+              disabled={creating || !newHandle.trim() || (newMode === 'copy' && !newCopyPermission)}
               className="label-mono flex items-center justify-center border border-foreground bg-foreground px-4 py-2 text-background transition-colors hover:bg-transparent hover:text-foreground disabled:opacity-50"
             >
               {t.contentFactory.sources.addSource}
@@ -170,6 +190,10 @@ export function ContentFactorySourcesView({
                   <Td className="font-medium text-foreground">{source.handle}</Td>
                   <Td>
                     <span className="label-mono text-muted-foreground">{t.contentFactory.sourceType[source.type]}</span>
+                    <select value={source.processingMode} onChange={(e) => changeMode(source, e.target.value as 'ai' | 'copy')} className="mt-1 block border border-hairline bg-card p-1 text-xs">
+                      <option value="ai">{t.contentFactory.sources.modeAi}</option>
+                      <option value="copy" disabled={source.type !== 'telegram'}>{t.contentFactory.sources.modeCopy}</option>
+                    </select>
                   </Td>
                   <Td>
                     <div className="flex flex-col gap-1">

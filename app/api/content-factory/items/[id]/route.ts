@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
-import { getItem, editGeneratedContent, setItemStatus, canApprove, canReject } from '@/lib/content-factory-items'
+import { getItem, editGeneratedContent, setItemStatus, approvePartnerCopy, canApprove, canReject } from '@/lib/content-factory-items'
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -35,6 +35,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   if (body.action === 'approve') {
     if (!canApprove(item.status)) return NextResponse.json({ error: `Cannot approve from status "${item.status}".` }, { status: 409 })
+    if (item.processingMode === 'copy') {
+      if (body.confirmOriginalTextComplete !== true) return NextResponse.json({ error: 'Compare the public preview with the original Telegram post and confirm the text is complete before approving.' }, { status: 422 })
+      if (item.originalImageUrls.length > 0 && body.confirmImageRights !== true) return NextResponse.json({ error: 'Confirm permission to use the source images before approving.' }, { status: 422 })
+      const approved = await approvePartnerCopy(pool, projectId, id, body.confirmImageRights === true)
+      if (!approved) return NextResponse.json({ error: 'Partner copy is incomplete, unlicensed, or changed. Refresh the material.' }, { status: 409 })
+      return NextResponse.json(approved)
+    }
     return NextResponse.json(await setItemStatus(pool, projectId, id, { status: 'ready' }))
   }
   if (body.action === 'reject') {
@@ -43,9 +50,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   if (typeof body.title === 'string' || typeof body.text === 'string') {
+    if (item.processingMode === 'copy') return NextResponse.json({ error: 'Partner copy cannot be edited; use AI mode for a rewrite.' }, { status: 409 })
+    if (item.socialPostId || item.enSocialPostId || item.enPublishClaimed || item.status === 'scheduled' || item.status === 'processing') return NextResponse.json({ error: 'A linked or publishing post cannot be edited. Published versions remain unchanged.' }, { status: 409 })
     const title = typeof body.title === 'string' ? body.title : item.generatedTitle
     const text = typeof body.text === 'string' ? body.text : item.generatedText
-    return NextResponse.json(await editGeneratedContent(pool, projectId, id, { title, text }))
+    const updated = await editGeneratedContent(pool, projectId, id, { title, text })
+    return updated ? NextResponse.json(updated) : NextResponse.json({ error: 'The material changed. Reload it.' }, { status: 409 })
   }
 
   return NextResponse.json({ error: 'nothing to update' }, { status: 400 })

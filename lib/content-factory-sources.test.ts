@@ -12,6 +12,13 @@ test('isSourceType accepts only the known, schema-ready types', () => {
   assert.equal(isSourceType(123), false)
 })
 
+test('copy mode requires explicit text permission and Telegram source', async () => {
+  const pool = { query: async () => { throw new Error('Validation should run before SQL') } } as unknown as Pool
+  await assert.rejects(() => createSource(pool, 1, { type: 'telegram', handle: '@partner', processingMode: 'copy' }), ContentFactorySourceError)
+  await assert.rejects(() => createSource(pool, 1, { type: 'rss', handle: 'https://example.com/feed', processingMode: 'copy', copyPermissionConfirmed: true }), ContentFactorySourceError)
+  await assert.rejects(() => createSource(pool, 1, { type: 'telegram', handle: '@partner', processingMode: 'unknown' }), ContentFactorySourceError)
+})
+
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://olnoo_admin:CHANGE_ME@localhost:5432/olnoo_admin'
 
 async function withDb(t: import('node:test').TestContext, fn: (pool: Pool, makeProject: (name: string) => Promise<number>) => Promise<void>) {

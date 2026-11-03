@@ -51,13 +51,25 @@ test('parseTelegramPreviewHtml: extracts text, image, date, and builds a stable 
   assert.equal(messages[0].publishedAt, '2026-01-01T10:00:00+00:00')
 })
 
+test('parseTelegramPreviewHtml: keeps all photo URLs from one post in source order', () => {
+  const html = `<div class="tgme_widget_message_wrap"><div data-post="alexander_realty/301">
+    <a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn4.telesco.pe/file/a.jpg')"></a>
+    <a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn4.telesco.pe/file/b.jpg')"></a>
+    <div class="tgme_widget_message_text">Album caption</div></div></div>`
+  assert.deepEqual(parseTelegramPreviewHtml(html, 'alexander_realty')[0].imageUrls, [
+    'https://cdn4.telesco.pe/file/a.jpg', 'https://cdn4.telesco.pe/file/b.jpg',
+  ])
+})
+
 test('parseTelegramPreviewHtml: decodes HTML entities and converts <br> to newlines', () => {
-  const html = fixtureBlock({ id: 102, text: 'Цена&nbsp;&mdash; от $200k.<br>Подробности &gt; здесь.' })
+  const html = fixtureBlock({ id: 102, text: 'Цена&nbsp;&mdash; от $200k&#33;<br>Подробности &gt; здесь &#x1F3E0;.' })
   const messages = parseTelegramPreviewHtml(html, 'alexander_realty')
   assert.equal(messages.length, 1)
   assert.ok(messages[0].text.includes('\n'))
   assert.ok(!messages[0].text.includes('&nbsp;'))
   assert.ok(messages[0].text.includes('>'))
+  assert.ok(messages[0].text.includes('$200k!'))
+  assert.ok(messages[0].text.includes('🏠'))
 })
 
 test('parseTelegramPreviewHtml: skips a block with neither text nor an image (service/forward marker)', () => {

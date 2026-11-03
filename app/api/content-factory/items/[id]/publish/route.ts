@@ -7,7 +7,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!project) return NextResponse.json({ error: 'a known project is required' }, { status: 400 })
 
   try {
-    const result = await publishContentFactoryItem(project, id)
+    const body = await req.json().catch(() => ({}))
+    const language = body?.language === 'en' ? 'en' : body?.language === 'ru' || body?.language === undefined ? 'ru' : null
+    if (!language) return NextResponse.json({ error: 'Unsupported language.' }, { status: 400 })
+    const result = await publishContentFactoryItem(project, id, language)
     if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status })
     return NextResponse.json(result.item)
   } catch (err) {

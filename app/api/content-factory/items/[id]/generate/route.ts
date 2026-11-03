@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { getItem, setItemStatus, setGeneratedContent, canGenerate } from '@/lib/content-factory-items'
-import { generateContentFactoryArticle, ContentFactoryGenerateError } from '@/lib/content-factory-generate'
+import { generateContentFactoryArticle, reviseContentFactoryArticle, ContentFactoryGenerateError } from '@/lib/content-factory-generate'
 import { AiRouterError } from '@/lib/ai-router'
 
 /**
@@ -22,6 +22,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const item = await getItem(pool, projectId, id)
   if (!item) return NextResponse.json({ error: 'not found' }, { status: 404 })
+  if (item.processingMode === 'copy') return NextResponse.json({ error: 'Partner copy does not use AI text generation.' }, { status: 409 })
+  if (item.socialPostId || item.enSocialPostId || item.enPublishClaimed) return NextResponse.json({ error: 'A linked or publishing post cannot be regenerated.' }, { status: 409 })
   if (!canGenerate(item.status)) {
     return NextResponse.json({ error: `Cannot generate from status "${item.status}".` }, { status: 409 })
   }
@@ -29,7 +31,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   await setItemStatus(pool, projectId, id, { status: 'processing' })
 
   try {
-    const generated = await generateContentFactoryArticle(pool, projectId, { sourceText: item.originalText, sourceUrl: item.originalUrl })
+    const flaggedIssues = item.aiReview?.issues ?? []
+    const isTargetedRevision = !!item.generatedText.trim() && flaggedIssues.length > 0
+      && (item.aiReview?.risk === 'high' || item.aiReview?.risk === 'medium' || item.aiReview?.quality?.passed === false || item.aiReview?.passed === false)
+      && item.aiReview?.reviewedTitle === item.generatedTitle
+      && item.aiReview?.reviewedText === item.generatedText
+    const generated = isTargetedRevision
+      ? await reviseContentFactoryArticle(pool, projectId, {
+          sourceText: item.originalText, sourceUrl: item.originalUrl,
+          title: item.generatedTitle, body: item.generatedText,
+          issues: flaggedIssues, recommendations: item.aiReview?.recommendations ?? [],
+        })
+      : await generateContentFactoryArticle(pool, projectId, { sourceText: item.originalText, sourceUrl: item.originalUrl })
     const status = generated.needsReview ? 'needs_review' : 'ready'
     const updated = await setGeneratedContent(pool, projectId, id, {
       title: generated.title,
@@ -37,7 +50,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       status,
       reviewReason: generated.reviewReason,
     })
-    return NextResponse.json(updated)
+    return updated ? NextResponse.json(updated) : NextResponse.json({ error: 'The material changed during generation. Reload it.' }, { status: 409 })
   } catch (err) {
     if (err instanceof ContentFactoryGenerateError || err instanceof AiRouterError) {
       await setItemStatus(pool, projectId, id, { status: 'failed', error: err.message })

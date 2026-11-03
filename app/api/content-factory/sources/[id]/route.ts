@@ -14,6 +14,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const source = await updateSource(pool, projectId, id, {
       handle: typeof body?.handle === 'string' ? body.handle : undefined,
       enabled: typeof body?.enabled === 'boolean' ? body.enabled : undefined,
+      processingMode: body?.processingMode,
+      copyPermissionConfirmed: typeof body?.copyPermissionConfirmed === 'boolean' ? body.copyPermissionConfirmed : undefined,
     })
     if (!source) return NextResponse.json({ error: 'not found' }, { status: 404 })
     return NextResponse.json(source)

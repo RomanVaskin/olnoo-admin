@@ -3,7 +3,7 @@
 import { startTransition, useEffect, useState } from 'react'
 import { SectionHeader, TableShell, Th, Td } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
-import { checkAiRouterProvider, loadAiRouterCatalog } from '@/app/[locale]/ai-router-actions'
+import { checkAiRouterProvider, loadAiRouterCatalog, saveAiRouterPreset } from '@/app/[locale]/ai-router-actions'
 import type { AiRouterCatalog, AiRouterProvider, AiRouterProviderStatus } from '@/lib/ai-router-admin'
 
 const PROVIDERS: { name: AiRouterProvider; label: string }[] = [
@@ -21,6 +21,8 @@ export function AiRouterView() {
   const [error, setError] = useState(false)
   const [loading, setLoading] = useState(true)
   const [checking, setChecking] = useState<AiRouterProvider | null>(null)
+  const [draftModels, setDraftModels] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -46,6 +48,28 @@ export function AiRouterView() {
       setError(true)
     } finally {
       setChecking(null)
+    }
+  }
+
+  async function savePreset(key: 'content-factory.text' | 'content-factory.review', selected: string) {
+    const separator = selected.indexOf(':')
+    if (separator < 1 || !catalog) return
+    const provider = selected.slice(0, separator) as AiRouterProvider
+    const model = selected.slice(separator + 1)
+    if (!catalog.providers.some((p) => p.name === provider && p.connected && p.models.some((m) => m.id === model))) return
+    setSaving(key)
+    setError(false)
+    try {
+      const updated = await saveAiRouterPreset({ key, provider, model })
+      setCatalog((current) => current ? {
+        ...current,
+        presets: current.presets.map((preset) => preset.key === key ? { ...preset, provider: updated.provider, model: updated.model } : preset),
+      } : current)
+      setDraftModels((current) => { const next = { ...current }; delete next[key]; return next })
+    } catch {
+      setError(true)
+    } finally {
+      setSaving(null)
     }
   }
 
@@ -93,12 +117,29 @@ export function AiRouterView() {
       <section className="flex flex-col gap-4">
         <h2 className="text-lg font-medium">{labels.assignments}</h2>
         <TableShell>
-          <thead><tr><Th>{labels.moduleTask}</Th><Th>{labels.provider}</Th><Th>{labels.model}</Th></tr></thead>
+          <thead><tr><Th>{labels.moduleTask}</Th><Th>{labels.provider}</Th><Th>{labels.model}</Th><Th>{t.table.actions}</Th></tr></thead>
           <tbody>
-            {catalog?.presets.map((preset) => <tr key={preset.key} className="border-t border-hairline">
-              <Td><span className="font-mono text-xs">{preset.key}</span></Td><Td>{preset.provider}</Td><Td>{preset.model}</Td>
-            </tr>)}
-            {!loading && !catalog?.presets.length && <tr className="border-t border-hairline"><Td>—</Td><Td>—</Td><Td>—</Td></tr>}
+            {catalog?.presets.map((preset) => {
+              const editable = preset.key === 'content-factory.text' || preset.key === 'content-factory.review'
+              const current = `${preset.provider}:${preset.model}`
+              const selected = draftModels[preset.key] ?? current
+              const options = catalog.providers.filter((p) => p.connected).flatMap((p) =>
+                p.models.map((m) => ({ value: `${p.name}:${m.id}`, label: `${p.name} / ${m.label}` })))
+              if (!options.some((option) => option.value === current)) options.unshift({ value: current, label: current })
+              return <tr key={preset.key} className="border-t border-hairline">
+                <Td><span className="font-mono text-xs">{preset.key}</span></Td>
+                <Td>{preset.provider}</Td>
+                <Td>{editable ? <select aria-label={preset.key} value={selected} onChange={(e) => setDraftModels((value) => ({ ...value, [preset.key]: e.target.value }))}
+                  disabled={saving !== null} className="max-w-[260px] border border-hairline bg-card px-2 py-1.5 text-sm">
+                  {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select> : preset.model}</Td>
+                <Td>{editable && <button type="button" onClick={() => void savePreset(preset.key as 'content-factory.text' | 'content-factory.review', selected)}
+                  disabled={saving !== null || selected === current} className="label-mono border border-hairline px-3 py-1.5 disabled:opacity-40">
+                  {saving === preset.key ? (locale === 'ru' ? 'Сохранение…' : 'Saving…') : (locale === 'ru' ? 'Сохранить' : 'Save')}
+                </button>}</Td>
+              </tr>
+            })}
+            {!loading && !catalog?.presets.length && <tr className="border-t border-hairline"><Td>—</Td><Td>—</Td><Td>—</Td><Td>—</Td></tr>}
           </tbody>
         </TableShell>
       </section>

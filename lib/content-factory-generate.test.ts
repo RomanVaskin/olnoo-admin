@@ -11,6 +11,7 @@ import {
   hasVerbatimOverlap,
   generateContentFactoryArticle,
   ContentFactoryGenerateError,
+  applyContentFactoryRevision,
 } from './content-factory-generate.ts'
 import { saveProjectBrandVoice } from './project-brand-voice.ts'
 
@@ -19,24 +20,60 @@ const factSheetJson = JSON.stringify(factSheet)
 
 // --- Pure: prompt / parser ---
 
-test('requirement: the prompt asks for an independent analytical article with its own structure and a practical takeaway', () => {
+test('generator preserves essential meaning while writing independent language', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   assert.match(p, /first identify the concrete facts in FACT SHEET/i)
   assert.match(p, /never a repost, translation, summary, or light paraphrase/i)
   assert.match(p, /new title, opening, and structure/i)
   assert.match(p, /why it matters to the target audience/i)
   assert.match(p, /practical takeaway that follows from the supported facts/i)
+  assert.match(p, /central idea, essential points and practical meaning/i)
+  assert.match(p, /do not copy distinctive phrasing or creative arrangement/i)
+})
+
+test('generator keeps substantive criteria, examples and useful structure without artificial shortening', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  for (const phrase of [
+    "central idea, purpose, useful structure, every essential point",
+    'all four with their substantial arguments and practical advice',
+    'Keep useful sections, numbering and lists',
+    'Preserve concrete numbers, dates, names, conditions, examples, arguments and recommendations',
+    'Remove only real repetition, filler',
+    'keep its strengths and improve weak passages',
+    'no 1200–1800 character target',
+    'no padding or artificial shortening',
+    'Keep each essential criterion fully explained'
+  ]) assert.ok(p.includes(phrase), phrase)
+})
+
+test('generator keeps a strong original engaging without boilerplate attribution', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  for (const phrase of [
+    'Keep useful sections, numbering and lists',
+    'keep its strengths and improve weak passages',
+    'dry fact sheet',
+    'opening, logic, precision, readability, persuasive force and layout',
+    'short readable paragraphs',
+    'fitting emojis',
+    'without repetitive source-attribution boilerplate',
+    'qualify material unconfirmed claims',
+    'preserve necessary attribution for quotations or exclusive claims',
+  ]) assert.ok(p.includes(phrase), phrase)
+  assert.doesNotMatch(p, /AURELMAR|Georgia|Cyprus|Potamos/i)
 })
 
 test('generation separates facts and supported figures from source framing before choosing a new analytical angle', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   assert.match(CONTENT_FACTORY_FACT_EXTRACTION_PROMPT, /neutral, checkable facts/i)
   assert.match(CONTENT_FACTORY_FACT_EXTRACTION_PROMPT, /source and confirmation status/i)
+  assert.match(CONTENT_FACTORY_FACT_EXTRACTION_PROMPT, /every substantial factual point, supporting argument, concrete example/i)
+  assert.match(p, /useful functional structure/i)
+  assert.match(p, /do not copy expressive sentences or a distinctive creative arrangement/i)
   assert.match(p, /Choose your own analytical angle based on what matters to the target audience/i)
   assert.match(p, /not around the order of FACT SHEET entries/i)
   assert.match(p, /Do not reconstruct a source announcement's headline, sequence of points, distinctive phrasing, or sentence-by-sentence argument even with synonyms/i)
   assert.match(p, /Preserve exact figures and conditions from FACT SHEET/i)
-  assert.match(p, /if a figure is source_only, keep it exact but explicitly attributed and unconfirmed under rule 6/i)
+  assert.match(p, /if a figure is source_only, keep it exact and qualify material unconfirmed claims under rule 6/i)
   assert.match(p, /Do not round, alter, or invent figures/i)
 })
 
@@ -76,23 +113,19 @@ test('requirement: the prompt flags substantial copied wording for manual review
   assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /distinctive promotional wording or an attribution-sensitive quote, do not reproduce it; set "needsReview": true/i)
 })
 
-test('Telegram format: body contains the visible title, short paragraphs, emoji subheadings, and bullets', () => {
+test('Telegram format keeps readable depth without a forced template', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   assert.match(p, /publisher sends "body" alone, so put the exact "title" as its first line/i)
-  assert.match(p, /short paragraphs/i)
-  assert.match(p, /emoji-led subheadings/i)
+  assert.match(p, /readable paragraphs/i)
   assert.match(p, /plain-text bullets \(•\)/i)
-  assert.match(p, /practical takeaway easy to find/i)
+  assert.match(p, /practical advice easy to find/i)
 })
 
-test('Telegram format: default length and emoji density yield to the project Brand Profile', () => {
+test('Telegram length follows content and emojis follow Brand Profile', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
-  assert.match(p, /1200–1800 characters in "body" by default, including the title and any CTA/i)
-  assert.match(p, /different length if the project's Brand Profile specifies one/i)
-  assert.match(p, /shorter useful post rather than padding it/i)
-  assert.match(p, /3–6 relevant emojis across the whole post by default/i)
-  assert.match(p, /rather than in every paragraph/i)
-  assert.match(p, /Brand Profile calls for fewer or none, follow it/i)
+  assert.match(p, /Let the content determine length/i)
+  assert.match(p, /no 1200–1800 character target/i)
+  assert.match(p, /fitting emojis where they improve navigation and match the project's Brand Profile/i)
   assert.doesNotMatch(p, /AURELMAR/i)
 })
 
@@ -202,6 +235,11 @@ test('parseGenerationResult: strips a markdown code fence before parsing', () =>
 test('parseGenerationResult: missing title or body throws ContentFactoryGenerateError', () => {
   assert.throws(() => parseGenerationResult(JSON.stringify({ title: '', body: 'b', needsReview: false, reviewReason: '' }), 'o', ''), ContentFactoryGenerateError)
   assert.throws(() => parseGenerationResult(JSON.stringify({ title: 't', body: '', needsReview: false, reviewReason: '' }), 'o', ''), ContentFactoryGenerateError)
+})
+
+test('oversized post fails instead of silently losing essential material', () => {
+  const raw = JSON.stringify({ title: 't', body: 'Т'.repeat(4001), needsReview: false, reviewReason: '' })
+  assert.throws(() => parseGenerationResult(raw, 'original', ''), /no text was truncated/i)
 })
 
 test('parseGenerationResult: not valid JSON at all throws ContentFactoryGenerateError', () => {
@@ -459,4 +497,60 @@ test('requirement: an AI Router failure never loses the original source text —
       /AI Router|ContentFactoryGenerateError/,
     )
   })
+})
+
+
+test('targeted revision changes only the unique flagged fragment, preserving all other text', () => {
+  const current = { title: 'Обзор недвижимости', body: 'Первый абзац без замечаний.\n\nПроблемная авторская фраза.\n\nИтог и CTA остаются на месте.' }
+  const revised = applyContentFactoryRevision(current, JSON.stringify({ edits: [
+    { field: 'body', original: 'Проблемная авторская фраза.', replacement: 'Самостоятельно сформулированный вывод.' },
+  ] }))
+  assert.equal(revised.title, current.title)
+  assert.equal(revised.body, 'Первый абзац без замечаний.\n\nСамостоятельно сформулированный вывод.\n\nИтог и CTA остаются на месте.')
+})
+
+test('targeted revision refuses ambiguous or unsupported full-post replacements', () => {
+  const current = { title: 'Тема', body: 'Повтор. Повтор. Остальной текст.' }
+  assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [
+    { field: 'body', original: 'Повтор.', replacement: 'Иная фраза.' },
+  ] })), /exactly once/i)
+  assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [
+    { field: 'body', original: 'Нет такого текста', replacement: 'Что-то другое' },
+  ] })), /exactly once/i)
+  assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [] })), /1–8/)
+})
+
+test('targeted revision cannot change prices, quantities or dates', () => {
+  const current = { title: 'Проект', body: 'Цена $45000, первый взнос 20%, срок 2027.' }
+  assert.throws(() => applyContentFactoryRevision(current, JSON.stringify({ edits: [
+    { field: 'body', original: '$45000', replacement: '$50000' },
+  ] })), /factual numbers/i)
+})
+
+test('targeted revision reports when an issue cannot be fixed without rewriting the post', () => {
+  assert.throws(() => applyContentFactoryRevision({ title: 'Тема', body: 'Хороший текст.' }, JSON.stringify({ cannotFix: 'Не хватает подтверждённых фактов для восстановления четырёх критериев.' })), /Targeted correction is not possible/)
+})
+
+test('targeted revision system prompt uses a valid JSON example without union syntax', async () => {
+  const pool = { query: async (sql: string) => {
+    if (sql.includes('FROM projects')) return { rows: [{ name: 'Example', domain: 'example.com' }] }
+    if (sql.includes('FROM project_brand_voice')) return { rows: [] }
+    return { rows: [] }
+  } } as unknown as Pool
+  const originalFetch = globalThis.fetch
+  let systemPrompt = ''
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    const request = JSON.parse(init.body as string)
+    systemPrompt = request.messages[0].content
+    return new Response(JSON.stringify({ content: JSON.stringify({ edits: [{ field: 'body', original: 'Old sentence.', replacement: 'New sentence.' }] }) }))
+  }) as typeof fetch
+  try {
+    const { reviseContentFactoryArticle } = await import('./content-factory-generate.ts')
+    await reviseContentFactoryArticle(pool, 1, { sourceText: 'Source facts here.', sourceUrl: '', title: 'Title', body: 'Old sentence.', issues: [{category:'copy',detail:'wording',example:'Old sentence.'}], recommendations:['Change wording'] })
+    assert.ok(systemPrompt.includes('{"edits":[{"field":"body"'))
+    assert.ok(!systemPrompt.includes('"title"|"body"'))
+    assert.match(systemPrompt, /missing editorial substance or weak presentation/i)
+    assert.match(systemPrompt, /improve only that passage while retaining necessary factual qualification and attribution/i)
+    assert.match(systemPrompt, /Preserve every other character/i)
+  } finally { globalThis.fetch = originalFetch }
 })

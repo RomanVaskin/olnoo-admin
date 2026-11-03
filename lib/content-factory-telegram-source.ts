@@ -107,12 +107,19 @@ function stripTags(html: string): string {
 
 function decodeTelegramHtml(text: string): string {
   return text
+    .replace(/&#(x[0-9a-f]+|[0-9]+);/gi, (entity, value: string) => {
+      const code = Number.parseInt(value.slice(0, 1).toLowerCase() === 'x' ? value.slice(1) : value, value[0].toLowerCase() === 'x' ? 16 : 10)
+      return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : entity
+    })
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, ' ')
+    .replace(/&mdash;/g, '—')
+    .replace(/&ndash;/g, '–')
+    .replace(/&hellip;/g, '…')
 }
 
 export type FetchLike = (url: string) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>
