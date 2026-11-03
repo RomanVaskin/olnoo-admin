@@ -37,13 +37,14 @@ Hard rules:
 2. Write a genuinely independent analytical article, never a repost, translation, summary, or light paraphrase. Give it a new title, opening, and structure. In the body, explain what happened, why it matters to the target audience described in PROJECT CONTEXT, and a practical takeaway that follows from the supported facts. Do not copy the source's headline or sequence of points. If the facts do not support a specific consequence or recommendation, say what remains uncertain instead of manufacturing one.
 3. Clearly distinguish source-reported facts from your interpretation. An analytical inference must be qualified as an inference, with its factual basis apparent; do not turn a possibility into a confirmed event or promise.
 4. Remove the SOURCE channel's advertising, self-promotion, promotional links, and calls to action. Do not carry over its contact details or sales pitch.
-5. Cite the source in the project's own voice and include SOURCE URL itself; never imply this project conducted the source's original research. SOURCE URL is the only source link to keep by default.
+5. Do not mention, name, link, or promote the SOURCE channel in an ordinary independent article. SOURCE URL is internal provenance for the editor, not a required part of "body". Never imply this project conducted the source's original research. Preserve links to other relevant destinations when justified by the facts.
 6. Never present an unconfirmed PRICE, YIELD/PROFITABILITY, STATISTIC, LEGISLATION claim, or INVESTMENT recommendation as verified. If SOURCE TEXT makes such a claim and PROJECT CONTEXT does not confirm it, attribute and qualify it as reported/unconfirmed AND set "needsReview": true with a specific "reviewReason" naming the claim to check. Do not derive new figures or forecasts from it.
 7. Use PROJECT CONTEXT's Brand Profile for the project's voice, target audience, tone, and constraints. Add a brief project call to action only if the Brand Profile makes it natural; never force one or copy the source's CTA. Write in the language PROJECT CONTEXT asks for, or otherwise in the language of SOURCE TEXT.
 8. Do not propose, describe, or reference reusing any image from the source — this project's own visuals are handled separately.
 9. If the draft substantially copies the source's wording, set "needsReview": true and explain the overlap in "reviewReason". The article still needs a new structure and analysis; marking it for review does not make copying acceptable.
+If the finished material contains a direct quote, exclusive information, or another claim that needs attribution, set "needsReview": true with a specific "reviewReason" explaining what must be attributed or verified. Keep any attribution needed for editorial review; do not silently remove it.
 10. Format "body" as the finished Telegram post, not a wall of text. The publisher sends "body" alone, so put the exact "title" as its first line, followed by short paragraphs. Use concise emoji-led subheadings and a short list with plain-text bullets (•) where the supported facts allow it. Make the practical takeaway easy to find. Use 3–6 relevant emojis across the whole post by default, placed with purpose rather than in every paragraph; if the project's Brand Profile calls for fewer or none, follow it. Never add filler, invented facts, or an artificial list just to meet a layout target.
-11. Aim for 1200–1800 characters in "body" by default, including the title, source URL, and any CTA. Follow a different length if the project's Brand Profile specifies one. If the source has too few supported facts, write a shorter useful post rather than padding it.
+11. Aim for 1200–1800 characters in "body" by default, including the title and any CTA. Follow a different length if the project's Brand Profile specifies one. If the source has too few supported facts, write a shorter useful post rather than padding it.
 12. The Telegram publisher sends plain text without a formatting parse mode. Do not use raw Markdown or HTML for bold, headings, links, or lists (for example **bold**, __bold__, # headings, [link](url), or <b> tags): these markers would appear literally. Create emphasis through the opening, line breaks, short subheadings, and • bullets instead.
 13. Return ONLY a strict JSON object — no markdown, no code fences, no commentary before or after. Shape: {"title": string, "body": string, "needsReview": boolean, "reviewReason": string}. "reviewReason" is "" when needsReview is false. The raw response is parsed as JSON directly.`
 
@@ -69,6 +70,46 @@ function stripToJson(text: string): string {
 
 function clip(text: string, max: number): string {
   return text.trim().slice(0, max)
+}
+
+function sourceTelegramHandle(sourceUrl: string): string | null {
+  const match = /^https?:\/\/(?:www\.)?(?:t\.me|telegram\.me)\/(?:s\/)?([a-zA-Z0-9_]{5,32})(?:\/|$)/i.exec(sourceUrl)
+  return match?.[1] ?? null
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Removes only references to the known Telegram source; other links remain untouched. */
+function stripSourceChannel(body: string, sourceUrl: string): string {
+  const handle = sourceTelegramHandle(sourceUrl)
+  if (!handle) return body
+  const channelUrl = new RegExp(`(?<![\\p{L}\\p{N}._/-])(?:https?:\\/\\/)?(?:www\\.)?(?:t\\.me|telegram\\.me)\\/(?:s\\/)?${escapeRegExp(handle)}(?![a-zA-Z0-9_])(?:\\/[a-zA-Z0-9_/-]+)?(?:\\?[^\\s)]+)?`, 'giu')
+  const channelName = new RegExp(`(?<![\\p{L}\\p{N}_@./-])@?${escapeRegExp(handle)}(?![\\p{L}\\p{N}_/@])`, 'giu')
+  return body.split('\n').map((line) => {
+    const mentionsSource = channelUrl.test(line) || channelName.test(line)
+    channelUrl.lastIndex = 0
+    channelName.lastIndex = 0
+    let cleaned = line.replace(channelUrl, '').replace(channelName, '')
+      .replace(/\s*(?:источник|source|подробнее|read more)\s*[:—-]?\s*$/i, '')
+      .replace(/\s+([,.;!?])/g, '$1').trimEnd()
+    if (mentionsSource) cleaned = cleaned.replace(/^\s*(?:источник|source)\s*:\s*[,;]?\s*/i, '')
+    // Remove a line only if it became a bare source credit/CTA. Any other link survives.
+    if (mentionsSource && /^\s*(?:источник|source|via|подписывайтесь|подпишитесь|читайте|смотрите|подробнее|follow|subscribe|read more)?[\s:—,.;!?-]*$/i.test(cleaned)) return ''
+    return cleaned
+  }).filter((line, index, lines) => line || (index > 0 && lines[index - 1] !== '')).join('\n').trim()
+}
+
+function needsSourceAttribution(body: string, originalText: string, reviewReason: string): string | null {
+  if (/[«“][^»”]{8,}[»”]|"[^"\n]{12,}"/.test(body)) return 'The draft contains a direct quote — verify attribution before publishing.'
+  if (/эксклюзив|exclusive/i.test(body) || /эксклюзив|exclusive/i.test(originalText)) {
+    return 'The source reports exclusive information — verify attribution and rights before publishing.'
+  }
+  if (/атрибуц|цитат|источник|attribut|quotation|source credit|exclusive/i.test(reviewReason)) {
+    return reviewReason || 'Verify source attribution before publishing.'
+  }
+  return null
 }
 
 /** Normalizes whitespace/case so a verbatim-copy check isn't defeated by trivial formatting
@@ -98,8 +139,8 @@ export function hasVerbatimOverlap(generated: string, original: string, minRun: 
 /**
  * Parses the AI Router's generation response. Throws `ContentFactoryGenerateError` (never a raw
  * parse exception) if the response is unusable; a usable title+body always produces a result —
- * `needsReview`/`reviewReason` are adjusted (never silently loosened) by the two independent
- * guards below rather than the model's own claim being trusted outright:
+ * `needsReview`/`reviewReason` are adjusted (never silently loosened) by deterministic
+ * guards rather than the model's own claim being trusted outright:
  *
  * - `needsReview` must be a genuine boolean from the model. Any other type (missing, a string, a
  *   number, ...) is treated as `true` (manual review required), never silently coerced to `false`
@@ -109,6 +150,9 @@ export function hasVerbatimOverlap(generated: string, original: string, minRun: 
  *   so an untrustworthy signal defaults to the cautious outcome instead.
  * - A verbatim-overlap hit with the source text forces `needsReview: true` regardless of what the
  *   model reported, with its own reviewReason — see `hasVerbatimOverlap`.
+ * - Quotes, exclusive information, or a model-flagged need for attribution force manual review;
+ *   source credit is retained in those cases. Ordinary text has known source-channel references
+ *   removed without touching other links.
  */
 export function parseGenerationResult(raw: string, originalText: string, sourceUrl: string): GeneratedContent {
   const text = stripToJson(raw)
@@ -132,7 +176,7 @@ export function parseGenerationResult(raw: string, originalText: string, sourceU
     throw new ContentFactoryGenerateError('AI Router did not return a JSON object.')
   }
   const obj = data as Record<string, unknown>
-  const title = typeof obj.title === 'string' ? clip(obj.title, TITLE_MAX) : ''
+  let title = typeof obj.title === 'string' ? clip(obj.title, TITLE_MAX) : ''
   let body = typeof obj.body === 'string' ? clip(obj.body, BODY_MAX) : ''
   if (!title || !body) {
     throw new ContentFactoryGenerateError('AI Router did not return a usable title and body.')
@@ -149,10 +193,19 @@ export function parseGenerationResult(raw: string, originalText: string, sourceU
     reviewReason = 'The generated text closely matches the source text verbatim — review before publishing.'
   }
 
-  // Deterministic safety net for the task's own "добавлять ссылку на источник" requirement —
-  // never left purely to the model's own compliance with rule 4.
-  if (sourceUrl && !body.includes(sourceUrl)) {
-    body = clip(`${body}\n\nИсточник: ${sourceUrl}`, BODY_MAX)
+  const attributionReason = needsSourceAttribution(body, originalText, reviewReason)
+  if (attributionReason) {
+    needsReview = true
+    reviewReason = clip(reviewReason && reviewReason !== attributionReason ? `${reviewReason} ${attributionReason}` : attributionReason, REASON_MAX)
+  } else {
+    title = stripSourceChannel(title, sourceUrl)
+    body = stripSourceChannel(body, sourceUrl)
+    if (!title || !body) {
+      needsReview = true
+      reviewReason = 'The generated article consists only of source promotion — rewrite before publishing.'
+      title = title || clip(obj.title as string, TITLE_MAX)
+      body = body || clip(obj.body as string, BODY_MAX)
+    }
   }
 
   return { title, body, needsReview, reviewReason }

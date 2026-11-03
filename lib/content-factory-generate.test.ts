@@ -48,9 +48,10 @@ test('requirement: the system prompt forbids reusing a source image', () => {
   assert.ok(/do not propose.*reusing any image/i.test(CONTENT_FACTORY_SYSTEM_PROMPT))
 })
 
-test('requirement: the system prompt requires citing the source URL', () => {
-  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /include SOURCE URL itself/i)
-  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /SOURCE URL is the only source link to keep by default/i)
+test('requirement: ordinary posts omit the source channel while attribution cases require review', () => {
+  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /SOURCE URL is internal provenance/i)
+  assert.match(CONTENT_FACTORY_SYSTEM_PROMPT, /direct quote, exclusive information/i)
+  assert.doesNotMatch(CONTENT_FACTORY_SYSTEM_PROMPT, /include SOURCE URL itself/i)
 })
 
 test('requirement: the prompt flags substantial copied wording for manual review', () => {
@@ -68,7 +69,7 @@ test('Telegram format: body contains the visible title, short paragraphs, emoji 
 
 test('Telegram format: default length and emoji density yield to the project Brand Profile', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
-  assert.match(p, /1200–1800 characters in "body" by default, including the title, source URL, and any CTA/i)
+  assert.match(p, /1200–1800 characters in "body" by default, including the title and any CTA/i)
   assert.match(p, /different length if the project's Brand Profile specifies one/i)
   assert.match(p, /shorter useful post rather than padding it/i)
   assert.match(p, /3–6 relevant emojis across the whole post by default/i)
@@ -91,23 +92,60 @@ test('buildContentFactoryPrompt includes source text, source URL, and the projec
   assert.ok(prompt.includes('CTX-BLOCK'))
 })
 
-test('parseGenerationResult: a valid JSON object is parsed, and the source URL is appended if the model omitted it', () => {
+test('parseGenerationResult: an independent article does not acquire the source URL', () => {
   const raw = JSON.stringify({ title: 'Новый проект на побережье', body: 'Полностью независимый текст.', needsReview: false, reviewReason: '' })
   const result = parseGenerationResult(raw, 'Оригинальный текст источника.', 'https://t.me/alexander_realty/101')
   assert.equal(result.title, 'Новый проект на побережье')
-  assert.ok(result.body.includes('https://t.me/alexander_realty/101'))
+  assert.equal(result.body, 'Полностью независимый текст.')
   assert.equal(result.needsReview, false)
 })
 
-test('parseGenerationResult: does not duplicate the source URL if the model already included it', () => {
+test('parseGenerationResult: strips only the source channel and its promotion, keeping other links', () => {
   const raw = JSON.stringify({
-    title: 'x',
-    body: 'Текст с ссылкой. Источник: https://t.me/alexander_realty/101',
+    title: 'Рынок недвижимости @alexander_realty',
+    body: 'Рынок недвижимости @alexander_realty\nНовая информация в https://example.com/report, https://t.me/other_channel/2 и https://t.me/alexander_realty_news/2. Подробнее: https://t.me/alexander_realty/101\nЧитайте @alexander_realty\nИсточник: https://t.me/alexander_realty/101\nИсточник: https://t.me/alexander_realty/101, документ https://example.org/alexander_realty/report\nВывод для читателя.',
     needsReview: false,
     reviewReason: '',
   })
   const result = parseGenerationResult(raw, 'original', 'https://t.me/alexander_realty/101')
-  assert.equal(result.body.split('https://t.me/alexander_realty/101').length - 1, 1)
+  assert.doesNotMatch(result.title + result.body, /@alexander_realty(?![a-z_])|t\.me\/alexander_realty(?![a-z_])/i)
+  assert.match(result.body, /^Рынок недвижимости$/m)
+  assert.doesNotMatch(result.body, /Источник:|Читайте @/i)
+  assert.doesNotMatch(result.body, /Подробнее:\s*(?:\n|$)/i)
+  assert.match(result.body, /https:\/\/example.com\/report/)
+  assert.match(result.body, /https:\/\/t.me\/other_channel\/2/)
+  assert.match(result.body, /https:\/\/t.me\/alexander_realty_news\/2/)
+  assert.match(result.body, /https:\/\/example.org\/alexander_realty\/report/)
+  assert.match(result.body, /Вывод для читателя/)
+  assert.equal(result.needsReview, false)
+})
+
+test('parseGenerationResult: direct quotes and exclusives keep attribution for manual review', () => {
+  const sourceUrl = 'https://t.me/alexander_realty/101'
+  const quote = parseGenerationResult(JSON.stringify({ title: 'Анализ', body: `«Подтверждённая цитата автора» — ${sourceUrl}`, needsReview: false, reviewReason: '' }), 'Оригинальный текст.', sourceUrl)
+  assert.equal(quote.needsReview, true)
+  assert.match(quote.reviewReason, /quote/i)
+  assert.match(quote.body, /alexander_realty/)
+  const exclusive = parseGenerationResult(JSON.stringify({ title: 'Анализ', body: `По данным ${sourceUrl}, есть новая информация.`, needsReview: false, reviewReason: '' }), 'Эксклюзив: сведения от автора.', sourceUrl)
+  assert.equal(exclusive.needsReview, true)
+  assert.match(exclusive.reviewReason, /exclusive/i)
+  assert.match(exclusive.body, /alexander_realty/)
+})
+
+test('parseGenerationResult: a model-flagged attribution is preserved', () => {
+  const sourceUrl = 'https://t.me/alexander_realty/101'
+  const result = parseGenerationResult(JSON.stringify({ title: 'Анализ', body: `Сведения: ${sourceUrl}`, needsReview: true, reviewReason: 'Check source attribution rights.' }), 'Original', sourceUrl)
+  assert.equal(result.needsReview, true)
+  assert.equal(result.reviewReason, 'Check source attribution rights.')
+  assert.match(result.body, /alexander_realty/)
+})
+
+test('parseGenerationResult: a source-only draft is never treated as ready', () => {
+  const sourceUrl = 'https://t.me/alexander_realty/101'
+  const raw = JSON.stringify({ title: '@alexander_realty', body: `Источник: ${sourceUrl}`, needsReview: false, reviewReason: '' })
+  const result = parseGenerationResult(raw, 'Оригинальный текст.', sourceUrl)
+  assert.equal(result.needsReview, true)
+  assert.match(result.reviewReason, /source promotion/i)
 })
 
 test('parseGenerationResult: strips a markdown code fence before parsing', () => {
@@ -186,7 +224,7 @@ test('Content Factory uses the text preset while retaining Brand Profile, JSON p
     const prompt = (sent.messages as Array<{ content: string }>).map((message) => message.content).join('\n')
     assert.match(prompt, /Measured/)
     assert.match(prompt, /Original report/)
-    assert.deepEqual(result, { title: 'Analysis', body: 'Independent text\n\nИсточник: https://t.me/source/1', needsReview: true, reviewReason: 'Check a claim' })
+    assert.deepEqual(result, { title: 'Analysis', body: 'Independent text', needsReview: true, reviewReason: 'Check a claim' })
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -258,7 +296,7 @@ test('generateContentFactoryArticle: returns the AI Router\'s parsed article', a
       generateContentFactoryArticle(pool, projectId, { sourceText: 'Оригинальный пост Александра.', sourceUrl: 'https://t.me/alexander_realty/1' }),
     )
     assert.equal(result.title, 'Новый проект на побережье')
-    assert.ok(result.body.includes('https://t.me/alexander_realty/1'))
+    assert.doesNotMatch(result.body, /alexander_realty/)
   })
 })
 
