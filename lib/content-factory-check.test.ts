@@ -104,6 +104,23 @@ test('checkSourceNow records a clear error for an invalid Telegram address witho
   assert.deepEqual(result.created, [])
 })
 
+test('repeat source check does not retry an existing material with a persistent image error', async () => {
+  let requests = 0
+  const pool = { query: async (sql: string) => {
+    if (sql.startsWith('INSERT INTO content_factory_items')) return { rows: [] }
+    if (sql.startsWith('UPDATE content_factory_sources')) return { rows: [] }
+    throw new Error(`Unexpected query: ${sql}`)
+  } } as unknown as Pool
+  const source = { id: 'source-1', projectId: 1, type: 'telegram', handle: '@alexander_realty', processingMode: 'copy', copyPermissionConfirmed: true } as ContentFactorySource
+  const result = await withFetch(() => {
+    requests++
+    return { ok: true, status: 200, text: async () => SAMPLE_HTML }
+  }, () => checkSourceNow(pool, source))
+  assert.equal(requests, 1)
+  assert.equal(result.error, '')
+  assert.deepEqual(result.created, [])
+})
+
 test('checkSourceNow: fetches, stores new items, and records success on the source', async (t) => {
   await withDb(t, async (pool, makeProject) => {
     const projectId = await makeProject('AURELMAR')

@@ -1,7 +1,7 @@
 import type { Pool } from 'pg'
 import { type ContentFactorySource, ContentFactorySourceError, recordSourceCheckResult } from './content-factory-sources.ts'
 import { fetchPublicTelegramChannel, normalizeTelegramHandle } from './content-factory-telegram-source.ts'
-import { storeNewSourceMessages, listItems, type ContentFactoryItem } from './content-factory-items.ts'
+import { storeNewSourceMessages, type ContentFactoryItem } from './content-factory-items.ts'
 import { syncOriginalImages } from './content-factory-original-images.ts'
 
 // Контент-завод — "Проверить сейчас" / periodic sweep. Pool-injected, no `@/` imports.
@@ -30,9 +30,8 @@ export async function checkSourceNow(pool: Pool, source: ContentFactorySource): 
     })
     let imageError = ''
     if (source.processingMode === 'copy') {
-      const items = await listItems(pool, source.projectId, { sourceId: source.id })
-      for (const item of items) {
-        if (item.processingMode === 'copy' && !item.socialPostId && item.status !== 'published' && item.status !== 'scheduled' && (item.originalImageFiles.length !== item.originalImageUrls.length || item.originalImageError)) {
+      for (const item of created) {
+        if (item.processingMode === 'copy' && item.originalImageUrls.length) {
           const error = await syncOriginalImages(pool, item)
           if (!imageError) imageError = error
         }
