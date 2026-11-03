@@ -22,6 +22,21 @@ test('requirement: the prompt asks for an independent analytical article with it
   assert.match(p, /practical takeaway that follows from the supported facts/i)
 })
 
+test('editorial method selects one useful format and avoids mechanical rewrites', () => {
+  const p = CONTENT_FACTORY_SYSTEM_PROMPT
+  for (const phrase of [
+    'Select ONE format',
+    'news (event and relevance)',
+    'expert explainer (one practical question)',
+    'property overview (specific offer',
+    'Choose only the facts necessary',
+    'Outline by reader value',
+    'not independent findings',
+    'self-check every paragraph against the source',
+    "do not mechanically recreate the source's feature list"
+  ]) assert.ok(p.includes(phrase), phrase)
+})
+
 test('generation separates facts and supported figures from source framing before choosing a new analytical angle', () => {
   const p = CONTENT_FACTORY_SYSTEM_PROMPT
   assert.match(p, /separating reported facts and exact figures from the source's opinions, framing, and wording/i)
