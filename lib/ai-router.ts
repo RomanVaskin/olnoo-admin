@@ -60,8 +60,10 @@ export async function callAiRouter(
   opts: {
     /** Optional fixed service preset selected by the Router; this request then omits provider/model routing. */
     service?: string
+    /** Fixed task within a Router service; omitted selects the existing text preset. */
+    presetTask?: 'review'
     maxTokens?: number
-    temperature?: number
+    temperature?: number | null
     /** Provider-neutral reasoning level; omitted = the Router's/provider's default (unchanged behaviour). */
     reasoningMode?: 'off' | 'low' | 'medium' | 'high'
     /** Label for the Router's cost log, e.g. "seo-relevance-cleanup". */
@@ -85,7 +87,8 @@ export async function callAiRouter(
       taskType: 'reasoning',
       messages,
       ...(opts.service ? { service: opts.service } : { provider: opts.provider ?? 'openai', model: null }),
-      temperature: opts.temperature ?? 0.1,
+      ...(opts.service && opts.presetTask ? { presetTask: opts.presetTask } : {}),
+      ...(opts.temperature === null ? {} : { temperature: opts.temperature ?? 0.1 }),
       maxTokens: opts.maxTokens ?? 12000,
       ...(!opts.service ? { allowFallback: opts.allowFallback ?? true } : {}),
       webSearch: false,

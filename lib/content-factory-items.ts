@@ -10,6 +10,28 @@ export class ContentFactoryItemError extends Error {}
 export const ITEM_STATUSES = ['new', 'processing', 'ready', 'scheduled', 'published', 'needs_review', 'rejected', 'failed'] as const
 export type ItemStatus = (typeof ITEM_STATUSES)[number]
 
+export type ContentFactoryAiReview = {
+  status: 'checking' | 'passed' | 'changes_required' | 'blocked' | 'error'
+  risk?: 'low' | 'medium' | 'high'
+  passed?: boolean
+  issues?: { category: string; detail: string; example: string }[]
+  recommendations?: string[]
+  checkedAt?: string
+  error?: string
+  claimId?: string
+  reviewedTitle?: string
+  reviewedText?: string
+  reviewedImageFilename?: string
+}
+
+export function hasPassedAiReview(item: ContentFactoryItem): boolean {
+  const review = item.aiReview
+  return review?.status === 'passed' && review.risk === 'low' && review.passed === true
+    && review.reviewedTitle === item.generatedTitle
+    && review.reviewedText === item.generatedText
+    && review.reviewedImageFilename === item.imageFilename
+}
+
 export function isItemStatus(value: unknown): value is ItemStatus {
   return typeof value === 'string' && (ITEM_STATUSES as readonly string[]).includes(value)
 }
@@ -27,6 +49,7 @@ export type ContentFactoryItem = {
   generatedTitle: string
   generatedText: string
   reviewReason: string
+  aiReview: ContentFactoryAiReview | null
   error: string
   socialPostId: string | null
   imageFilename: string
@@ -48,6 +71,7 @@ function fromRow(row: Record<string, unknown>): ContentFactoryItem {
     generatedTitle: (row.generated_title as string) ?? '',
     generatedText: (row.generated_text as string) ?? '',
     reviewReason: (row.review_reason as string) ?? '',
+    aiReview: (row.ai_review as ContentFactoryAiReview | null) ?? null,
     error: (row.error as string) ?? '',
     socialPostId: (row.social_post_id as string) ?? null,
     imageFilename: (row.image_filename as string) ?? '',
@@ -173,6 +197,37 @@ export async function setGeneratedContent(
      WHERE id = $5 AND project_id = $6
      RETURNING *`,
     [content.title, content.text, content.status, content.reviewReason, id, projectId],
+  )
+  return rows[0] ? fromRow(rows[0]) : null
+}
+
+/** One atomic claim prevents two simultaneous clicks from making two paid review calls. */
+export async function claimAiReview(pool: Pool, projectId: number, id: string): Promise<ContentFactoryItem | null> {
+  const claimId = randomUUID()
+  const { rows } = await pool.query(
+    `UPDATE content_factory_items SET ai_review = $1::jsonb, updated_at = now()
+     WHERE id = $2 AND project_id = $3 AND status IN ('ready', 'needs_review', 'failed')
+       AND (ai_review IS NULL OR COALESCE(ai_review->>'status', '') NOT IN ('checking', 'passed')
+            OR (ai_review->>'status' = 'checking' AND updated_at < now() - interval '15 minutes'))
+     RETURNING *`,
+    [JSON.stringify({ status: 'checking', claimId }), id, projectId],
+  )
+  return rows[0] ? fromRow(rows[0]) : null
+}
+
+/** A concurrent edit clears the claim; its stale AI answer cannot attach to the new text. */
+export async function finishAiReview(
+  pool: Pool, projectId: number, id: string,
+  snapshot: { title: string; text: string; imageFilename: string; claimId: string },
+  review: ContentFactoryAiReview,
+): Promise<ContentFactoryItem | null> {
+  const { rows } = await pool.query(
+    `UPDATE content_factory_items SET ai_review = $1::jsonb, updated_at = now()
+     WHERE id = $2 AND project_id = $3 AND ai_review->>'status' = 'checking'
+       AND ai_review->>'claimId' = $4
+       AND generated_title = $5 AND generated_text = $6 AND image_filename = $7
+     RETURNING *`,
+    [JSON.stringify(review), id, projectId, snapshot.claimId, snapshot.title, snapshot.text, snapshot.imageFilename],
   )
   return rows[0] ? fromRow(rows[0]) : null
 }

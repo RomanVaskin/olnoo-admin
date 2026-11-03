@@ -2,7 +2,7 @@ import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { createSocialPost, getSocialPost } from '@/lib/social'
 import { publishSocialPublicationToTelegram } from '@/lib/social-telegram'
-import { getItem, setItemSocialPostId, setItemStatus, canPublish, type ContentFactoryItem } from '@/lib/content-factory-items'
+import { getItem, setItemSocialPostId, setItemStatus, canPublish, hasPassedAiReview, type ContentFactoryItem } from '@/lib/content-factory-items'
 import { telegramPublicationOutcome } from './content-factory-publish-outcome.ts'
 import { readContentFactoryCover } from './content-factory-image.ts'
 
@@ -47,6 +47,9 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
   }
   if (!item.generatedText.trim()) {
     return { error: 'This item has no prepared text yet — generate one first.', status: 400 }
+  }
+  if (!hasPassedAiReview(item)) {
+    return { error: 'A successful AI review of the current material is required before publication.', status: 409 }
   }
 
   let photo: Buffer | undefined
