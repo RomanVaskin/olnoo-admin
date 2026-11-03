@@ -20,6 +20,19 @@ test('independent review asks for all required risk checks and legal uncertainty
   assert.match(CONTENT_FACTORY_REVIEW_PROMPT, /not a legal opinion/i)
 })
 
+test('review uses the publication language and distinguishes factual overlap from copied expression', () => {
+  const p = CONTENT_FACTORY_REVIEW_PROMPT
+  assert.match(p, /language of the finished draft \(Russian for a Russian publication\)/i)
+  assert.match(p, /issue category, detail, example, and recommendation/i)
+  assert.match(p, /Commonly available facts, topics, and accurately repeated supported figures are not themselves copied creative expression/i)
+  assert.match(p, /do not assign high risk solely because the draft covers the same topic or uses the same statistics/i)
+  assert.match(p, /actual similarity of expression, organization, and unique creative elements/i)
+  assert.match(p, /cite the matching passages or structural pattern/i)
+  assert.match(p, /Separately verify whether each figure is supported and correctly qualified/i)
+  assert.match(p, /quotations, authorship, exclusive claims, attribution/i)
+  assert.match(p, /unsupported facts, numbers, prices, yields, investment promises/i)
+})
+
 test('only a valid low-risk decision passes the current title, text and image', () => {
   const review = parseContentFactoryReview(low, item)
   assert.equal(review.status, 'passed')
