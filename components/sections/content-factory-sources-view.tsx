@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { SectionHeader, HeaderActions, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
+import { ContentFactoryRssFinder } from './content-factory-rss-finder'
 import { useI18n } from '@/components/i18n-provider'
 
 // Only currently offered source types; existing website/youtube sources remain visible.
@@ -173,6 +174,8 @@ export function ContentFactorySourcesView({
             </button>
           </HeaderActions>
           {createError && <p className="text-sm text-destructive">{createError}</p>}
+
+          <ContentFactoryRssFinder key={project} project={project} onConnected={load} />
 
           <TableShell>
             <thead>
