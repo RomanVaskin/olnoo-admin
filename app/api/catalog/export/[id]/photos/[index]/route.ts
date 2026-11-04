@@ -1,10 +1,11 @@
+import { withCatalogSchemaGuard } from '@/lib/catalog-schema'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { catalogSiteProject, catalogPhotoSelection, publishedCatalogRows } from '@/lib/catalog-export'
 import { readManualCatalogPhoto } from '@/lib/catalog-manual-media'
 import { readOriginalImage } from '@/lib/content-factory-original-images'
 export const dynamic = 'force-dynamic'
-export async function GET(req: Request, { params }: { params: Promise<{ id: string; index: string }> }) {
+async function get(req: Request, { params }: { params: Promise<{ id: string; index: string }> }) {
   const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }
   const project = catalogSiteProject(req.headers.get('x-olnoo-catalog-token'))
   if (!project) return new NextResponse(null, { status: 403, headers })
@@ -18,3 +19,5 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (!bytes) return new NextResponse(null, { status: 404, headers })
   return new NextResponse(new Uint8Array(bytes), { headers: { ...headers, 'X-Olnoo-Catalog-Project': project, 'Content-Type': filename.endsWith('.png') ? 'image/png' : filename.endsWith('.webp') ? 'image/webp' : 'image/jpeg' } })
 }
+
+export const GET = withCatalogSchemaGuard(get)

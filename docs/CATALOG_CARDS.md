@@ -335,3 +335,40 @@ rejection, publication defaults and old DTO/photos. SQL fixture
 in PGlite/PostgreSQL WASM), preserving old rows and checking constraints without
 0041. No real ChatGPT generation, Telegram delivery, live KZ or browser acceptance
 is claimed by synthetic local tests.
+
+### PR #111 runtime failures: diagnosis and recovery
+
+The deploy workflow builds/restarts Admin; success does not prove that 0042 was
+applied. These queries depend on it:
+
+| 0042 column | Dependent functionality |
+| --- | --- |
+| `projects.istraart_style_prompt` | Project style GET/PUT; card ChatGPT prompt/copy |
+| `catalog_cards.manual_media` | Card list/editor; upload/import/private preview; export/photo relay |
+| `catalog_cards.manual_photo_selection` | Card list/save; explicit photo selection; export/photo relay |
+
+Confirmed in code and regression tests: a missing column causes PostgreSQL 42703,
+previously an unhandled API failure. A failed card GET left `loaded=false`, so
+creation/editing was disabled; the blank draft still displayed publication field
+errors. Failed prompt GET left copy/save disabled, hid the API diagnostic and
+provided no retry. These symptoms do **not** confirm the live KZ schema or prove
+that every reported production failure has this cause.
+
+Known missing 0042 columns now return uncached HTTP 503 with
+`code: CATALOG_MIGRATION_REQUIRED` and a safe operator message. No database details
+or secrets are returned, no empty card/default prompt is substituted for a schema
+failure. Other failures retain their original behavior. Existing external Admin
+protection, project-bound export authorization and publication checks remain.
+The editor hides an unloaded form, reports field errors on explicit save and offers
+retry; both style controls offer retry and surface the safe API error (auth
+failures are distinguished). This does not make missing columns optional.
+
+**Operator actions still required, separately authorized:** inspect KZ API status
+and application logs, verify existing 0040, and check all three 0042 columns,
+defaults and CHECK constraints. If absent, apply the unchanged transactional
+`0042_istraart_manual_catalog.sql` once through the existing backed-up DB process,
+then retry prompt/cards and accept the real upload/copy/edit/publish flow. If the
+columns already exist, investigate the actual failing response/log instead of
+rerunning SQL. Do not apply 0041/PR #110 for this feature. No production/schema
+check or migration was executed as part of this fix; local handler/UI tests
+simulate missing/available schema without connecting to a database.

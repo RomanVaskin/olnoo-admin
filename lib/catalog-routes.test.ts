@@ -1,3 +1,4 @@
+import * as catalogSchema from './catalog-schema.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -42,6 +43,7 @@ function harness() {
     const compiled = ts.transpileModule(readFileSync(new URL(file, import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
     const exports: Record<string, any> = {}
     const modules: Record<string, unknown> = {
+      '@/lib/catalog-schema': catalogSchema,
       'node:crypto': { randomUUID: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12, '0')}` },
       'next/server': { NextResponse: { json: (body: unknown, init?: ResponseInit) => Response.json(body, init) } },
       '@/lib/db': { pool: { query, connect: async () => ({ query, release() {} }) } },

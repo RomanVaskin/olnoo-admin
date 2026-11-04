@@ -1,3 +1,4 @@
+import * as catalogSchema from './catalog-schema.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { Pool } from 'pg'
@@ -140,6 +141,7 @@ test('the actual export handler includes relatedCards and scopes the query to th
     const draft = { ...raw, id: '00000000-0000-4000-8000-000000000002', title: 'PRIVATE DRAFT', published_at: null }
     const requests: unknown[][] = []
     const modules: Record<string, unknown> = {
+      '@/lib/catalog-schema': catalogSchema,
       'next/server': { NextResponse: { json: (body: unknown, init?: ResponseInit) => Response.json(body, init) } },
       '@/lib/catalog-export': catalogExport,
       '@/lib/db': { pool: { query: async (sql: string, values: unknown[]) => {

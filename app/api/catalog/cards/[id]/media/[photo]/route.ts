@@ -1,9 +1,10 @@
+import { withCatalogSchemaGuard } from '@/lib/catalog-schema'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { catalogUuid, manualCatalogPhotos } from '@/lib/catalog-manual-photo-data'
 import { readManualCatalogPhoto } from '@/lib/catalog-manual-media'
-export async function GET(req: Request, { params }: { params: Promise<{ id: string; photo: string }> }) {
+async function get(req: Request, { params }: { params: Promise<{ id: string; photo: string }> }) {
   const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }
   const { id, photo } = await params
   if (new URL(req.url).searchParams.get('project') !== 'istraart' || !catalogUuid(id) || !catalogUuid(photo)) return new NextResponse(null, { status: 404, headers })
@@ -14,3 +15,5 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const bytes = record && await readManualCatalogPhoto(projectId, id, record.filename).catch(() => null)
   return bytes ? new NextResponse(new Uint8Array(bytes), { headers: { ...headers, 'Content-Type': record!.mimeType } }) : new NextResponse(null, { status: 404, headers })
 }
+
+export const GET = withCatalogSchemaGuard(get)
