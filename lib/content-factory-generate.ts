@@ -329,7 +329,7 @@ Prepare the finished sales post as strict JSON using only these supplied facts.`
 export function parseOwnMaterialResult(raw: string, originalText: string, ownBrief: string): GeneratedContent {
   // First-party source wording may be reused; third-party verbatim/attribution guards do not apply.
   const result = parseGenerationResult(raw, '', '')
-  if (/\\bneedsReview\\b|\\breviewReason\\b|verified project context/i.test(result.body)) {
+  if (/\bneedsReview\b|\breviewReason\b|verified project context/i.test(result.body)) {
     throw new ContentFactoryGenerateError('Own material output contains internal review metadata.')
   }
   const supplied = `${originalText} ${ownBrief}`
