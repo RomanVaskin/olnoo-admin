@@ -11,7 +11,10 @@ async function get(req: Request) {
 }
 async function put(req: Request) {
   const origin = req.headers.get('origin')
-  if (origin && origin !== new URL(req.url).origin) return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers })
+  // nginx terminates HTTPS; Next.js may see its internal HTTP origin. Trust only
+  // the production origin from OLNOO_PROJECT_MAP, never client-supplied forwarded headers.
+  const sameOrigin = origin === new URL(req.url).origin || origin === 'https://admin.olnoo.com'
+  if (origin && !sameOrigin) return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers })
   if (new URL(req.url).searchParams.get('project') !== 'istraart') return NextResponse.json({ error: 'Not found' }, { status: 404, headers })
   const body = await req.json().catch(() => null)
   try { if (!body || Object.keys(body).length !== 1) throw new Error('Укажите один промпт.'); validateIstraArtStyle(body.prompt) }

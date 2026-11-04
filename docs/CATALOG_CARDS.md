@@ -372,3 +372,17 @@ columns already exist, investigate the actual failing response/log instead of
 rerunning SQL. Do not apply 0041/PR #110 for this feature. No production/schema
 check or migration was executed as part of this fix; local handler/UI tests
 simulate missing/available schema without connecting to a database.
+
+
+### IstraArt Style PUT behind nginx
+
+The prompt PUT permits an Origin equal to the request URL origin (existing direct
+same-origin behavior) or exactly `https://admin.olnoo.com`, the external Admin
+origin recorded in the production map. This avoids rejecting the owner when
+nginx terminates HTTPS and Next.js sees an internal HTTP URL. Foreign origins,
+lookalike domains, different ports and `Origin: null` remain rejected before any
+DB write. `Forwarded` / `X-Forwarded-*` headers never expand this allowlist; no
+proxy configuration change or implicit trust in unverified headers is required.
+Requests without Origin retain their existing behavior. External Basic Auth,
+project scope and schema checks remain unchanged. Handler tests reproduce the
+internal/public URL mismatch; live proxy request headers were not inspected.
