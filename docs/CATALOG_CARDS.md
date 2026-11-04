@@ -224,3 +224,133 @@ For this PR the same SQL was executed in isolated in-memory PGlite (PostgreSQL
 WASM); no production DB/environment connection was used. API tests execute the
 real handlers with isolated DB/file substitutes. Live Telegram, production Basic
 Auth and site acceptance are not claimed by these local tests.
+
+## IstraArt original-photo processing (0041; repository change, not deployed)
+
+Only owner-uploaded materials of project `istraart` can be processed. Existing
+Telegram intake and original bytes/references stay unchanged. The catalog editor
+adds **Подготовка фото IstraArt**: original/result comparison, retained version
+selector and a manual **Обработать фон / Обработать ещё раз** button. Processing
+neither selects a card image nor publishes anything. In an enabled offer, check a
+photo and choose **Оригинал** or a processed version under **Использовать в
+карточке**, then use the existing explicit save/publish flow. Saving changes to an
+already published card retains its existing manual-update behavior.
+
+### Confirmed Router contract, model and cost
+
+The Router main branch `574d1fc` has an actual image-input endpoint:
+`POST /api/images/generate`, `src/api/routes/generation.route.ts`,
+`src/types/generation.ts`; Gemini's `generateImage` passes inline source bytes to
+`generateContent` with `responseModalities: [IMAGE]`. Its documented example model
+is **gemini-3.1-flash-image** (`docs/API.md`). This feature uses that model,
+explicit provider `gemini`, one original photo, and the documented schema. There
+is no fallback in that route. It does NOT call OpenAI text-to-image or invent an
+image-edit API: the Router's current OpenAI `generateImage` explicitly rejects
+image-input work. Admin sends no provider API key; the existing server-only
+OLNOO_ROUTER_TOKEN is accepted as `x-api-key` because Router's env loader includes
+it in API_KEYS. The browser receives neither credential nor source base64 payload.
+
+Before a paid edit, Admin checks `/providers` for the exact registered Gemini
+model. Registration is NOT claimed to prove live provider availability: the
+following real generation request can still fail. Router's default GEMINI_MODELS
+contains only its text model; whether this image model is already enabled on KZ
+is unknown. If absent, the operation fails clearly before generation. An operator
+would have to enable the model in the existing Gemini allow-list, with the
+existing provider permission/quota, via the separately authorized secret/config
+process. No Router code, model assignment, production key or config is changed
+by this PR. No new Admin env var or provider credential is required.
+
+The image response exposes no token usage or monetary charge. **Cost: unavailable**,
+not zero or an estimated number. The recorded model is the successful Router
+response model, verified against the requested ID. No live invocation or actual
+charge is claimed by local tests. Real model availability/quality/cost require
+separate acceptance after an approved rollout.
+
+### Storage, selection and access
+
+- New migration `0041_catalog_processed_photos.sql` adds ONLY metadata:
+  `content_factory_items.processed_image_versions` (append-only by the API) and
+  `catalog_cards.photo_versions` (index → chosen version UUID, default `{}`).
+  No photo bytes enter PostgreSQL or Git. Original fields and 0039/0040 are not
+  rewritten. Existing rows default to their original photos.
+- Versions are unique mode-0600 PNG files in existing uploads storage:
+  `uploads/content-factory/processed/<projectId>/<itemUUID>/<versionUUID>.png`.
+  Original photos remain in `uploads/content-factory/originals/...`. New files
+  use exclusive writes; successful histories are appended atomically. A failed
+  DB save removes only that request's newly written file. There is no version or
+  original deletion operation. Reprocessing does not change previous selection.
+- Internal `GET/POST /api/catalog/photo-processing/<itemUUID>?project=istraart`
+  lists safe preview metadata / processes `{ originalIndex }`. GET has no AI
+  side effect. POST also rejects a foreign Origin. Internal preview is
+  `GET /api/catalog/photo-processing/<itemUUID>/<versionUUID>?project=istraart`.
+  Existing external Admin Basic Auth remains required; no nginx auth exception
+  or public uploads path is added. Own-origin, project, source/version ownership
+  and original filename/index are checked server-side; malformed/foreign IDs
+  fail closed. No user-supplied URL, provider, model or prompt is accepted.
+- Catalog input adds optional `photoVersions` only internally. Server validation
+  checks that every chosen UUID belongs to the same material and original index;
+  publication/edits of published cards also verify readable selected files.
+  Removing an image from all offers removes its local version selection.
+- The public DTO remains unchanged, including relatedCards. Site photo URLs keep
+  `/api/catalog/export/<cardUUID>/photos/<originalIndex>`; the protected handler
+  resolves the selected original/processed version for that exact card. Project
+  token, publication, selected-index and history provenance checks remain
+  mandatory. Internal filenames/history/version-selection maps are not exported.
+  Other cards/materials cannot gain access by guessing a version UUID.
+- Original-photo endpoints and Social/Content Factory text, cover generation,
+  Quality Gate, language approvals and original media behavior are unchanged.
+
+### Image and error limits
+
+The task prompt specifies a uniform neutral `#F5F5F3` background, soft natural
+contact shadow, unchanged wood silhouette/proportions/colour/grain/cracks and
+camera angle/aspect ratio; no product creation, additions, text or watermark.
+Only JPEG/PNG/WebP up to 10 MB and bounded decoded dimensions are accepted. Output
+is decoded, checked and stored losslessly as PNG; originals are never re-encoded.
+There are no automatic AI retries. Errors are safe application messages, with no
+raw upstream response, file path or token. Original previews and prior versions
+remain available when processing fails.
+
+This is generative editing, not a deterministic cutout mask. Exact silhouette,
+pixel texture, colour, hidden geometry, aspect ratio and exact background RGB are
+not guaranteed by the model. Compare each result with the original before
+choosing it; reject inaccurate results and keep the original. Telegram may have
+compressed the incoming photo before intake; the preserved original is the exact
+Telegram-delivered file, not a recovery of camera RAW. Synthetic tests verify
+contract/bytes/storage/access/errors, NOT real-photo visual fidelity.
+
+### Migration/release order (operator only; no production actions performed)
+
+1. Review this PR, obtain a PostgreSQL backup through the existing operator
+   process and confirm prerequisite 0040 is already applied. Do NOT rerun 0039 or
+   0040. On **KZ**, `/opt/olnoo/projects/olnoo-admin`, in the existing trusted shell
+   with DATABASE_URL available, fetch this branch and extract the reviewed SQL:
+
+   ```bash
+   cd /opt/olnoo/projects/olnoo-admin
+   git fetch origin feat/istraart-photo-processing
+   git show origin/feat/istraart-photo-processing:db/migrations/0041_catalog_processed_photos.sql > /tmp/olnoo-0041-catalog.sql
+   test -n "$DATABASE_URL"
+   psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f /tmp/olnoo-0041-catalog.sql
+   ```
+
+2. Verify the two JSONB columns/defaults/CHECKs and unchanged original references,
+   legacy counts/publication/selected original images against the backup. Apply
+   0041 once **before** deploying this code (GET/export reads the new columns).
+   If it fails, its transaction rolls back; stop instead of rerunning blindly.
+3. Separately verify Gemini image model registration and permitted provider
+   access on Router. Configure only through the existing approved mechanism if
+   needed. Registration alone does not prove generation works.
+4. Only with separate approval, merge/deploy through the existing mechanism.
+   Acceptance: process one real own photo, compare fidelity, process again,
+   choose original/older/newer versions, save and manually publish; check site
+   photo and denial of draft/foreign/unselected requests. Confirm original hash
+   and old versions survive a simulated provider error on a test environment.
+
+Local verification: `tsc --noEmit`, profile tests, `next build --webpack`,
+`git diff --check`; Router requests use synthetic fixtures. Regression SQL
+`db/tests/catalog_processed_photos.sql` is ONLY for a disposable test database
+(`psql "$CATALOG_TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f ...`), never production.
+It was executed in isolated in-memory PGlite (PostgreSQL WASM), preserving the
+pre-migration source/card snapshot and checking defaults/constraints/history.
+No real KZ call, secret inspection, provider charge or production write performed.

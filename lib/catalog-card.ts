@@ -1,3 +1,4 @@
+import type { CatalogPhotoVersions } from './catalog-photo-data.ts'
 // Small, pure validation layer for the IstraArt catalog MVP.
 // Legacy cards retain three offers; new cards each represent one independent product.
 export type OfferKind = 'raw' | 'finished' | 'guide'
@@ -17,6 +18,7 @@ export type CatalogCardInput = {
   lengthCm: number | null
   diameterCm: number | null
   offers: CatalogOffers
+  photoVersions?: CatalogPhotoVersions
 }
 const kinds: OfferKind[] = ['raw', 'finished', 'guide']
 
@@ -53,7 +55,12 @@ export function catalogCardErrors(input: unknown, photoCount: number, publicatio
       if (Object.keys(o).some((key) => !['title','description','priceRub','available','imageIndexes'].includes(key))) errors._form = 'Предложение содержит неизвестные поля.'
     }
   }
-  if (Object.keys(v).some((key) => !['slug','title','description','lengthCm','diameterCm','offers'].includes(key))) errors._form = 'Карточка содержит неизвестные поля.'
+  if (v.photoVersions !== undefined) {
+    if (!v.photoVersions || typeof v.photoVersions !== 'object' || Array.isArray(v.photoVersions)
+      || Object.entries(v.photoVersions).some(([key, id]) => !/^[0-9]$/.test(key) || Number(key) >= photoCount || typeof id !== 'string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id)
+        || !Object.values((v.offers ?? {}) as Record<string, Offer>).some((offer) => Array.isArray(offer?.imageIndexes) && offer.imageIndexes.includes(Number(key))))) errors.photoVersions = 'Выберите обработанную версию только для отмеченного фото этого материала.'
+  }
+  if (Object.keys(v).some((key) => !['slug','title','description','lengthCm','diameterCm','offers','photoVersions'].includes(key))) errors._form = 'Карточка содержит неизвестные поля.'
   return errors
 }
 export function validateCatalogCard(input: unknown, photoCount: number, kind: CatalogCardKind = 'legacy'): input is CatalogCardInput {
@@ -71,8 +78,9 @@ export function suggestCatalogCard(source: { id: string; originalText?: string; 
 
 /** Never expose an unfilled offer as a purchasable product. */
 export function publicCatalogCard(input: CatalogCardInput) {
+  const { photoVersions: _internal, ...publicInput } = input
   return {
-    ...input,
+    ...publicInput,
     offers: Object.fromEntries(
       kinds.filter((kind) => input.offers[kind] !== undefined)
         .map((kind) => [kind, input.offers[kind]]),

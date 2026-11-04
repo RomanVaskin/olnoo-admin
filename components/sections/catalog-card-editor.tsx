@@ -1,17 +1,19 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { CatalogPhotoProcessing, type CatalogPhotoPreview } from '@/components/sections/catalog-photo-processing'
 import { catalogCardErrors, suggestCatalogCard, type CatalogCardInput, type CatalogOffers, type OfferKind, type Offer, type CatalogFieldErrors, type CatalogCardKind } from '@/lib/catalog-card'
 
 type Source = { id: string; originalImageFiles: string[]; originalText?: string; generatedTitle?: string; ownBrief?: string }
 type DraftOffer = Omit<Offer, 'available'> & { available: boolean | null }
 type Draft = Omit<CatalogCardInput, 'offers'> & { offers: Partial<Record<OfferKind, DraftOffer>> }
-type Row = { id: string; content_item_id: string; card_kind: CatalogCardKind; parent_card_id: string | null; slug: string; title: string; description: string; length_cm: number | string | null; diameter_cm: number | string | null; offers: CatalogOffers; published_at: string | null }
+type Row = { id: string; content_item_id: string; card_kind: CatalogCardKind; parent_card_id: string | null; slug: string; title: string; description: string; length_cm: number | string | null; diameter_cm: number | string | null; offers: CatalogOffers; photo_versions: Record<string, string>; published_at: string | null }
 const labels: Record<OfferKind, string> = { raw: 'Заготовка', finished: 'Готовое изделие', guide: 'DIY-гайд' }
 const kinds = ['raw', 'finished', 'guide'] as const
 const empty = (): CatalogCardInput => ({ slug: '', title: '', description: '', lengthCm: null, diameterCm: null, offers: {} })
 export function CatalogCardEditor({ project, item }: { project: string; item: Source }) {
   const [open, setOpen] = useState(false)
   const [row, setRow] = useState<Row | null>(null)
+  const [processedPhotos, setProcessedPhotos] = useState<CatalogPhotoPreview[]>([])
   const [cards, setCards] = useState<Row[]>([])
   const [newKind, setNewKind] = useState<Exclude<CatalogCardKind, 'legacy'>>('finished')
   const [parentId, setParentId] = useState<string | null>(null)
@@ -43,7 +45,7 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
   useEffect(() => { if (open) void load() }, [open, project, item.id])
   function selectCard(current: Row) {
     setRow(current); setError(''); setServerErrors({}); setCreateRaw(false); setCreateGuide(false)
-    setDraft({ slug: current.slug, title: current.title, description: current.description, lengthCm: current.length_cm == null ? null : Number(current.length_cm), diameterCm: current.diameter_cm == null ? null : Number(current.diameter_cm), offers: current.offers })
+    setDraft({ slug: current.slug, title: current.title, description: current.description, lengthCm: current.length_cm == null ? null : Number(current.length_cm), diameterCm: current.diameter_cm == null ? null : Number(current.diameter_cm), offers: current.offers, photoVersions: current.photo_versions ?? {} })
     setDirty(false)
   }
   function discardChanges() { return !dirty || window.confirm('Несохранённые изменения будут потеряны. Продолжить?') }
@@ -54,7 +56,15 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
   }
   const cardKind = row?.card_kind ?? newKind
   const visibleKinds = cardKind === 'legacy' ? kinds : kinds.filter((kind) => kind === cardKind)
-  function change(patch: Partial<Draft>) { setServerErrors({}); setDraft((d) => ({ ...d, ...patch })); setDirty(true) }
+  function change(patch: Partial<Draft>) {
+    setServerErrors({})
+    setDraft((d) => {
+      const next = { ...d, ...patch }
+      if (patch.offers) next.photoVersions = Object.fromEntries(Object.entries(next.photoVersions ?? {}).filter(([index]) => Object.values(patch.offers!).some((offer) => offer?.imageIndexes.includes(Number(index)))))
+      return next
+    })
+    setDirty(true)
+  }
   function offer(kind: OfferKind, patch: Partial<DraftOffer>) {
     change({ offers: { ...draft.offers, [kind]: { ...draft.offers[kind], ...patch } } })
   }
@@ -95,12 +105,14 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
       {row?.published_at && project === 'istraart' && <a href="https://istraart.ru/#catalog" target="_blank" rel="noreferrer" className="text-sm text-blue underline">Открыть каталог IstraArt</a>}
       <p className="text-xs text-muted-foreground">Сохранение оставляет новую карточку черновиком. «Опубликовать на сайте» — ручное утверждение для сайта, отдельно от соцсетей. Сохранение изменений опубликованной карточки обновляет её на сайте.</p>
       <p className="text-xs text-muted-foreground">Добавляйте только подтверждённые предложения. Для каждого нужны описание, цена в ₽, доступность и выбранные фотографии. PDF не загружается и не выдаётся публично.</p>
+      {project === 'istraart' && <CatalogPhotoProcessing key={item.id} project={project} itemId={item.id} photoCount={item.originalImageFiles.length} disabled={busy || !loaded} onVersions={setProcessedPhotos} />}
       {loading ? <p>Загрузка…</p> : <fieldset disabled={busy || !loaded} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-sm">Название<input {...invalid('title')} value={draft.title} onChange={(e) => change({ title: e.target.value })} maxLength={160} className={field} />{hint('title')}</label>
         <label className="flex flex-col gap-1 text-sm">Адрес карточки (латиница, цифры, дефисы)<input {...invalid('slug')} value={draft.slug} onChange={(e) => change({ slug: e.target.value })} maxLength={100} className={field} />{hint('slug')}</label>
         <label className="flex flex-col gap-1 text-sm">Описание карточки<textarea {...invalid('description')} value={draft.description} onChange={(e) => change({ description: e.target.value })} maxLength={10000} className={field} />{hint('description')}</label>
         <div className="grid grid-cols-2 gap-3">{(['lengthCm', 'diameterCm'] as const).map((key) => <label key={key} className="flex flex-col gap-1 text-sm">{key === 'lengthCm' ? 'Длина, см' : 'Диаметр, см'}<input type="number" min="0.01" step="0.01" {...invalid(key)} value={draft[key] ?? ''} onChange={(e) => change({ [key]: e.target.value === '' ? null : Number(e.target.value) })} className={field} />{hint(key)}</label>)}</div>
         {hint('offers')}
+        {hint('photoVersions')}
         {visibleKinds.map((kind) => {
           const value = draft.offers[kind]
           return <fieldset key={kind} className="flex flex-col gap-3 border border-hairline p-3">
@@ -116,7 +128,24 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
               <label className="flex flex-col gap-1 text-sm">Подтверждённая цена, ₽<input type="number" min="1" step="1" {...invalid(`offers.${kind}.priceRub`)} value={value.priceRub || ''} onChange={(e) => offer(kind, { priceRub: Number(e.target.value) })} className={field} />{hint(`offers.${kind}.priceRub`)}</label>
               <label className="flex flex-col gap-1 text-sm">Доступность<select {...invalid(`offers.${kind}.available`)} value={value.available === null ? '' : value.available ? 'yes' : 'no'} onChange={(e) => offer(kind, { available: e.target.value === '' ? null : e.target.value === 'yes' })} className={field}><option value="">Выберите доступность</option><option value="no">Недоступно</option><option value="yes">Доступно для заказа / покупки</option></select>{hint(`offers.${kind}.available`)}</label>
               {hint(`offers.${kind}.imageIndexes`)}
-              <div className="grid grid-cols-3 gap-2">{item.originalImageFiles.map((filename, index) => <label key={filename} className="flex flex-col gap-1 text-xs"><img src={`/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`Фото ${index + 1}`} className="aspect-square object-cover border border-hairline" /><span><input type="checkbox" checked={value.imageIndexes.includes(index)} onChange={(e) => offer(kind, { imageIndexes: e.target.checked ? [...value.imageIndexes, index] : value.imageIndexes.filter((n) => n !== index) })} /> Фото {index + 1}</span></label>)}</div>
+              <div className="grid grid-cols-3 gap-2">{item.originalImageFiles.map((filename, index) => {
+                const selectedVersion = draft.photoVersions?.[String(index)] ?? ''
+                const photos = processedPhotos.filter((v) => v.originalIndex === index)
+                return <div key={filename} className="flex flex-col gap-1 text-xs">
+                  <img src={selectedVersion ? `/api/catalog/photo-processing/${item.id}/${selectedVersion}?project=${encodeURIComponent(project)}` : `/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`Фото ${index + 1}`} className="aspect-square object-cover border border-hairline" />
+                  <label><input type="checkbox" checked={value.imageIndexes.includes(index)} onChange={(e) => offer(kind, { imageIndexes: e.target.checked ? [...value.imageIndexes, index] : value.imageIndexes.filter((n) => n !== index) })} /> Фото {index + 1}</label>
+                  {project === 'istraart' && value.imageIndexes.includes(index) && <label>Использовать в карточке<select value={selectedVersion} onChange={(e) => {
+                    const next = { ...draft.photoVersions }
+                    if (e.target.value) next[String(index)] = e.target.value
+                    else delete next[String(index)]
+                    change({ photoVersions: next })
+                  }} className="w-full border border-hairline bg-card py-1">
+                    <option value="">Оригинал</option>
+                    {selectedVersion && !photos.some((v) => v.id === selectedVersion) && <option value={selectedVersion}>Сохранённая обработанная версия</option>}
+                    {photos.map((v, i) => <option key={v.id} value={v.id}>Обработанное · версия {i + 1}</option>)}
+                  </select></label>}
+                </div>
+              })}</div>
             </>}
           </fieldset>
         })}
