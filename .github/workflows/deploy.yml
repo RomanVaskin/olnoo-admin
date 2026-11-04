@@ -19,6 +19,30 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate required deploy secrets
+        env:
+          CATALOG_SITE_TOKENS: ${{ secrets.CATALOG_SITE_TOKENS }}
+          YANDEX_DIRECT_TOKEN: ${{ secrets.YANDEX_DIRECT_TOKEN }}
+          YANDEX_DIRECT_CAMPAIGN_IDS: ${{ secrets.YANDEX_DIRECT_CAMPAIGN_IDS }}
+          YANDEX_METRIKA_TOKEN: ${{ secrets.YANDEX_METRIKA_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/catalog-deploy-env.mjs > /dev/null
+          if [ -z "$YANDEX_DIRECT_TOKEN" ] || [ -z "$YANDEX_DIRECT_CAMPAIGN_IDS" ] || [ -z "$YANDEX_METRIKA_TOKEN" ]; then
+            echo "::error::Required Yandex secrets are missing"
+            exit 1
+          fi
+          case "$YANDEX_DIRECT_TOKEN" in *[!A-Za-z0-9_.-]*) echo "::error::Invalid YANDEX_DIRECT_TOKEN"; exit 1;; esac
+          case "$YANDEX_METRIKA_TOKEN" in *[!A-Za-z0-9_.-]*) echo "::error::Invalid YANDEX_METRIKA_TOKEN"; exit 1;; esac
+          case "$YANDEX_DIRECT_CAMPAIGN_IDS" in *[!0-9,]*) echo "::error::Invalid YANDEX_DIRECT_CAMPAIGN_IDS"; exit 1;; esac
+
       - name: Set up SSH
         run: |
           set -e
@@ -48,6 +72,33 @@ jobs:
           # Written over ssh stdin: the values never appear in a command line, a heredoc or the job log.
           printf 'YANDEX_DIRECT_TOKEN=%s\nYANDEX_DIRECT_CAMPAIGN_IDS=%s\nYANDEX_METRIKA_TOKEN=%s\n' "$YANDEX_DIRECT_TOKEN" "$YANDEX_DIRECT_CAMPAIGN_IDS" "$YANDEX_METRIKA_TOKEN" |
             ssh -i ~/.ssh/deploy_key "$PROD_USER@$PROD_HOST" "set -e; cd '$PROD_DIR'; umask 077; cat > .env.production.local.tmp; if [ -f .env.local ]; then chown --reference=.env.local .env.production.local.tmp; chmod --reference=.env.local .env.production.local.tmp; fi; mv -f .env.production.local.tmp .env.production.local; test \"\$(grep -c '^YANDEX_\(DIRECT\|METRIKA\)_' .env.production.local)\" = 3; echo \"Yandex env delivered: 3 keys\""
+
+      - name: Deliver catalog environment
+        env:
+          CATALOG_SITE_TOKENS: ${{ secrets.CATALOG_SITE_TOKENS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          payload=$(mktemp)
+          trap 'rm -f "$payload"' EXIT
+          node scripts/catalog-deploy-env.mjs > "$payload"
+          remote_script=$(cat <<'REMOTE_CATALOG'
+          set -eu
+          umask 077
+          tmp=$(mktemp .env.catalog.json.XXXXXX)
+          trap 'rm -f "$tmp"' EXIT HUP INT TERM
+          cat > "$tmp"
+          node -e 'try { const x = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!x || Object.keys(x).join(",") !== "CATALOG_SITE_TOKENS" || typeof x.CATALOG_SITE_TOKENS !== "string") process.exit(1); } catch { process.exit(1); }' "$tmp"
+          if [ -f .env.local ]; then
+            chown --reference=.env.local "$tmp"
+            chmod --reference=.env.local "$tmp"
+          fi
+          mv -f -- "$tmp" .env.catalog.json
+          trap - EXIT HUP INT TERM
+          echo 'Catalog environment delivered'
+          REMOTE_CATALOG
+          )
+          ssh -i ~/.ssh/deploy_key "$PROD_USER@$PROD_HOST" "cd '$PROD_DIR' && $remote_script" < "$payload"
 
       - name: Deploy to production
         run: |
