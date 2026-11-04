@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { Pool } from 'pg'
 import {
   CONTENT_FACTORY_SYSTEM_PROMPT,
+  CONTENT_FACTORY_OWN_MATERIAL_PROMPT,
+  buildOwnMaterialPrompt,
+  parseOwnMaterialResult,
   CONTENT_FACTORY_FACT_EXTRACTION_PROMPT,
   buildFactExtractionPrompt,
   buildContentFactoryPrompt,
@@ -17,6 +20,28 @@ import { saveProjectBrandVoice } from './project-brand-voice.ts'
 
 const factSheet = { language: 'ru', facts: [{ statement: 'Банк предлагает ипотеку в Грузии', figures: ['12,5%'], conditions: ['Первый взнос 20%'], source: 'source_publication', confirmation: 'source_only' }], missingInfo: ['Подтверждение условий банка'] } as const
 const factSheetJson = JSON.stringify(factSheet)
+
+
+test('own material generator writes customer-facing copy from owner facts, not a news analysis', () => {
+  assert.match(CONTENT_FACTORY_OWN_MATERIAL_PROMPT, /sales post/i)
+  assert.match(CONTENT_FACTORY_OWN_MATERIAL_PROMPT, /do not invent material, wood species, dimensions/i)
+  assert.match(CONTENT_FACTORY_OWN_MATERIAL_PROMPT, /cannot see or analyse photographs/i)
+  const prompt = buildOwnMaterialPrompt({ originalText: 'Светильник, 5000 руб.', ownBrief: 'Ручная работа', contextBlock: 'IstraArt' })
+  assert.match(prompt, /OWNER ORIGINAL TEXT:[\s\S]*5000 руб\./)
+  assert.match(prompt, /OWNER DESCRIPTION:[\s\S]*Ручная работа/)
+})
+
+test('own material preserves exact owner price and does not require third-party source attribution', () => {
+  const original = 'Светильник ручной работы. Цена 5000 руб.'
+  const valid = JSON.stringify({ title: 'Светильник ручной работы', body: 'Светильник ручной работы. Цена 5000 руб. Напишите для заказа.', needsReview: false, reviewReason: '' })
+  assert.equal(parseOwnMaterialResult(valid, original, '').needsReview, false)
+  const wrongPrice = JSON.stringify({ title: 'Светильник', body: 'Светильник за 6000 руб.', needsReview: false, reviewReason: '' })
+  const flagged = parseOwnMaterialResult(wrongPrice, original, '')
+  assert.equal(flagged.needsReview, true)
+  assert.match(flagged.reviewReason, /price and currency/i)
+  const leaked = JSON.stringify({ title: 'Светильник', body: 'Светильник. needsReview: false. Цена 5000 руб.', needsReview: false, reviewReason: '' })
+  assert.throws(() => parseOwnMaterialResult(leaked, original, ''), ContentFactoryGenerateError)
+})
 
 // --- Pure: prompt / parser ---
 

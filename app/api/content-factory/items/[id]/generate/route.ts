@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { ownMaterialSourceText, getItem, setItemStatus, setGeneratedContent, canGenerate } from '@/lib/content-factory-items'
-import { generateContentFactoryArticle, reviseContentFactoryArticle, ContentFactoryGenerateError } from '@/lib/content-factory-generate'
+import { generateContentFactoryArticle, generateContentFactoryOwnMaterial, reviseContentFactoryArticle, ContentFactoryGenerateError } from '@/lib/content-factory-generate'
 import { AiRouterError } from '@/lib/ai-router'
 
 /**
@@ -32,7 +32,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   try {
     const flaggedIssues = item.aiReview?.issues ?? []
-    const isTargetedRevision = !!item.generatedText.trim() && flaggedIssues.length > 0
+    const isTargetedRevision = item.originKind !== 'own' && !!item.generatedText.trim() && flaggedIssues.length > 0
       && (item.aiReview?.risk === 'high' || item.aiReview?.risk === 'medium' || item.aiReview?.quality?.passed === false || item.aiReview?.passed === false)
       && item.aiReview?.reviewedTitle === item.generatedTitle
       && item.aiReview?.reviewedText === item.generatedText
@@ -42,7 +42,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           title: item.generatedTitle, body: item.generatedText,
           issues: flaggedIssues, recommendations: item.aiReview?.recommendations ?? [],
         })
-      : await generateContentFactoryArticle(pool, projectId, { sourceText: ownMaterialSourceText(item), sourceUrl: item.originalUrl })
+      : item.originKind === 'own'
+        ? await generateContentFactoryOwnMaterial(pool, projectId, { originalText: item.originalText, ownBrief: item.ownBrief ?? '' })
+        : await generateContentFactoryArticle(pool, projectId, { sourceText: ownMaterialSourceText(item), sourceUrl: item.originalUrl })
     const status = generated.needsReview ? 'needs_review' : 'ready'
     const updated = await setGeneratedContent(pool, projectId, id, {
       title: generated.title,
