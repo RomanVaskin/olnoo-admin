@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
-import { validateCatalogCard } from '@/lib/catalog-card'
+import { catalogInputFromRow } from '@/lib/catalog-export'
+import { readOriginalImage } from '@/lib/content-factory-original-images'
+import { publishableCatalogCard, validateCatalogCard } from '@/lib/catalog-card'
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const projectId = await resolveProjectId(new URL(req.url).searchParams.get('project'))
@@ -9,20 +11,25 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const { id } = await params
   const body = await req.json().catch(() => null)
   if (!body || typeof body !== 'object') return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
-  const { rows } = await pool.query<{ content_item_id: string; published_at: string | null; original_image_files: unknown }>(
-    `SELECT c.content_item_id, c.published_at, i.original_image_files
+  const { rows } = await pool.query<Record<string, any>>(
+    `SELECT c.*, c.updated_at::text AS version, i.original_image_files, i.original_image_error, i.original_image_urls, i.origin_kind
        FROM catalog_cards c JOIN content_factory_items i
          ON i.id = c.content_item_id AND i.project_id = c.project_id
       WHERE c.id = $1 AND c.project_id = $2`, [id, projectId],
   )
   const current = rows[0]
   if (!current) return NextResponse.json({ error: 'Card not found' }, { status: 404 })
+  if (current.origin_kind !== 'own') return NextResponse.json({ error: 'Owner material required' }, { status: 409 })
   if (body.action === 'publish' && Object.keys(body).length === 1) {
+    const files = current.original_image_files
+    if (!Array.isArray(files) || current.original_image_error || files.length !== String(current.original_image_urls || '').split(',').filter(Boolean).length || !publishableCatalogCard(catalogInputFromRow(current), files.length)) return NextResponse.json({ error: 'Fill at least one offer with description, confirmed price, availability and photos before publication.' }, { status: 422 })
+    const indexes = [...new Set(Object.values(catalogInputFromRow(current).offers).flatMap((offer) => offer.imageIndexes))]
+    for (const index of indexes) if (!await readOriginalImage(projectId, current.content_item_id, files[index]).catch(() => null)) return NextResponse.json({ error: 'A selected photo is unavailable.' }, { status: 409 })
     const updated = await pool.query(
-      'UPDATE catalog_cards SET published_at = COALESCE(published_at, now()), updated_at = now() WHERE id = $1 AND project_id = $2 RETURNING id, slug, published_at',
-      [id, projectId],
+      'UPDATE catalog_cards SET published_at = COALESCE(published_at, now()), updated_at = now() WHERE id = $1 AND project_id = $2 AND updated_at = $3::timestamptz RETURNING id, slug, published_at',
+      [id, projectId, current.version],
     )
-    return NextResponse.json(updated.rows[0])
+    return updated.rows[0] ? NextResponse.json(updated.rows[0]) : NextResponse.json({ error: 'Card changed. Reload it.' }, { status: 409 })
   }
   if (body.action === 'unpublish' && Object.keys(body).length === 1) {
     const updated = await pool.query(
@@ -36,14 +43,19 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: 'Invalid catalog card' }, { status: 422 })
   }
   const card = body.card
+  if (current.published_at && !publishableCatalogCard(card, (current.original_image_files as unknown[]).length)) return NextResponse.json({ error: 'Published offers must remain complete. Unpublish the card to clear them.' }, { status: 422 })
+  if (current.published_at) {
+    const indexes = [...new Set(Object.values(card.offers as import('@/lib/catalog-card').CatalogOffers).flatMap((offer) => offer.imageIndexes))]
+    for (const index of indexes) if (!await readOriginalImage(projectId, current.content_item_id, (current.original_image_files as string[])[index]).catch(() => null)) return NextResponse.json({ error: 'A selected photo is unavailable.' }, { status: 409 })
+  }
   try {
     const updated = await pool.query(
       `UPDATE catalog_cards SET slug = $1, title = $2, description = $3, length_cm = $4,
          diameter_cm = $5, offers = $6::jsonb, updated_at = now()
-       WHERE id = $7 AND project_id = $8 RETURNING id, slug, published_at`,
-      [card.slug, card.title, card.description, card.lengthCm, card.diameterCm, JSON.stringify(card.offers), id, projectId],
+       WHERE id = $7 AND project_id = $8 AND updated_at = $9::timestamptz RETURNING id, slug, published_at`,
+      [card.slug, card.title, card.description, card.lengthCm, card.diameterCm, JSON.stringify(card.offers), id, projectId, current.version],
     )
-    return NextResponse.json(updated.rows[0])
+    return updated.rows[0] ? NextResponse.json(updated.rows[0]) : NextResponse.json({ error: 'Card changed. Reload it.' }, { status: 409 })
   } catch (error) {
     if ((error as { code?: string }).code === '23505') return NextResponse.json({ error: 'Slug already exists' }, { status: 409 })
     throw error
