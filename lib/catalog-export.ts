@@ -28,8 +28,45 @@ export function catalogPublicProjection(row: Record<string, unknown>) {
   return { id: row.id as string, slug: input.slug, title: input.title, description: input.description,
     lengthCm: input.lengthCm, diameterCm: input.diameterCm, offers, updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at) }
 }
+export type RelatedCatalogCard = { id: string; slug: string; title: string; type: Exclude<CatalogCardKind, 'legacy'> }
+
+/** Relations reuse only exportable cards; source/parent identifiers remain server-only. */
+export function catalogPublicCards(rows: Record<string, unknown>[]): (NonNullable<ReturnType<typeof catalogPublicProjection>> & { relatedCards?: RelatedCatalogCard[] })[] {
+  const entries = rows.flatMap((row) => {
+    const card = catalogPublicProjection(row)
+    return card ? [{ row, card }] : []
+  })
+  const sources = new Map<string, typeof entries>()
+  function sourceKey(row: Record<string, unknown>) {
+    return Number.isSafeInteger(row.project_id) && typeof row.item_id === 'string' && row.item_id
+      ? `${row.project_id}:${row.item_id}` : null
+  }
+  for (const entry of entries) {
+    const key = sourceKey(entry.row)
+    if (key) {
+      const group = sources.get(key) ?? []
+      group.push(entry)
+      sources.set(key, group)
+    }
+  }
+  return entries.map(({ row, card }) => {
+    const key = sourceKey(row)
+    if (!key || !['raw', 'finished', 'guide'].includes(String(row.card_kind))) return card
+    const relatedCards = (sources.get(key) ?? []).filter(({ row: other }) => {
+      if (other.id === row.id) return false
+      if (row.card_kind === 'raw') return other.card_kind === 'finished'
+      if (other.card_kind === 'raw') return true
+      if (row.card_kind === 'finished') return other.card_kind === 'guide' && other.parent_card_id === row.id
+      return other.card_kind === 'finished' && row.parent_card_id === other.id
+    }).map(({ row: other, card: related }) => ({
+      id: related.id, slug: related.slug, title: related.title, type: other.card_kind as 'raw' | 'finished' | 'guide',
+    }))
+    return relatedCards.length ? { ...card, relatedCards } : card
+  })
+}
+
 export async function publishedCatalogRows(pool: Pool, project: string, id?: string) {
-  const { rows } = await pool.query(`SELECT c.id, c.card_kind, c.slug, c.title, c.description, c.length_cm, c.diameter_cm, c.offers, c.published_at, c.updated_at,
+  const { rows } = await pool.query(`SELECT c.id, c.card_kind, c.parent_card_id, c.slug, c.title, c.description, c.length_cm, c.diameter_cm, c.offers, c.published_at, c.updated_at,
     i.origin_kind, i.original_image_urls, i.original_image_files, i.original_image_error, i.project_id, i.id AS item_id
     FROM catalog_cards c JOIN projects p ON p.id = c.project_id
     JOIN content_factory_items i ON i.id = c.content_item_id AND i.project_id = c.project_id

@@ -106,15 +106,60 @@ Internal API additions:
   relation/type changes are rejected. Duplicate slug returns 409, with no partial
   bundle. Pressing save again with the same slug cannot create a duplicate.
 
-The public export DTO remains unchanged: one published row = one card with its
-own ID and selected original photos. New rows export only their own offer;
-legacy rows export as before. Neither source IDs nor parent IDs/draft relations
-are exposed. Each photo request still checks that exact card's publication,
+The public export DTO retains its existing fields and adds only optional
+`relatedCards` (contract below): one published row = one card with its own ID and
+selected original photos. New rows export only their own offer;
+legacy rows export as before. Neither source IDs, the internal parent field nor
+draft relations are exposed. Each photo request still checks that exact card's publication,
 project token and selected indices, even when another card shares the source.
 Basic Auth, token binding, manual approval and no-store are unchanged. The editor
 shows the existing `https://istraart.ru/#catalog` link only for a published card;
 the current site has no individual product URL, so no fictitious permalink is
 introduced. No IstraArt site change is required for this DTO.
+
+### Public API: optional relatedCards
+
+`GET /api/catalog/export` keeps the existing `{ project, cards }` response and
+all prior card fields. Independent cards may additionally contain:
+
+```json
+{
+  "relatedCards": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "slug": "source-material",
+      "title": "Исходный материал",
+      "type": "raw"
+    }
+  ]
+}
+```
+
+Each summary has ONLY `id` (catalog card UUID), `slug`, `title`, and `type`
+(`raw | finished | guide`). There are no URLs, recursive relations, source item
+IDs, Telegram metadata, storage paths, or internal `parent_card_id` fields.
+Existing IstraArt clients may ignore this optional field; no site change is made.
+The field is omitted when there are no eligible relations, and on legacy cards.
+Legacy combined offers are preserved, not guessed into separate typed cards.
+
+Relations are resolved from the same already project-scoped query and only from
+cards that pass the full existing public projection (published, own origin,
+complete offers/photos and no media error). Source identity and project must both
+match; unpublished, malformed, foreign-project and other-source candidates
+cannot appear in related summaries:
+
+| Card type | relatedCards |
+| --- | --- |
+| finished | All published `raw` cards of its source, and published `guide` cards whose parent is this exact product |
+| raw | All published `finished` cards of its source |
+| guide | Its corresponding published `finished` parent and published `raw` cards of its source |
+
+No sibling product/guide is inferred merely from a shared source. A published
+guide whose parent is a draft does not disclose that parent's UUID, slug or title.
+Unpublish removes the card both from top-level export and from relatedCards on
+subsequent no-store requests. Photo access is unchanged and still checked for the
+requested published card. No extra migration, query per card, token or permission
+bypass is introduced.
 
 ### Exact migration/release order (operator only, KZ)
 
