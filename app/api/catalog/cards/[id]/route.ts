@@ -3,7 +3,7 @@ import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { catalogInputFromRow } from '@/lib/catalog-export'
 import { readOriginalImage } from '@/lib/content-factory-original-images'
-import { catalogCardErrors, publishableCatalogCard, validateCatalogCard } from '@/lib/catalog-card'
+import { catalogCardErrors, publishableCatalogCard, validateCatalogCard, type CatalogCardKind } from '@/lib/catalog-card'
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const projectId = await resolveProjectId(new URL(req.url).searchParams.get('project'))
@@ -19,10 +19,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   )
   const current = rows[0]
   if (!current) return NextResponse.json({ error: 'Card not found' }, { status: 404 })
+  const kind = (current.card_kind ?? 'legacy') as CatalogCardKind
   if (current.origin_kind !== 'own') return NextResponse.json({ error: 'Owner material required' }, { status: 409 })
   if (body.action === 'publish' && Object.keys(body).length === 1) {
     const files = current.original_image_files
-    if (!Array.isArray(files) || current.original_image_error || files.length !== String(current.original_image_urls || '').split(',').filter(Boolean).length || !publishableCatalogCard(catalogInputFromRow(current), files.length)) return NextResponse.json({ error: 'Проверьте поля и загрузку исходных фото перед публикацией.', fieldErrors: catalogCardErrors(catalogInputFromRow(current), Array.isArray(files) ? files.length : -1, true) }, { status: 422 })
+    if (!Array.isArray(files) || current.original_image_error || files.length !== String(current.original_image_urls || '').split(',').filter(Boolean).length || !publishableCatalogCard(catalogInputFromRow(current), files.length, kind)) return NextResponse.json({ error: 'Проверьте поля и загрузку исходных фото перед публикацией.', fieldErrors: catalogCardErrors(catalogInputFromRow(current), Array.isArray(files) ? files.length : -1, true, kind) }, { status: 422 })
     const indexes = [...new Set(Object.values(catalogInputFromRow(current).offers).flatMap((offer) => offer.imageIndexes))]
     for (const index of indexes) if (!await readOriginalImage(projectId, current.content_item_id, files[index]).catch(() => null)) return NextResponse.json({ error: 'Выбранное исходное фото недоступно. Проверьте загрузку фотографий.', fieldErrors: Object.fromEntries(Object.entries(body.card?.offers ?? current.offers).filter(([, offer]) => (offer as { imageIndexes: number[] }).imageIndexes.includes(index)).map(([kind]) => [`offers.${kind}.imageIndexes`, 'Выбранное фото недоступно на сервере.'])) }, { status: 409 })
     const updated = await pool.query(
@@ -39,11 +40,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json(updated.rows[0])
   }
   if (!body.card || Object.keys(body).some((key) => key !== 'card')) return NextResponse.json({ error: 'Invalid update' }, { status: 400 })
-  if (!Array.isArray(current.original_image_files) || !validateCatalogCard(body.card, current.original_image_files.length)) {
-    return NextResponse.json({ error: 'Проверьте отмеченные поля.', fieldErrors: catalogCardErrors(body.card, Array.isArray(current.original_image_files) ? current.original_image_files.length : -1) }, { status: 422 })
+  if (!Array.isArray(current.original_image_files) || !validateCatalogCard(body.card, current.original_image_files.length, kind)) {
+    return NextResponse.json({ error: 'Проверьте отмеченные поля.', fieldErrors: catalogCardErrors(body.card, Array.isArray(current.original_image_files) ? current.original_image_files.length : -1, false, kind) }, { status: 422 })
   }
   const card = body.card
-  if (current.published_at && !publishableCatalogCard(card, (current.original_image_files as unknown[]).length)) return NextResponse.json({ error: 'Опубликованные предложения должны оставаться заполненными. Для очистки снимите карточку с публикации.', fieldErrors: catalogCardErrors(card, current.original_image_files.length, true) }, { status: 422 })
+  if (current.published_at && !publishableCatalogCard(card, (current.original_image_files as unknown[]).length, kind)) return NextResponse.json({ error: 'Опубликованные предложения должны оставаться заполненными. Для очистки снимите карточку с публикации.', fieldErrors: catalogCardErrors(card, current.original_image_files.length, true, kind) }, { status: 422 })
   if (current.published_at) {
     const indexes = [...new Set(Object.values(card.offers as import('@/lib/catalog-card').CatalogOffers).flatMap((offer) => offer.imageIndexes))]
     for (const index of indexes) if (!await readOriginalImage(projectId, current.content_item_id, (current.original_image_files as string[])[index]).catch(() => null)) return NextResponse.json({ error: 'Выбранное исходное фото недоступно. Проверьте загрузку фотографий.', fieldErrors: Object.fromEntries(Object.entries(body.card?.offers ?? current.offers).filter(([, offer]) => (offer as { imageIndexes: number[] }).imageIndexes.includes(index)).map(([kind]) => [`offers.${kind}.imageIndexes`, 'Выбранное фото недоступно на сервере.'])) }, { status: 409 })

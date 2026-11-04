@@ -59,3 +59,18 @@ test('price/photo edits keep the same public card identity without manufacturing
   assert.deepEqual(after.offers.raw.imageIndexes, [2])
   assert.equal(after.offers.guide, undefined)
 })
+
+test('independent products retain the existing DTO; drafts and unrelated photos do not leak through shared sources', () => {
+  const a = { ...row, card_kind: 'finished', offers: { finished: { ...row.offers.raw, imageIndexes: [0] } } }
+  const b = { ...a, id: 'e62bad4e-0514-442c-a4df-3d2cf83f8845', slug: 'sculpture', offers: { finished: { ...row.offers.raw, imageIndexes: [2] } } }
+  assert.notEqual(catalogPublicProjection(a)?.id, catalogPublicProjection(b)?.id)
+  assert.deepEqual(Object.keys(catalogPublicProjection(a)!.offers), ['finished'])
+  assert.equal(catalogPhotoSelection(a, 2), null)
+  assert.equal(catalogPhotoSelection(b, 0), null)
+  assert.equal(catalogPhotoSelection({ ...b, published_at: null }, 2), null)
+  assert.equal(catalogPublicProjection({ ...a, offers: row.offers }), null)
+  // Relations stay internal: no link or metadata about a draft parent is exported.
+  const guide = { ...row, card_kind: 'guide', parent_card_id: a.id, offers: { guide: row.offers.guide } }
+  assert.equal(JSON.stringify(catalogPublicProjection(guide)).includes('parent_card_id'), false)
+  assert.equal(JSON.stringify(catalogPublicProjection(guide)).includes('content_item_id'), false)
+})

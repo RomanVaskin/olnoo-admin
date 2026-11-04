@@ -1,6 +1,7 @@
 // Small, pure validation layer for the IstraArt catalog MVP.
-// A natural find has one card with up to three offers. Unfilled offers are NOT for sale.
+// Legacy cards retain three offers; new cards each represent one independent product.
 export type OfferKind = 'raw' | 'finished' | 'guide'
+export type CatalogCardKind = 'legacy' | OfferKind
 export type Offer = {
   title: string
   description: string
@@ -22,7 +23,7 @@ const kinds: OfferKind[] = ['raw', 'finished', 'guide']
 export type CatalogFieldErrors = Record<string, string>
 
 /** One set of field rules for the editor and both write APIs. */
-export function catalogCardErrors(input: unknown, photoCount: number, publication = false): CatalogFieldErrors {
+export function catalogCardErrors(input: unknown, photoCount: number, publication = false, kind: CatalogCardKind = 'legacy'): CatalogFieldErrors {
   const errors: CatalogFieldErrors = {}
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { _form: 'Проверьте данные карточки.' }
   const v = input as Record<string, unknown>
@@ -37,6 +38,7 @@ export function catalogCardErrors(input: unknown, photoCount: number, publicatio
   if (!v.offers || typeof v.offers !== 'object' || Array.isArray(v.offers)) errors.offers = 'Проверьте предложения карточки.'
   else {
     const offers = v.offers as Record<string, unknown>
+    if (kind !== 'legacy' && Object.keys(offers).some((key) => key !== kind)) errors.offers = 'Независимая карточка может содержать только предложение своего типа.'
     if (publication && !Object.keys(offers).length) errors.offers = 'Добавьте хотя бы одно заполненное предложение для публикации.'
     for (const [kind, value] of Object.entries(offers)) {
       if (!kinds.includes(kind as OfferKind)) { errors.offers = 'Допустимы только заготовка, готовое изделие и DIY-гайд.'; continue }
@@ -54,8 +56,8 @@ export function catalogCardErrors(input: unknown, photoCount: number, publicatio
   if (Object.keys(v).some((key) => !['slug','title','description','lengthCm','diameterCm','offers'].includes(key))) errors._form = 'Карточка содержит неизвестные поля.'
   return errors
 }
-export function validateCatalogCard(input: unknown, photoCount: number): input is CatalogCardInput {
-  return Object.keys(catalogCardErrors(input, photoCount)).length === 0
+export function validateCatalogCard(input: unknown, photoCount: number, kind: CatalogCardKind = 'legacy'): input is CatalogCardInput {
+  return Object.keys(catalogCardErrors(input, photoCount, false, kind)).length === 0
 }
 
 export function suggestCatalogCard(source: { id: string; originalText?: string; ownBrief?: string; generatedTitle?: string }): CatalogCardInput {
@@ -79,6 +81,6 @@ export function publicCatalogCard(input: CatalogCardInput) {
 }
 
 /** Draft offers may be absent; every published offer needs confirmed content and a photo. */
-export function publishableCatalogCard(input: unknown, photoCount: number): input is CatalogCardInput {
-  return Object.keys(catalogCardErrors(input, photoCount, true)).length === 0
+export function publishableCatalogCard(input: unknown, photoCount: number, kind: CatalogCardKind = 'legacy'): input is CatalogCardInput {
+  return Object.keys(catalogCardErrors(input, photoCount, true, kind)).length === 0
 }

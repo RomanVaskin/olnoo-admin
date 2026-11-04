@@ -1,17 +1,22 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { catalogCardErrors, suggestCatalogCard, type CatalogCardInput, type CatalogOffers, type OfferKind, type Offer, type CatalogFieldErrors } from '@/lib/catalog-card'
+import { catalogCardErrors, suggestCatalogCard, type CatalogCardInput, type CatalogOffers, type OfferKind, type Offer, type CatalogFieldErrors, type CatalogCardKind } from '@/lib/catalog-card'
 
 type Source = { id: string; originalImageFiles: string[]; originalText?: string; generatedTitle?: string; ownBrief?: string }
 type DraftOffer = Omit<Offer, 'available'> & { available: boolean | null }
 type Draft = Omit<CatalogCardInput, 'offers'> & { offers: Partial<Record<OfferKind, DraftOffer>> }
-type Row = { id: string; content_item_id: string; slug: string; title: string; description: string; length_cm: number | string | null; diameter_cm: number | string | null; offers: CatalogOffers; published_at: string | null }
+type Row = { id: string; content_item_id: string; card_kind: CatalogCardKind; parent_card_id: string | null; slug: string; title: string; description: string; length_cm: number | string | null; diameter_cm: number | string | null; offers: CatalogOffers; published_at: string | null }
 const labels: Record<OfferKind, string> = { raw: 'Заготовка', finished: 'Готовое изделие', guide: 'DIY-гайд' }
 const kinds = ['raw', 'finished', 'guide'] as const
 const empty = (): CatalogCardInput => ({ slug: '', title: '', description: '', lengthCm: null, diameterCm: null, offers: {} })
 export function CatalogCardEditor({ project, item }: { project: string; item: Source }) {
   const [open, setOpen] = useState(false)
   const [row, setRow] = useState<Row | null>(null)
+  const [cards, setCards] = useState<Row[]>([])
+  const [newKind, setNewKind] = useState<Exclude<CatalogCardKind, 'legacy'>>('finished')
+  const [parentId, setParentId] = useState<string | null>(null)
+  const [createRaw, setCreateRaw] = useState(false)
+  const [createGuide, setCreateGuide] = useState(false)
   const [draft, setDraft] = useState<Draft>(empty)
   const [serverErrors, setServerErrors] = useState<CatalogFieldErrors>({})
   const [loaded, setLoaded] = useState(false)
@@ -20,40 +25,54 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const url = `/api/catalog/cards?project=${encodeURIComponent(project)}`
-  async function load() {
+  async function load(preferredId?: string) {
     setLoading(true); setLoaded(false); setError(''); setServerErrors({})
     try {
       const res = await fetch(url, { cache: 'no-store' })
       if (!res.ok) throw new Error('Не удалось загрузить карточку каталога.')
       const rows = await res.json() as Row[]
-      const current = rows.find((r) => r.content_item_id === item.id) ?? null
-      setRow(current)
-      setDraft(current ? { slug: current.slug, title: current.title, description: current.description, lengthCm: current.length_cm == null ? null : Number(current.length_cm), diameterCm: current.diameter_cm == null ? null : Number(current.diameter_cm), offers: current.offers } : suggestCatalogCard(item))
-      setDirty(!current)
+      const ownCards = rows.filter((r) => r.content_item_id === item.id)
+      setCards(ownCards)
+      const current = ownCards.find((r) => r.id === (preferredId ?? row?.id)) ?? ownCards[0]
+      if (current) selectCard(current)
+      else startNew('finished', null, false)
       setLoaded(true)
     } catch (err) { setError(err instanceof Error ? err.message : 'Ошибка загрузки.') }
     finally { setLoading(false) }
   }
   useEffect(() => { if (open) void load() }, [open, project, item.id])
+  function selectCard(current: Row) {
+    setRow(current); setError(''); setServerErrors({}); setCreateRaw(false); setCreateGuide(false)
+    setDraft({ slug: current.slug, title: current.title, description: current.description, lengthCm: current.length_cm == null ? null : Number(current.length_cm), diameterCm: current.diameter_cm == null ? null : Number(current.diameter_cm), offers: current.offers })
+    setDirty(false)
+  }
+  function discardChanges() { return !dirty || window.confirm('Несохранённые изменения будут потеряны. Продолжить?') }
+  function startNew(kind: Exclude<CatalogCardKind, 'legacy'>, parent: string | null = null, confirm = true) {
+    if (confirm && !discardChanges()) return
+    setRow(null); setNewKind(kind); setParentId(parent); setCreateRaw(false); setCreateGuide(false); setServerErrors({}); setError('')
+    setDraft(suggestCatalogCard({ ...item, id: crypto.randomUUID() })); setDirty(true)
+  }
+  const cardKind = row?.card_kind ?? newKind
+  const visibleKinds = cardKind === 'legacy' ? kinds : kinds.filter((kind) => kind === cardKind)
   function change(patch: Partial<Draft>) { setServerErrors({}); setDraft((d) => ({ ...d, ...patch })); setDirty(true) }
   function offer(kind: OfferKind, patch: Partial<DraftOffer>) {
     change({ offers: { ...draft.offers, [kind]: { ...draft.offers[kind], ...patch } } })
   }
   async function action(action?: 'publish' | 'unpublish') {
     if (action !== 'unpublish') {
-      const errors = catalogCardErrors(draft, item.originalImageFiles.length, action === 'publish' || !!row?.published_at)
+      const errors = catalogCardErrors(draft, item.originalImageFiles.length, action === 'publish' || !!row?.published_at, cardKind)
       if (Object.keys(errors).length) { setServerErrors(errors); setError('Проверьте отмеченные поля.'); return }
     }
     setBusy(true); setError(''); setServerErrors({})
     try {
-      const res = await fetch(row ? `/api/catalog/cards/${row.id}?project=${encodeURIComponent(project)}` : url, { method: row ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action ? { action } : row ? { card: draft } : { contentItemId: item.id, card: draft }) })
+      const res = await fetch(row ? `/api/catalog/cards/${row.id}?project=${encodeURIComponent(project)}` : url, { method: row ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action ? { action } : row ? { card: draft } : { contentItemId: item.id, card: draft, cardKind: newKind, parentCardId: parentId, createRaw, createGuide }) })
       const data = await res.json()
       if (!res.ok) { setServerErrors(data.fieldErrors || {}); throw new Error(data.error || 'Ошибка сохранения карточки.') }
-      await load()
+      await load(data.id)
     } catch (err) { setError(err instanceof Error ? err.message : 'Ошибка запроса.') }
     finally { setBusy(false) }
   }
-  const publicationErrors = catalogCardErrors(draft, item.originalImageFiles.length, true)
+  const publicationErrors = catalogCardErrors(draft, item.originalImageFiles.length, true, cardKind)
   const errors = { ...publicationErrors, ...serverErrors }
   const hint = (key: string) => errors[key] ? <span id={`catalog-${item.id}-${key}`} role="alert" className="text-xs text-destructive">{errors[key]}</span> : null
   const invalid = (key: string) => ({ 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `catalog-${item.id}-${key}` : undefined })
@@ -61,6 +80,17 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
   return <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
     <button type="button" onClick={() => setOpen(!open)} className="label-mono text-left">{project === 'istraart' ? 'Каталог сайта IstraArt' : 'Каталог сайта'} · {open ? 'Скрыть' : 'Оформить / редактировать'}</button>
     {open && <>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" disabled={busy || !loaded} onClick={() => startNew('finished')} className={`${field} disabled:opacity-50`}>Создать изделие</button>
+        <button type="button" disabled={busy || !loaded} onClick={() => startNew('raw')} className={`${field} disabled:opacity-50`}>Создать карточку исходного материала</button>
+        {row?.card_kind === 'finished' && <button type="button" disabled={busy || !loaded} onClick={() => startNew('guide', row.id)} className={`${field} disabled:opacity-50`}>Создать DIY-гайд для изделия</button>}
+      </div>
+      {!!cards.length && <label className="flex flex-col gap-1 text-sm">Карточки этого материала<select disabled={busy || !loaded} value={row?.id ?? ''} onChange={(e) => { const selected = cards.find((c) => c.id === e.target.value); if (selected && discardChanges()) selectCard(selected) }} className={field}>
+        <option value="" disabled>Новая карточка</option>
+        {cards.map((card) => <option key={card.id} value={card.id}>{card.card_kind === 'legacy' ? 'Прежняя карточка' : labels[card.card_kind]} · {card.title} · {card.published_at ? 'Опубликовано на сайте' : 'Черновик'}</option>)}
+      </select></label>}
+      <p className="text-sm">{cardKind === 'legacy' ? 'Прежняя карточка с независимыми предложениями' : labels[cardKind]}</p>
+      {cardKind === 'guide' && <p className="text-sm text-muted-foreground">Изделие: {cards.find((c) => c.id === (row?.parent_card_id ?? parentId))?.title ?? '—'}. Публикуется независимо от изделия.</p>}
       <p className="text-sm text-muted-foreground">{row?.published_at ? 'Опубликовано на сайте' : 'Черновик'}</p>
       {row?.published_at && project === 'istraart' && <a href="https://istraart.ru/#catalog" target="_blank" rel="noreferrer" className="text-sm text-blue underline">Открыть каталог IstraArt</a>}
       <p className="text-xs text-muted-foreground">Сохранение оставляет новую карточку черновиком. «Опубликовать на сайте» — ручное утверждение для сайта, отдельно от соцсетей. Сохранение изменений опубликованной карточки обновляет её на сайте.</p>
@@ -68,10 +98,10 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
       {loading ? <p>Загрузка…</p> : <fieldset disabled={busy || !loaded} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-sm">Название<input {...invalid('title')} value={draft.title} onChange={(e) => change({ title: e.target.value })} maxLength={160} className={field} />{hint('title')}</label>
         <label className="flex flex-col gap-1 text-sm">Адрес карточки (латиница, цифры, дефисы)<input {...invalid('slug')} value={draft.slug} onChange={(e) => change({ slug: e.target.value })} maxLength={100} className={field} />{hint('slug')}</label>
-        <label className="flex flex-col gap-1 text-sm">Описание находки<textarea {...invalid('description')} value={draft.description} onChange={(e) => change({ description: e.target.value })} maxLength={10000} className={field} />{hint('description')}</label>
+        <label className="flex flex-col gap-1 text-sm">Описание карточки<textarea {...invalid('description')} value={draft.description} onChange={(e) => change({ description: e.target.value })} maxLength={10000} className={field} />{hint('description')}</label>
         <div className="grid grid-cols-2 gap-3">{(['lengthCm', 'diameterCm'] as const).map((key) => <label key={key} className="flex flex-col gap-1 text-sm">{key === 'lengthCm' ? 'Длина, см' : 'Диаметр, см'}<input type="number" min="0.01" step="0.01" {...invalid(key)} value={draft[key] ?? ''} onChange={(e) => change({ [key]: e.target.value === '' ? null : Number(e.target.value) })} className={field} />{hint(key)}</label>)}</div>
         {hint('offers')}
-        {kinds.map((kind) => {
+        {visibleKinds.map((kind) => {
           const value = draft.offers[kind]
           return <fieldset key={kind} className="flex flex-col gap-3 border border-hairline p-3">
             <label className="flex gap-2 text-sm font-medium"><input type="checkbox" checked={!!value} onChange={(e) => {
@@ -90,6 +120,11 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
             </>}
           </fieldset>
         })}
+        {!row && newKind === 'finished' && <div className="flex flex-col gap-2 text-sm">
+          <label className="flex gap-2"><input type="checkbox" checked={createRaw} onChange={(e) => setCreateRaw(e.target.checked)} />Создать карточку исходного материала</label>
+          <label className="flex gap-2"><input type="checkbox" checked={createGuide} onChange={(e) => setCreateGuide(e.target.checked)} />Создать DIY-гайд для изделия</label>
+          <p className="text-xs text-muted-foreground">Дополнительные карточки создаются отдельными черновиками без цены и наличия. Заполните и опубликуйте каждую отдельно.</p>
+        </div>}
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => action()} disabled={!dirty && !!row} className={`${field} disabled:opacity-50`}>Сохранить карточку</button>
           <button type="button" onClick={() => action('publish')} disabled={!row || dirty || !!row.published_at || Object.keys(publicationErrors).length > 0} className={`${field} disabled:opacity-50`}>Опубликовать на сайте</button>
