@@ -1,3 +1,4 @@
+import { manualPhotoSelectionValid } from '@/lib/catalog-manual-photo-data'
 import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
@@ -9,7 +10,7 @@ export async function GET(req: Request) {
   const projectId = await resolveProjectId(new URL(req.url).searchParams.get('project'))
   if (!projectId) return NextResponse.json({ error: 'Unknown project' }, { status: 400 })
   const { rows } = await pool.query(
-    'SELECT id, content_item_id, card_kind, parent_card_id, slug, title, description, length_cm, diameter_cm, offers, published_at FROM catalog_cards WHERE project_id = $1 ORDER BY created_at DESC',
+    'SELECT id, content_item_id, card_kind, parent_card_id, manual_media, manual_photo_selection, slug, title, description, length_cm, diameter_cm, offers, published_at FROM catalog_cards WHERE project_id = $1 ORDER BY created_at DESC',
     [projectId],
   )
   return NextResponse.json(rows)
@@ -36,6 +37,7 @@ export async function POST(req: Request) {
   const files = rows[0].original_image_files
   if (!Array.isArray(files) || !validateCatalogCard(body.card, files.length, kind)) return NextResponse.json({ error: 'Проверьте отмеченные поля.', fieldErrors: catalogCardErrors(body.card, Array.isArray(files) ? files.length : -1, false, kind) }, { status: 422 })
   const card: CatalogCardInput = body.card
+  if (!manualPhotoSelectionValid(card, files, [])) return NextResponse.json({ error: 'Изображение не принадлежит новой карточке.' }, { status: 422 })
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -50,10 +52,10 @@ export async function POST(req: Request) {
       const id = randomUUID()
       const result = await client.query(
         `INSERT INTO catalog_cards
-          (id, project_id, content_item_id, slug, title, description, length_cm, diameter_cm, offers, card_kind, parent_card_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)
+          (id, project_id, content_item_id, slug, title, description, length_cm, diameter_cm, offers, card_kind, parent_card_id, manual_photo_selection)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12::jsonb)
          RETURNING id, slug, published_at, card_kind, parent_card_id`,
-        [id, projectId, body.contentItemId, input.slug, input.title, input.description, input.lengthCm, input.diameterCm, JSON.stringify(input.offers), cardKind, parentId],
+        [id, projectId, body.contentItemId, input.slug, input.title, input.description, input.lengthCm, input.diameterCm, JSON.stringify(input.offers), cardKind, parentId, JSON.stringify(input.manualPhotoSelection ?? {})],
       )
       return result.rows[0]
     }

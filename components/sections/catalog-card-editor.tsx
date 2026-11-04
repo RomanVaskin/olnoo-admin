@@ -1,11 +1,14 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { IstraArtChatGptPrompt } from '@/components/sections/istraart-style-panel'
+import { CatalogManualUpload } from '@/components/sections/catalog-manual-upload'
+import { manualCatalogPhotos, manualPhotoCount, manualPhotoSelectionValid, type ManualCatalogPhoto } from '@/lib/catalog-manual-photo-data'
 import { catalogCardErrors, suggestCatalogCard, type CatalogCardInput, type CatalogOffers, type OfferKind, type Offer, type CatalogFieldErrors, type CatalogCardKind } from '@/lib/catalog-card'
 
 type Source = { id: string; originalImageFiles: string[]; originalText?: string; generatedTitle?: string; ownBrief?: string }
 type DraftOffer = Omit<Offer, 'available'> & { available: boolean | null }
 type Draft = Omit<CatalogCardInput, 'offers'> & { offers: Partial<Record<OfferKind, DraftOffer>> }
-type Row = { id: string; content_item_id: string; card_kind: CatalogCardKind; parent_card_id: string | null; slug: string; title: string; description: string; length_cm: number | string | null; diameter_cm: number | string | null; offers: CatalogOffers; published_at: string | null }
+type Row = { id: string; content_item_id: string; card_kind: CatalogCardKind; parent_card_id: string | null; slug: string; title: string; description: string; length_cm: number | string | null; diameter_cm: number | string | null; offers: CatalogOffers; manual_media: ManualCatalogPhoto[]; manual_photo_selection: Record<string,string>; published_at: string | null }
 const labels: Record<OfferKind, string> = { raw: 'Заготовка', finished: 'Готовое изделие', guide: 'DIY-гайд' }
 const kinds = ['raw', 'finished', 'guide'] as const
 const empty = (): CatalogCardInput => ({ slug: '', title: '', description: '', lengthCm: null, diameterCm: null, offers: {} })
@@ -17,6 +20,7 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
   const [parentId, setParentId] = useState<string | null>(null)
   const [createRaw, setCreateRaw] = useState(false)
   const [createGuide, setCreateGuide] = useState(false)
+  const [copyTask, setCopyTask] = useState<OfferKind>('finished')
   const [draft, setDraft] = useState<Draft>(empty)
   const [serverErrors, setServerErrors] = useState<CatalogFieldErrors>({})
   const [loaded, setLoaded] = useState(false)
@@ -43,7 +47,7 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
   useEffect(() => { if (open) void load() }, [open, project, item.id])
   function selectCard(current: Row) {
     setRow(current); setError(''); setServerErrors({}); setCreateRaw(false); setCreateGuide(false)
-    setDraft({ slug: current.slug, title: current.title, description: current.description, lengthCm: current.length_cm == null ? null : Number(current.length_cm), diameterCm: current.diameter_cm == null ? null : Number(current.diameter_cm), offers: current.offers })
+    setDraft({ slug: current.slug, title: current.title, description: current.description, lengthCm: current.length_cm == null ? null : Number(current.length_cm), diameterCm: current.diameter_cm == null ? null : Number(current.diameter_cm), offers: current.offers, manualPhotoSelection: current.manual_photo_selection ?? {} })
     setDirty(false)
   }
   function discardChanges() { return !dirty || window.confirm('Несохранённые изменения будут потеряны. Продолжить?') }
@@ -54,13 +58,23 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
   }
   const cardKind = row?.card_kind ?? newKind
   const visibleKinds = cardKind === 'legacy' ? kinds : kinds.filter((kind) => kind === cardKind)
-  function change(patch: Partial<Draft>) { setServerErrors({}); setDraft((d) => ({ ...d, ...patch })); setDirty(true) }
+  function change(patch: Partial<Draft>) {
+    setServerErrors({}); setDraft((d) => {
+      const next = { ...d, ...patch }
+      if (patch.offers) next.manualPhotoSelection = Object.fromEntries(Object.entries(next.manualPhotoSelection ?? {}).filter(([slot]) => Object.values(patch.offers!).some((offer) => offer?.imageIndexes.includes(Number(slot)))))
+      return next
+    }); setDirty(true)
+  }
   function offer(kind: OfferKind, patch: Partial<DraftOffer>) {
     change({ offers: { ...draft.offers, [kind]: { ...draft.offers[kind], ...patch } } })
   }
+  const media = manualCatalogPhotos(row?.manual_media)
+  const photoCount = manualPhotoCount(item.originalImageFiles, media)
+  const photoSlots = [...new Set([...item.originalImageFiles.map((_, i) => i), ...media.map((p) => p.slot)])].sort((a,b) => a-b)
   async function action(action?: 'publish' | 'unpublish') {
     if (action !== 'unpublish') {
-      const errors = catalogCardErrors(draft, item.originalImageFiles.length, action === 'publish' || !!row?.published_at, cardKind)
+      const errors = catalogCardErrors(draft, photoCount, action === 'publish' || !!row?.published_at, cardKind)
+      if (!manualPhotoSelectionValid(draft, item.originalImageFiles, media)) errors.manualPhotoSelection = 'Выберите доступный файл для каждой отмеченной позиции.'
       if (Object.keys(errors).length) { setServerErrors(errors); setError('Проверьте отмеченные поля.'); return }
     }
     setBusy(true); setError(''); setServerErrors({})
@@ -72,7 +86,8 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
     } catch (err) { setError(err instanceof Error ? err.message : 'Ошибка запроса.') }
     finally { setBusy(false) }
   }
-  const publicationErrors = catalogCardErrors(draft, item.originalImageFiles.length, true, cardKind)
+  const publicationErrors = catalogCardErrors(draft, photoCount, true, cardKind)
+  if (!manualPhotoSelectionValid(draft, item.originalImageFiles, media)) publicationErrors.manualPhotoSelection = 'Выберите доступный файл для каждой отмеченной позиции.'
   const errors = { ...publicationErrors, ...serverErrors }
   const hint = (key: string) => errors[key] ? <span id={`catalog-${item.id}-${key}`} role="alert" className="text-xs text-destructive">{errors[key]}</span> : null
   const invalid = (key: string) => ({ 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `catalog-${item.id}-${key}` : undefined })
@@ -95,12 +110,18 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
       {row?.published_at && project === 'istraart' && <a href="https://istraart.ru/#catalog" target="_blank" rel="noreferrer" className="text-sm text-blue underline">Открыть каталог IstraArt</a>}
       <p className="text-xs text-muted-foreground">Сохранение оставляет новую карточку черновиком. «Опубликовать на сайте» — ручное утверждение для сайта, отдельно от соцсетей. Сохранение изменений опубликованной карточки обновляет её на сайте.</p>
       <p className="text-xs text-muted-foreground">Добавляйте только подтверждённые предложения. Для каждого нужны описание, цена в ₽, доступность и выбранные фотографии. PDF не загружается и не выдаётся публично.</p>
+      {project === 'istraart' && <>
+        {cardKind === 'legacy' && <label className="text-sm">Задача для ChatGPT<select value={copyTask} onChange={(e) => setCopyTask(e.target.value as OfferKind)} className="ml-2 border border-hairline bg-card p-2">{kinds.map((k) => <option key={k} value={k}>{labels[k]}</option>)}</select></label>}
+        <IstraArtChatGptPrompt task={cardKind === 'legacy' ? copyTask : cardKind} card={draft} originalText={item.originalText || item.ownBrief || ''} />
+        {row ? <CatalogManualUpload key={row.id} project={project} cardId={row.id} disabled={busy || !loaded} onMedia={(photos) => { const id = row.id; setRow((current) => current?.id === id ? { ...current, manual_media: photos } : current); setCards((cards) => cards.map((c) => c.id === id ? { ...c, manual_media: photos } : c)) }} /> : <p className="text-xs text-muted-foreground">Сначала сохраните черновик карточки, затем загрузите изображения.</p>}
+      </>}
       {loading ? <p>Загрузка…</p> : <fieldset disabled={busy || !loaded} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-sm">Название<input {...invalid('title')} value={draft.title} onChange={(e) => change({ title: e.target.value })} maxLength={160} className={field} />{hint('title')}</label>
         <label className="flex flex-col gap-1 text-sm">Адрес карточки (латиница, цифры, дефисы)<input {...invalid('slug')} value={draft.slug} onChange={(e) => change({ slug: e.target.value })} maxLength={100} className={field} />{hint('slug')}</label>
         <label className="flex flex-col gap-1 text-sm">Описание карточки<textarea {...invalid('description')} value={draft.description} onChange={(e) => change({ description: e.target.value })} maxLength={10000} className={field} />{hint('description')}</label>
         <div className="grid grid-cols-2 gap-3">{(['lengthCm', 'diameterCm'] as const).map((key) => <label key={key} className="flex flex-col gap-1 text-sm">{key === 'lengthCm' ? 'Длина, см' : 'Диаметр, см'}<input type="number" min="0.01" step="0.01" {...invalid(key)} value={draft[key] ?? ''} onChange={(e) => change({ [key]: e.target.value === '' ? null : Number(e.target.value) })} className={field} />{hint(key)}</label>)}</div>
         {hint('offers')}
+        {hint('manualPhotoSelection')}
         {visibleKinds.map((kind) => {
           const value = draft.offers[kind]
           return <fieldset key={kind} className="flex flex-col gap-3 border border-hairline p-3">
@@ -116,7 +137,24 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
               <label className="flex flex-col gap-1 text-sm">Подтверждённая цена, ₽<input type="number" min="1" step="1" {...invalid(`offers.${kind}.priceRub`)} value={value.priceRub || ''} onChange={(e) => offer(kind, { priceRub: Number(e.target.value) })} className={field} />{hint(`offers.${kind}.priceRub`)}</label>
               <label className="flex flex-col gap-1 text-sm">Доступность<select {...invalid(`offers.${kind}.available`)} value={value.available === null ? '' : value.available ? 'yes' : 'no'} onChange={(e) => offer(kind, { available: e.target.value === '' ? null : e.target.value === 'yes' })} className={field}><option value="">Выберите доступность</option><option value="no">Недоступно</option><option value="yes">Доступно для заказа / покупки</option></select>{hint(`offers.${kind}.available`)}</label>
               {hint(`offers.${kind}.imageIndexes`)}
-              <div className="grid grid-cols-3 gap-2">{item.originalImageFiles.map((filename, index) => <label key={filename} className="flex flex-col gap-1 text-xs"><img src={`/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`Фото ${index + 1}`} className="aspect-square object-cover border border-hairline" /><span><input type="checkbox" checked={value.imageIndexes.includes(index)} onChange={(e) => offer(kind, { imageIndexes: e.target.checked ? [...value.imageIndexes, index] : value.imageIndexes.filter((n) => n !== index) })} /> Фото {index + 1}</span></label>)}</div>
+              <div className="grid grid-cols-3 gap-2">{photoSlots.map((index) => {
+                const selected = draft.manualPhotoSelection?.[String(index)] ?? ''
+                const variants = media.filter((p) => p.slot === index)
+                const src = selected && row ? `/api/catalog/cards/${row.id}/media/${selected}?project=${encodeURIComponent(project)}` : item.originalImageFiles[index] ? `/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}` : null
+                return <div key={index} className="flex flex-col gap-1 text-xs">
+                  {src ? <img src={src} alt={`Фото ${index + 1}`} className="aspect-square object-cover border border-hairline" /> : <span className="text-muted-foreground">Выберите изображение</span>}
+                  <label><input type="checkbox" checked={value.imageIndexes.includes(index)} onChange={(e) => offer(kind, { imageIndexes: e.target.checked ? [...value.imageIndexes, index] : value.imageIndexes.filter((n) => n !== index) })} /> Фото {index + 1}</label>
+                  {!!variants.length && value.imageIndexes.includes(index) && <select aria-label={`Файл для фото ${index + 1}`} value={selected} onChange={(e) => {
+                    const next = { ...draft.manualPhotoSelection }
+                    if (e.target.value) next[String(index)] = e.target.value
+                    else delete next[String(index)]
+                    change({ manualPhotoSelection: next })
+                  }} className="w-full border border-hairline bg-card py-1">
+                    <option value="" disabled={!item.originalImageFiles[index]}>{item.originalImageFiles[index] ? 'Исходное фото материала' : 'Выберите файл'}</option>
+                    {variants.map((p, i) => <option key={p.id} value={p.id}>{p.kind === 'real' ? 'Реальное фото' : 'ИИ-визуализация'} · {i + 1}</option>)}
+                  </select>}
+                </div>
+              })}</div>
             </>}
           </fieldset>
         })}

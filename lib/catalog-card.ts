@@ -1,3 +1,4 @@
+import type { ManualPhotoSelection } from './catalog-manual-photo-data.ts'
 // Small, pure validation layer for the IstraArt catalog MVP.
 // Legacy cards retain three offers; new cards each represent one independent product.
 export type OfferKind = 'raw' | 'finished' | 'guide'
@@ -17,6 +18,7 @@ export type CatalogCardInput = {
   lengthCm: number | null
   diameterCm: number | null
   offers: CatalogOffers
+  manualPhotoSelection?: ManualPhotoSelection
 }
 const kinds: OfferKind[] = ['raw', 'finished', 'guide']
 
@@ -53,7 +55,9 @@ export function catalogCardErrors(input: unknown, photoCount: number, publicatio
       if (Object.keys(o).some((key) => !['title','description','priceRub','available','imageIndexes'].includes(key))) errors._form = 'Предложение содержит неизвестные поля.'
     }
   }
-  if (Object.keys(v).some((key) => !['slug','title','description','lengthCm','diameterCm','offers'].includes(key))) errors._form = 'Карточка содержит неизвестные поля.'
+  if (v.manualPhotoSelection !== undefined && (!v.manualPhotoSelection || typeof v.manualPhotoSelection !== 'object' || Array.isArray(v.manualPhotoSelection)
+    || Object.entries(v.manualPhotoSelection).some(([slot, id]) => !/^[0-9]$/.test(slot) || Number(slot) >= photoCount || typeof id !== 'string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id)))) errors.manualPhotoSelection = 'Выберите изображение карточки для каждой используемой позиции.'
+  if (Object.keys(v).some((key) => !['slug','title','description','lengthCm','diameterCm','offers','manualPhotoSelection'].includes(key))) errors._form = 'Карточка содержит неизвестные поля.'
   return errors
 }
 export function validateCatalogCard(input: unknown, photoCount: number, kind: CatalogCardKind = 'legacy'): input is CatalogCardInput {
@@ -71,8 +75,9 @@ export function suggestCatalogCard(source: { id: string; originalText?: string; 
 
 /** Never expose an unfilled offer as a purchasable product. */
 export function publicCatalogCard(input: CatalogCardInput) {
+  const { manualPhotoSelection: _internal, ...publicInput } = input
   return {
-    ...input,
+    ...publicInput,
     offers: Object.fromEntries(
       kinds.filter((kind) => input.offers[kind] !== undefined)
         .map((kind) => [kind, input.offers[kind]]),

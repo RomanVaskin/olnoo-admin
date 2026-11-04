@@ -224,3 +224,114 @@ For this PR the same SQL was executed in isolated in-memory PGlite (PostgreSQL
 WASM); no production DB/environment connection was used. API tests execute the
 real handlers with isolated DB/file substitutes. Live Telegram, production Basic
 Auth and site acceptance are not claimed by these local tests.
+
+## Manual ChatGPT workflow — IstraArt Style v1 (0042; not deployed)
+
+This PR is based on 0040/main and does **not** depend on the image-API PR #110 or
+its 0041 migration. No AI API is invoked. Existing Telegram intake, Social,
+Quality Gate, prices and manual publication remain unchanged.
+
+### Owner flow
+
+1. Projects → edit the existing `istraart` project → **IstraArt Style v1**.
+   There is exactly one editable prompt, saved on that project. An unset value
+   reads the one code-defined default; empty or >16,000-character saves fail.
+   No style library, version registry or style selector is introduced.
+2. Content Factory → own material → catalog card. Create/save a draft if needed.
+   **Скопировать промпт для ChatGPT** combines the saved style with the selected
+   raw/finished/guide task, current editable title/description, owner-entered
+   dimensions and original owner text. Legacy cards allow choosing the task.
+   Card prices/stock are not inferred or filled. Unknown dimensions are explicitly
+   unknown. Attach reference photos in ChatGPT manually; private OLNOO URLs and
+   secrets are not placed in the prompt. Clipboard failure leaves a readable
+   text preview for manual copying.
+3. The one style specifies Premium Minimalism / Japandi / Quiet Luxury, natural
+   wood/stone/linen, muted beige palette, warm natural light, premium realistic
+   product photography and 4:5 images without text/prices/logos/watermarks/collages.
+   Raw material uses #F5F5F3 and a soft shadow while retaining wood geometry and
+   texture; finished work uses the actual material reference and confirmed sizes;
+   DIY asks for clear text instructions and separate illustrations, without
+   invented technical specifications. Owner review is required for the manual
+   ChatGPT result; an AI concept does not establish that an object was built.
+4. In the saved target card, choose **real photo / AI visualization** explicitly
+   and a photo position (1–10), then either upload JPEG/PNG/WebP directly from
+   Admin, or send photos to the existing bot, choose IstraArt there and select
+   that own material/photo using **Выбрать фото из Telegram** in Admin. Preview
+   the Telegram photo and attach it to this card. No bot command/menu is changed.
+5. In the enabled offer, check the position and choose the intended file from
+   its variants. Upload/attachment does not auto-select or publish anything.
+   Save confirmed description/price/availability and use the existing manual
+   publish action. Multiple finished products and optional related raw/guide
+   cards retain their own independent file selections and statuses.
+
+### Storage, contract and access
+
+- Migration 0042 adds `projects.istraart_style_prompt` (one text value) and
+  `catalog_cards.manual_media` / `manual_photo_selection` (JSON metadata only).
+  Photo bytes remain in the existing gitignored uploads filesystem.
+- New files are immutable original uploads under
+  `uploads/catalog/<projectId>/<cardUUID>/<photoUUID>.<jpg|png|webp>`, mode 0600.
+  Image decoding validates the file but does not re-encode/crop/resize it.
+  Telegram imports copy original bytes, retain source item/index provenance and
+  never change the original Content Factory files. Real/AI classification is an
+  explicit owner declaration stored on each upload, not an automatic detector.
+- Each of the existing ten public photo positions can retain multiple variants;
+  source originals remain available separately. The owner explicitly maps a
+  position to a file on this exact card; otherwise an existing source photo is
+  used. Files from other cards/projects cannot be selected by a guessed UUID.
+  No delete/overwrite operation or separate media library is added.
+- Internal settings API: GET/PUT `/api/projects/istraart-style?project=istraart`
+  (`{ prompt }`). Internal media: GET/POST
+  `/api/catalog/cards/<id>/media?project=istraart`; POST is bounded multipart
+  `{ file, kind: real|ai, slot: 0..9 }` or JSON Telegram import
+  `{ itemId, index: 0..9, kind, slot }`. Private preview:
+  `/api/catalog/cards/<id>/media/<photoUUID>?project=istraart`.
+  All stay behind existing Admin external Basic Auth; POST/PUT refuse a foreign
+  Origin. Server queries check the project, own-source origin, target card and
+  source/photo identity. Bodies are bounded, only actual static JPEG/PNG/WebP
+  <=10 MB / 40 MP are accepted; SVG/PDF/animation/arbitrary URLs are rejected.
+- Public catalog DTO, relatedCards and photo URLs stay unchanged. The existing
+  protected export handler resolves the selected file for the requested published
+  card/index with the same project-bound token checks and no-store. Internal
+  media/provenance/selection data is not serialized. The classification is visible
+  in Admin; this PR does not change IstraArt site labels or Social integration.
+  Owners should describe AI concepts accurately before approving public copy.
+- Appending an upload never changes offers, price or publication. Only explicit
+  selection/save changes a card's chosen photo; saving a published card retains
+  the prior manual-update behavior. Errors preserve original/previous files;
+  failed pre-commit writes roll back. An uncertain COMMIT retains the new file
+  instead of deleting a potentially committed reference (operator review may be
+  needed for an unreferenced file after a connection failure).
+
+### Release order — operator only, not executed
+
+1. Review this PR and create a backup by the existing PostgreSQL process.
+   Confirm prerequisite 0040 is installed; do not rerun 0039/0040. 0041 is reserved
+   for the separate API-processing PR and is **not** a prerequisite here.
+2. On **KZ**, `/opt/olnoo/projects/olnoo-admin`, with the existing DATABASE_URL
+   configured in a trusted shell, extract and apply the reviewed 0042 once,
+   **before deploying this code**:
+
+   ```bash
+   cd /opt/olnoo/projects/olnoo-admin
+   git fetch origin feat/istraart-manual-catalog
+   git show origin/feat/istraart-manual-catalog:db/migrations/0042_istraart_manual_catalog.sql > /tmp/olnoo-0042-manual.sql
+   test -n "$DATABASE_URL"
+   psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f /tmp/olnoo-0042-manual.sql
+   ```
+
+3. Verify the three columns/defaults/CHECKs and unchanged prior card/publication
+   data against the backup. If SQL fails, stop; its transaction rolls back.
+4. Only with separate approval merge/deploy, then accept the owner flow with a
+   real material/product/guide, actual clipboard/browser upload, existing bot and
+   site export. No migration, server config, secret, merge or deploy is performed
+   by this PR.
+
+Local checks: TypeScript, `lib/istraart-manual*.test.ts`, catalog/Content Factory
+profile tests, build and `git diff --check`. Tests cover saved prompt/clipboard,
+exact file bytes, Telegram import, explicit real/AI kinds, cross-project/card/file
+rejection, publication defaults and old DTO/photos. SQL fixture
+`db/tests/istraart_manual_catalog.sql` is ONLY for a disposable DB (executed locally
+in PGlite/PostgreSQL WASM), preserving old rows and checking constraints without
+0041. No real ChatGPT generation, Telegram delivery, live KZ or browser acceptance
+is claimed by synthetic local tests.
