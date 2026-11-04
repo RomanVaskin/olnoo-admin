@@ -1,3 +1,5 @@
+import * as catalogSchema from './catalog-schema.ts'
+import * as catalogHttp from './catalog-http.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -14,7 +16,7 @@ function load(file: string, modules: Record<string, unknown>) {
   const compiled = ts.transpileModule(readFileSync(new URL(file, import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText
   const exports: Record<string, any> = {}
   class NextResponse extends Response { static json = Response.json }
-  new Function('require', 'exports', compiled)((name: string) => name === 'next/server' ? { NextResponse } : (assert.ok(name in modules, name), modules[name]), exports)
+  new Function('require', 'exports', compiled)((name: string) => name === '@/lib/catalog-schema' ? catalogSchema : name === '@/lib/catalog-http' ? catalogHttp : name === 'next/server' ? { NextResponse } : (assert.ok(name in modules, name), modules[name]), exports)
   return exports
 }
 const params = { params: Promise.resolve({ id: cardId }) }

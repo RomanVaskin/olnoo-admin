@@ -1,3 +1,4 @@
+import { withCatalogSchemaGuard } from '@/lib/catalog-schema'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
@@ -6,7 +7,7 @@ import { readCatalogCardPhoto } from '@/lib/catalog-manual-media'
 import { manualPhotoCount, manualPhotoSelectionValid } from '@/lib/catalog-manual-photo-data'
 import { catalogCardErrors, publishableCatalogCard, validateCatalogCard, type CatalogCardKind } from '@/lib/catalog-card'
 
-export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+async function patch(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const projectId = await resolveProjectId(new URL(req.url).searchParams.get('project'))
   if (!projectId) return NextResponse.json({ error: 'Unknown project' }, { status: 400 })
   const { id } = await params
@@ -66,3 +67,5 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     throw error
   }
 }
+
+export const PATCH = withCatalogSchemaGuard(patch)

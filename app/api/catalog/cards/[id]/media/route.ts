@@ -1,3 +1,4 @@
+import { withCatalogSchemaGuard } from '@/lib/catalog-schema'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
@@ -12,11 +13,11 @@ async function card(req: Request, id: string) {
     WHERE c.id=$1 AND c.project_id=$2 AND i.origin_kind='own'`, [id, projectId])
   return rows[0] ? { projectId, row: rows[0] } : null
 }
-export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+async function get(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const found = await card(req, (await params).id)
   return found ? NextResponse.json({ media: manualCatalogPhotos(found.row.manual_media) }, { headers }) : NextResponse.json({ error: 'Not found' }, { status: 404, headers })
 }
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+async function post(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const origin = req.headers.get('origin')
   if (origin && origin !== new URL(req.url).origin) return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers })
   const { id } = await params
@@ -44,3 +45,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ media }, { status: 201, headers })
   } catch (err) { return NextResponse.json({ error: err instanceof CatalogMediaError ? err.message : 'Не удалось добавить изображение. Исходники сохранены.' }, { status: err instanceof CatalogMediaError ? err.status : 422, headers }) }
 }
+
+export const GET = withCatalogSchemaGuard(get)
+export const POST = withCatalogSchemaGuard(post)

@@ -1,14 +1,15 @@
+import { withCatalogSchemaGuard } from '@/lib/catalog-schema'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { getIstraArtStyle, saveIstraArtStyle } from '@/lib/istraart-style-store'
 import { validateIstraArtStyle } from '@/lib/istraart-style'
 const headers = { 'Cache-Control': 'no-store' }
-export async function GET(req: Request) {
+async function get(req: Request) {
   if (new URL(req.url).searchParams.get('project') !== 'istraart') return NextResponse.json({ error: 'Not found' }, { status: 404, headers })
   const prompt = await getIstraArtStyle(pool)
   return prompt === null ? NextResponse.json({ error: 'Not found' }, { status: 404, headers }) : NextResponse.json({ prompt }, { headers })
 }
-export async function PUT(req: Request) {
+async function put(req: Request) {
   const origin = req.headers.get('origin')
   if (origin && origin !== new URL(req.url).origin) return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers })
   if (new URL(req.url).searchParams.get('project') !== 'istraart') return NextResponse.json({ error: 'Not found' }, { status: 404, headers })
@@ -18,3 +19,6 @@ export async function PUT(req: Request) {
   const prompt = await saveIstraArtStyle(pool, body.prompt)
   return prompt === null ? NextResponse.json({ error: 'Not found' }, { status: 404, headers }) : NextResponse.json({ prompt }, { headers })
 }
+
+export const GET = withCatalogSchemaGuard(get)
+export const PUT = withCatalogSchemaGuard(put)

@@ -1,3 +1,4 @@
+import { withCatalogSchemaGuard } from '@/lib/catalog-schema'
 import { manualPhotoSelectionValid } from '@/lib/catalog-manual-photo-data'
 import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
@@ -6,7 +7,7 @@ import { resolveProjectId } from '@/lib/crm'
 import { catalogCardErrors, validateCatalogCard, type CatalogCardInput, type CatalogCardKind } from '@/lib/catalog-card'
 
 /** Internal OLNOO Admin route; remains behind the existing external Admin access layer. */
-export async function GET(req: Request) {
+async function get(req: Request) {
   const projectId = await resolveProjectId(new URL(req.url).searchParams.get('project'))
   if (!projectId) return NextResponse.json({ error: 'Unknown project' }, { status: 400 })
   const { rows } = await pool.query(
@@ -16,7 +17,7 @@ export async function GET(req: Request) {
   return NextResponse.json(rows)
 }
 
-export async function POST(req: Request) {
+async function post(req: Request) {
   const projectId = await resolveProjectId(new URL(req.url).searchParams.get('project'))
   if (!projectId) return NextResponse.json({ error: 'Unknown project' }, { status: 400 })
   const body = await req.json().catch(() => null)
@@ -77,3 +78,6 @@ export async function POST(req: Request) {
     throw error
   } finally { client.release() }
 }
+
+export const GET = withCatalogSchemaGuard(get)
+export const POST = withCatalogSchemaGuard(post)

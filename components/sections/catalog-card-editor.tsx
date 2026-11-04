@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { catalogResponseError } from '@/lib/catalog-http'
 import { IstraArtChatGptPrompt } from '@/components/sections/istraart-style-panel'
 import { CatalogManualUpload } from '@/components/sections/catalog-manual-upload'
 import { manualCatalogPhotos, manualPhotoCount, manualPhotoSelectionValid, type ManualCatalogPhoto } from '@/lib/catalog-manual-photo-data'
@@ -33,7 +34,7 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
     setLoading(true); setLoaded(false); setError(''); setServerErrors({})
     try {
       const res = await fetch(url, { cache: 'no-store' })
-      if (!res.ok) throw new Error('Не удалось загрузить карточку каталога.')
+      if (!res.ok) throw new Error(await catalogResponseError(res, 'Не удалось загрузить карточку каталога.'))
       const rows = await res.json() as Row[]
       const ownCards = rows.filter((r) => r.content_item_id === item.id)
       setCards(ownCards)
@@ -88,7 +89,7 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
   }
   const publicationErrors = catalogCardErrors(draft, photoCount, true, cardKind)
   if (!manualPhotoSelectionValid(draft, item.originalImageFiles, media)) publicationErrors.manualPhotoSelection = 'Выберите доступный файл для каждой отмеченной позиции.'
-  const errors = { ...publicationErrors, ...serverErrors }
+  const errors = serverErrors
   const hint = (key: string) => errors[key] ? <span id={`catalog-${item.id}-${key}`} role="alert" className="text-xs text-destructive">{errors[key]}</span> : null
   const invalid = (key: string) => ({ 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `catalog-${item.id}-${key}` : undefined })
   const field = 'border border-hairline bg-card px-3 py-2 text-sm'
@@ -110,12 +111,13 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
       {row?.published_at && project === 'istraart' && <a href="https://istraart.ru/#catalog" target="_blank" rel="noreferrer" className="text-sm text-blue underline">Открыть каталог IstraArt</a>}
       <p className="text-xs text-muted-foreground">Сохранение оставляет новую карточку черновиком. «Опубликовать на сайте» — ручное утверждение для сайта, отдельно от соцсетей. Сохранение изменений опубликованной карточки обновляет её на сайте.</p>
       <p className="text-xs text-muted-foreground">Добавляйте только подтверждённые предложения. Для каждого нужны описание, цена в ₽, доступность и выбранные фотографии. PDF не загружается и не выдаётся публично.</p>
-      {project === 'istraart' && <>
+      {project === 'istraart' && loaded && <>
         {cardKind === 'legacy' && <label className="text-sm">Задача для ChatGPT<select value={copyTask} onChange={(e) => setCopyTask(e.target.value as OfferKind)} className="ml-2 border border-hairline bg-card p-2">{kinds.map((k) => <option key={k} value={k}>{labels[k]}</option>)}</select></label>}
         <IstraArtChatGptPrompt task={cardKind === 'legacy' ? copyTask : cardKind} card={draft} originalText={item.originalText || item.ownBrief || ''} />
         {row ? <CatalogManualUpload key={row.id} project={project} cardId={row.id} disabled={busy || !loaded} onMedia={(photos) => { const id = row.id; setRow((current) => current?.id === id ? { ...current, manual_media: photos } : current); setCards((cards) => cards.map((c) => c.id === id ? { ...c, manual_media: photos } : c)) }} /> : <p className="text-xs text-muted-foreground">Сначала сохраните черновик карточки, затем загрузите изображения.</p>}
       </>}
-      {loading ? <p>Загрузка…</p> : <fieldset disabled={busy || !loaded} className="flex flex-col gap-3">
+      {!loading && !loaded && <button type="button" disabled={busy} onClick={() => load()} className={`${field} self-start disabled:opacity-50`}>Повторить загрузку карточек</button>}
+      {loading ? <p>Загрузка…</p> : loaded && <fieldset disabled={busy || !loaded} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-sm">Название<input {...invalid('title')} value={draft.title} onChange={(e) => change({ title: e.target.value })} maxLength={160} className={field} />{hint('title')}</label>
         <label className="flex flex-col gap-1 text-sm">Адрес карточки (латиница, цифры, дефисы)<input {...invalid('slug')} value={draft.slug} onChange={(e) => change({ slug: e.target.value })} maxLength={100} className={field} />{hint('slug')}</label>
         <label className="flex flex-col gap-1 text-sm">Описание карточки<textarea {...invalid('description')} value={draft.description} onChange={(e) => change({ description: e.target.value })} maxLength={10000} className={field} />{hint('description')}</label>
@@ -163,6 +165,7 @@ export function CatalogCardEditor({ project, item }: { project: string; item: So
           <label className="flex gap-2"><input type="checkbox" checked={createGuide} onChange={(e) => setCreateGuide(e.target.checked)} />Создать DIY-гайд для изделия</label>
           <p className="text-xs text-muted-foreground">Дополнительные карточки создаются отдельными черновиками без цены и наличия. Заполните и опубликуйте каждую отдельно.</p>
         </div>}
+        <p className="text-xs text-muted-foreground">{!row ? 'Сначала сохраните черновик карточки.' : dirty ? 'Сохраните изменения перед публикацией.' : Object.keys(publicationErrors).length ? `Для публикации: ${Object.values(publicationErrors).join(' ')}` : ''}</p>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => action()} disabled={!dirty && !!row} className={`${field} disabled:opacity-50`}>Сохранить карточку</button>
           <button type="button" onClick={() => action('publish')} disabled={!row || dirty || !!row.published_at || Object.keys(publicationErrors).length > 0} className={`${field} disabled:opacity-50`}>Опубликовать на сайте</button>
