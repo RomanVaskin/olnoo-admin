@@ -3,6 +3,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import * as validation from './catalog-card.ts'
+import * as photoData from './catalog-photo-data.ts'
 import { catalogInputFromRow, catalogPublicProjection } from './catalog-export.ts'
 
 // Execute the real handlers with an isolated DB/file boundary; no production writes.
@@ -12,6 +13,7 @@ function harness() {
   let nextId = 0
   let readable = true
   let failKind = ''
+  let photoHistory: unknown[] = [], sourceFiles = ['a.jpg', 'b.jpg']
   const query = async (sql: string, values: any[] = []) => {
     if (sql === 'BEGIN') { snapshot = structuredClone(saved); return { rows: [] } }
     if (sql === 'ROLLBACK') { saved = snapshot; return { rows: [] } }
@@ -19,19 +21,19 @@ function harness() {
     if (sql.includes('INSERT INTO catalog_cards')) {
       if (values[9] === failKind) throw Object.assign(new Error('fixture insert failure'), { code: '23503' })
       if (saved.some((r) => r.project_id === values[1] && r.slug === values[3])) throw Object.assign(new Error('duplicate'), { code: '23505' })
-      const row = { id: values[0], project_id: values[1], content_item_id: values[2], slug: values[3], title: values[4], description: values[5], length_cm: values[6], diameter_cm: values[7], offers: JSON.parse(values[8]), card_kind: values[9], parent_card_id: values[10], published_at: null, version: '2026-11-04', origin_kind: 'own', original_image_files: ['a.jpg', 'b.jpg'], original_image_urls: 'file:a,file:b', original_image_error: '' }
+      const row = { id: values[0], project_id: values[1], content_item_id: values[2], slug: values[3], title: values[4], description: values[5], length_cm: values[6], diameter_cm: values[7], offers: JSON.parse(values[8]), card_kind: values[9], parent_card_id: values[10], photo_versions: JSON.parse(values[11]), processed_image_versions: photoHistory, published_at: null, version: '2026-11-04', origin_kind: 'own', original_image_files: sourceFiles, original_image_urls: 'file:a,file:b', original_image_error: '' }
       saved.push(row)
       return { rows: [structuredClone(row)] }
     }
     if (sql.includes('FROM content_factory_items')) {
-      return { rows: ['owner-item', 'second-item'].includes(values[0]) && values[1] === 1 ? [{ id: values[0], original_image_files: ['a.jpg', 'b.jpg'] }] : [] }
+      return { rows: ['owner-item', 'second-item'].includes(values[0]) && values[1] === 1 ? [{ id: values[0], original_image_files: sourceFiles, processed_image_versions: photoHistory }] : [] }
     }
     if (sql.includes("card_kind = 'finished' FOR KEY SHARE")) return { rows: saved.filter((r) => r.id === values[0] && r.project_id === values[1] && r.content_item_id === values[2] && r.card_kind === 'finished') }
     if (sql.includes('UPDATE catalog_cards')) {
       const edit = sql.includes('SET slug')
       const row = saved.find((r) => r.id === values[edit ? 6 : 0] && r.project_id === values[edit ? 7 : 1])
       if (!row) return { rows: [] }
-      if (edit) Object.assign(row, { slug: values[0], title: values[1], description: values[2], length_cm: values[3], diameter_cm: values[4], offers: JSON.parse(values[5]) })
+      if (edit) Object.assign(row, { slug: values[0], title: values[1], description: values[2], length_cm: values[3], diameter_cm: values[4], offers: JSON.parse(values[5]), photo_versions: JSON.parse(values[9]) })
       else row.published_at = sql.includes('= NULL') ? null : '2026-11-04'
       return { rows: [structuredClone(row)] }
     }
@@ -46,13 +48,15 @@ function harness() {
       '@/lib/db': { pool: { query, connect: async () => ({ query, release() {} }) } },
       '@/lib/crm': { resolveProjectId: async (slug: string) => slug === 'istraart' ? 1 : 2 },
       '@/lib/catalog-card': validation,
+      '@/lib/catalog-photo-data': photoData,
+      '@/lib/catalog-photo-processing': { readCatalogSelectedPhoto: async () => readable ? Buffer.from('photo') : null },
       '@/lib/catalog-export': { catalogInputFromRow },
       '@/lib/content-factory-original-images': { readOriginalImage: async () => readable ? Buffer.from('photo') : null },
     }
     new Function('require', 'exports', compiled)((name: string) => { assert.ok(name in modules, name); return modules[name] }, exports)
     return exports
   }
-  return { create: load('../app/api/catalog/cards/route.ts'), update: load('../app/api/catalog/cards/[id]/route.ts'), stored: (id = firstId) => saved.find((r) => r.id === id)!, all: () => saved, failInsert: (kind: string) => { failKind = kind }, missingPhoto: () => { readable = false } }
+  return { create: load('../app/api/catalog/cards/route.ts'), update: load('../app/api/catalog/cards/[id]/route.ts'), stored: (id = firstId) => saved.find((r) => r.id === id)!, all: () => saved, seedPhotoHistory: (history: unknown[], files: string[]) => { photoHistory = history; sourceFiles = files }, failInsert: (kind: string) => { failKind = kind }, missingPhoto: () => { readable = false } }
 }
 const req = (body?: unknown, project = 'istraart') => new Request(`https://admin.test/api/catalog/cards?project=${project}`, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined)
 const firstId = '00000000-0000-4000-8000-000000000001'
@@ -183,4 +187,20 @@ test('failure creating a related guide rolls back the whole draft bundle', async
   const response = await h.create.POST(req({ contentItemId: 'owner-item', cardKind: 'finished', card, createRaw: true, createGuide: true }))
   assert.equal(response.status, 409)
   assert.deepEqual(h.all(), [])
+})
+
+test('a chosen processed version is saved on the card; foreign/unrelated version IDs are rejected', async () => {
+  const h = harness()
+  const version = '00000000-0000-4000-8000-000000000099', originalFilename = '00000000-0000-4000-8000-000000000088.png'
+  h.seedPhotoHistory([{ id: version, originalIndex: 0, originalFilename, filename: `${version}.png`, model: 'gemini-3.1-flash-image', provider: 'gemini', createdAt: '2026-11-04T00:00:00Z' }], [originalFilename])
+  const card = { ...validation.suggestCatalogCard({ id: 'wood', originalText: 'Материал' }), photoVersions: { 0: version }, offers: { raw: { title: 'Материал', description: 'Проверено', priceRub: 1500, available: true, imageIndexes: [0] } } }
+  const created = await h.create.POST(req({ contentItemId: 'owner-item', cardKind: 'raw', card }))
+  assert.equal(created.status, 201)
+  assert.deepEqual(h.stored().photo_versions, { 0: version })
+  const wrong = { ...card, photoVersions: { 0: '00000000-0000-4000-8000-000000000077' } }
+  assert.equal((await h.update.PATCH(req({ card: wrong }), params)).status, 422)
+  assert.deepEqual(h.stored().photo_versions, { 0: version })
+  assert.equal((await h.update.PATCH(req({ card: { ...card, photoVersions: {} } }), params)).status, 200)
+  assert.deepEqual(h.stored().photo_versions, {})
+  assert.equal(h.stored().published_at, null, 'photo choice must not publish the card')
 })

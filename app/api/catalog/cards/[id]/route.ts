@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { catalogInputFromRow } from '@/lib/catalog-export'
-import { readOriginalImage } from '@/lib/content-factory-original-images'
+import { readCatalogSelectedPhoto } from '@/lib/catalog-photo-processing'
+import { catalogPhotoVersionsValid } from '@/lib/catalog-photo-data'
 import { catalogCardErrors, publishableCatalogCard, validateCatalogCard, type CatalogCardKind } from '@/lib/catalog-card'
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -12,7 +13,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const body = await req.json().catch(() => null)
   if (!body || typeof body !== 'object') return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
   const { rows } = await pool.query<Record<string, any>>(
-    `SELECT c.*, c.updated_at::text AS version, i.original_image_files, i.original_image_error, i.original_image_urls, i.origin_kind
+    `SELECT c.*, c.updated_at::text AS version, i.original_image_files, i.original_image_error, i.original_image_urls, i.processed_image_versions, i.origin_kind
        FROM catalog_cards c JOIN content_factory_items i
          ON i.id = c.content_item_id AND i.project_id = c.project_id
       WHERE c.id = $1 AND c.project_id = $2`, [id, projectId],
@@ -24,8 +25,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (body.action === 'publish' && Object.keys(body).length === 1) {
     const files = current.original_image_files
     if (!Array.isArray(files) || current.original_image_error || files.length !== String(current.original_image_urls || '').split(',').filter(Boolean).length || !publishableCatalogCard(catalogInputFromRow(current), files.length, kind)) return NextResponse.json({ error: 'Проверьте поля и загрузку исходных фото перед публикацией.', fieldErrors: catalogCardErrors(catalogInputFromRow(current), Array.isArray(files) ? files.length : -1, true, kind) }, { status: 422 })
+    if (!catalogPhotoVersionsValid(current.photo_versions ?? {}, files, current.processed_image_versions)) return NextResponse.json({ error: 'Выбранная обработанная версия недоступна.', fieldErrors: { photoVersions: 'Выберите версию этого исходного фото.' } }, { status: 422 })
     const indexes = [...new Set(Object.values(catalogInputFromRow(current).offers).flatMap((offer) => offer.imageIndexes))]
-    for (const index of indexes) if (!await readOriginalImage(projectId, current.content_item_id, files[index]).catch(() => null)) return NextResponse.json({ error: 'Выбранное исходное фото недоступно. Проверьте загрузку фотографий.', fieldErrors: Object.fromEntries(Object.entries(body.card?.offers ?? current.offers).filter(([, offer]) => (offer as { imageIndexes: number[] }).imageIndexes.includes(index)).map(([kind]) => [`offers.${kind}.imageIndexes`, 'Выбранное фото недоступно на сервере.'])) }, { status: 409 })
+    for (const index of indexes) if (!await readCatalogSelectedPhoto(projectId, current.content_item_id, index, files, current.processed_image_versions, current.photo_versions ?? {}).catch(() => null)) return NextResponse.json({ error: 'Выбранное исходное фото недоступно. Проверьте загрузку фотографий.', fieldErrors: Object.fromEntries(Object.entries(body.card?.offers ?? current.offers).filter(([, offer]) => (offer as { imageIndexes: number[] }).imageIndexes.includes(index)).map(([kind]) => [`offers.${kind}.imageIndexes`, 'Выбранное фото недоступно на сервере.'])) }, { status: 409 })
     const updated = await pool.query(
       'UPDATE catalog_cards SET published_at = COALESCE(published_at, now()), updated_at = now() WHERE id = $1 AND project_id = $2 AND updated_at = $3::timestamptz RETURNING id, slug, published_at',
       [id, projectId, current.version],
@@ -44,17 +46,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: 'Проверьте отмеченные поля.', fieldErrors: catalogCardErrors(body.card, Array.isArray(current.original_image_files) ? current.original_image_files.length : -1, false, kind) }, { status: 422 })
   }
   const card = body.card
+  if (!catalogPhotoVersionsValid(card.photoVersions ?? {}, current.original_image_files, current.processed_image_versions)) return NextResponse.json({ error: 'Выбранная обработанная версия недоступна.', fieldErrors: { photoVersions: 'Выберите версию исходного фото этого материала.' } }, { status: 422 })
   if (current.published_at && !publishableCatalogCard(card, (current.original_image_files as unknown[]).length, kind)) return NextResponse.json({ error: 'Опубликованные предложения должны оставаться заполненными. Для очистки снимите карточку с публикации.', fieldErrors: catalogCardErrors(card, current.original_image_files.length, true, kind) }, { status: 422 })
   if (current.published_at) {
     const indexes = [...new Set(Object.values(card.offers as import('@/lib/catalog-card').CatalogOffers).flatMap((offer) => offer.imageIndexes))]
-    for (const index of indexes) if (!await readOriginalImage(projectId, current.content_item_id, (current.original_image_files as string[])[index]).catch(() => null)) return NextResponse.json({ error: 'Выбранное исходное фото недоступно. Проверьте загрузку фотографий.', fieldErrors: Object.fromEntries(Object.entries(body.card?.offers ?? current.offers).filter(([, offer]) => (offer as { imageIndexes: number[] }).imageIndexes.includes(index)).map(([kind]) => [`offers.${kind}.imageIndexes`, 'Выбранное фото недоступно на сервере.'])) }, { status: 409 })
+    for (const index of indexes) if (!await readCatalogSelectedPhoto(projectId, current.content_item_id, index, current.original_image_files, current.processed_image_versions, card.photoVersions ?? {}).catch(() => null)) return NextResponse.json({ error: 'Выбранное исходное фото недоступно. Проверьте загрузку фотографий.', fieldErrors: Object.fromEntries(Object.entries(body.card?.offers ?? current.offers).filter(([, offer]) => (offer as { imageIndexes: number[] }).imageIndexes.includes(index)).map(([kind]) => [`offers.${kind}.imageIndexes`, 'Выбранное фото недоступно на сервере.'])) }, { status: 409 })
   }
   try {
     const updated = await pool.query(
       `UPDATE catalog_cards SET slug = $1, title = $2, description = $3, length_cm = $4,
-         diameter_cm = $5, offers = $6::jsonb, updated_at = now()
+         diameter_cm = $5, offers = $6::jsonb, photo_versions = $10::jsonb, updated_at = now()
        WHERE id = $7 AND project_id = $8 AND updated_at = $9::timestamptz RETURNING id, slug, published_at`,
-      [card.slug, card.title, card.description, card.lengthCm, card.diameterCm, JSON.stringify(card.offers), id, projectId, current.version],
+      [card.slug, card.title, card.description, card.lengthCm, card.diameterCm, JSON.stringify(card.offers), id, projectId, current.version, JSON.stringify(card.photoVersions ?? {})],
     )
     return updated.rows[0] ? NextResponse.json(updated.rows[0]) : NextResponse.json({ error: 'Card changed. Reload it.' }, { status: 409 })
   } catch (error) {
