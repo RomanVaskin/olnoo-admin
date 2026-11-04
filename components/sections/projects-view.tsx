@@ -10,6 +10,7 @@ import {
   Td,
 } from '@/components/primitives'
 import { useI18n } from '@/components/i18n-provider'
+import { IstraArtStylePanel } from '@/components/sections/istraart-style-panel'
 import type { ModuleKey } from '@/lib/data'
 
 type ProjectRow = {
@@ -263,6 +264,7 @@ export function ProjectsView() {
       )}
 
       {form && form.id !== null && <BrandVoicePanel projectId={form.id} />}
+      {form && form.id !== null && form.slug === 'istraart' && <IstraArtStylePanel key={form.id} />}
 
       <label className="label-mono flex w-fit items-center gap-2 text-muted-foreground">
         <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />

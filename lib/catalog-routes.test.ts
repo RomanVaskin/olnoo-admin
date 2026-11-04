@@ -3,6 +3,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import * as validation from './catalog-card.ts'
+import * as manualData from './catalog-manual-photo-data.ts'
 import { catalogInputFromRow, catalogPublicProjection } from './catalog-export.ts'
 
 // Execute the real handlers with an isolated DB/file boundary; no production writes.
@@ -19,7 +20,7 @@ function harness() {
     if (sql.includes('INSERT INTO catalog_cards')) {
       if (values[9] === failKind) throw Object.assign(new Error('fixture insert failure'), { code: '23503' })
       if (saved.some((r) => r.project_id === values[1] && r.slug === values[3])) throw Object.assign(new Error('duplicate'), { code: '23505' })
-      const row = { id: values[0], project_id: values[1], content_item_id: values[2], slug: values[3], title: values[4], description: values[5], length_cm: values[6], diameter_cm: values[7], offers: JSON.parse(values[8]), card_kind: values[9], parent_card_id: values[10], published_at: null, version: '2026-11-04', origin_kind: 'own', original_image_files: ['a.jpg', 'b.jpg'], original_image_urls: 'file:a,file:b', original_image_error: '' }
+      const row = { id: values[0], project_id: values[1], content_item_id: values[2], slug: values[3], title: values[4], description: values[5], length_cm: values[6], diameter_cm: values[7], offers: JSON.parse(values[8]), card_kind: values[9], parent_card_id: values[10], manual_media: [], manual_photo_selection: JSON.parse(values[11]), published_at: null, version: '2026-11-04', origin_kind: 'own', original_image_files: ['a.jpg', 'b.jpg'], original_image_urls: 'file:a,file:b', original_image_error: '' }
       saved.push(row)
       return { rows: [structuredClone(row)] }
     }
@@ -31,7 +32,7 @@ function harness() {
       const edit = sql.includes('SET slug')
       const row = saved.find((r) => r.id === values[edit ? 6 : 0] && r.project_id === values[edit ? 7 : 1])
       if (!row) return { rows: [] }
-      if (edit) Object.assign(row, { slug: values[0], title: values[1], description: values[2], length_cm: values[3], diameter_cm: values[4], offers: JSON.parse(values[5]) })
+      if (edit) Object.assign(row, { slug: values[0], title: values[1], description: values[2], length_cm: values[3], diameter_cm: values[4], offers: JSON.parse(values[5]), manual_photo_selection: JSON.parse(values[9]) })
       else row.published_at = sql.includes('= NULL') ? null : '2026-11-04'
       return { rows: [structuredClone(row)] }
     }
@@ -46,6 +47,8 @@ function harness() {
       '@/lib/db': { pool: { query, connect: async () => ({ query, release() {} }) } },
       '@/lib/crm': { resolveProjectId: async (slug: string) => slug === 'istraart' ? 1 : 2 },
       '@/lib/catalog-card': validation,
+      '@/lib/catalog-manual-photo-data': manualData,
+      '@/lib/catalog-manual-media': { readCatalogCardPhoto: async () => readable ? Buffer.from('photo') : null },
       '@/lib/catalog-export': { catalogInputFromRow },
       '@/lib/content-factory-original-images': { readOriginalImage: async () => readable ? Buffer.from('photo') : null },
     }
@@ -183,4 +186,24 @@ test('failure creating a related guide rolls back the whole draft bundle', async
   const response = await h.create.POST(req({ contentItemId: 'owner-item', cardKind: 'finished', card, createRaw: true, createGuide: true }))
   assert.equal(response.status, 409)
   assert.deepEqual(h.all(), [])
+})
+
+test('a text-only owner material can publish a manually uploaded photo without exposing another card file', async () => {
+  const h = harness()
+  const empty = validation.suggestCatalogCard({ id: 'owner-item', originalText: 'Изделие' })
+  await h.create.POST(req({ contentItemId: 'owner-item', cardKind: 'finished', card: empty }))
+  const row = h.stored(), assetId = '00000000-0000-4000-8000-000000000099'
+  // Simulate the card metadata appended by the separately tested upload handler.
+  row.original_image_files = []; row.original_image_urls = ''
+  row.manual_media = [{ id: assetId, filename: `${assetId}.png`, slot: 0, kind: 'ai', origin: 'upload', mimeType: 'image/png', createdAt: '2026-11-04T00:00:00Z' }]
+  const card = { ...empty, offers: { finished: { title: 'Изделие', description: 'Проверено владельцем', priceRub: 1500, available: true, imageIndexes: [0] } }, manualPhotoSelection: { 0: assetId } }
+  assert.equal((await h.update.PATCH(req({ card }), params)).status, 200)
+  assert.deepEqual(row.manual_photo_selection, { 0: assetId })
+  assert.equal((await h.update.PATCH(req({ action: 'publish' }), params)).status, 200)
+  assert.ok(catalogPublicProjection(row))
+  const other = { ...card, manualPhotoSelection: { 0: '00000000-0000-4000-8000-000000000098' } }
+  assert.equal((await h.update.PATCH(req({ card: other }), params)).status, 422)
+  assert.deepEqual(row.manual_photo_selection, { 0: assetId })
+  assert.equal((await h.update.PATCH(req({ action: 'unpublish' }), params)).status, 200)
+  assert.equal(catalogPublicProjection(row), null)
 })
