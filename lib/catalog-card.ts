@@ -57,3 +57,10 @@ export function publicCatalogCard(input: CatalogCardInput) {
     ),
   }
 }
+
+/** Draft offers may be absent; every published offer needs confirmed content and a photo. */
+export function publishableCatalogCard(input: unknown, photoCount: number): input is CatalogCardInput {
+  return validateCatalogCard(input, photoCount) && Object.keys(input.offers).length > 0
+    && Object.values(input.offers).every((offer) => !!offer.description.trim() && offer.imageIndexes.length > 0
+      && new Set(offer.imageIndexes).size === offer.imageIndexes.length)
+}

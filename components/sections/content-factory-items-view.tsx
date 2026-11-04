@@ -1,5 +1,6 @@
 'use client'
 
+import { CatalogCardEditor } from './catalog-card-editor'
 import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
@@ -241,6 +242,8 @@ function ItemDetail({
             {item.originalImageFiles.length !== item.originalImageUrls.length && !item.originalImageError && <p className="text-destructive">{t.contentFactory.items.imagesIncomplete}</p>}
             {isCopy && !item.socialPostId && item.originalImageFiles.length !== item.originalImageUrls.length && <button onClick={retryOriginalImages} disabled={busy !== null} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.retryImages}</button>}
           </div>}
+
+          {item.originKind === 'own' && <CatalogCardEditor project={project} item={item} />}
 
           {item.reviewReason && (
             <p className="border border-hairline bg-background p-3 text-sm text-foreground">
