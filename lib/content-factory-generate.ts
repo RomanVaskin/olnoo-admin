@@ -333,9 +333,9 @@ export function parseOwnMaterialResult(raw: string, originalText: string, ownBri
     throw new ContentFactoryGenerateError('Own material output contains internal review metadata.')
   }
   const supplied = `${originalText} ${ownBrief}`
-  const prices = supplied.match(/\\d[\\d\\s]*(?:[.,]\\d+)?\\s*(?:₽|руб\\.?|RUB)\\b?/gi) ?? []
+  const prices = supplied.match(/\d[\d\s]*(?:[.,]\d+)?\s*(?:₽|руб\.?|RUB)/gi) ?? []
   for (const price of prices) {
-    const normalized = (value: string) => value.replace(/\\s+/g, '').toLowerCase().replace(/руб\\.?$/, 'руб')
+    const normalized = (value: string) => value.replace(/\s+/g, '').toLowerCase().replace(/руб\.?$/, 'руб')
     if (!normalized(result.body).includes(normalized(price))) {
       return { ...result, needsReview: true, reviewReason: 'Check that the original price and currency are preserved exactly before publishing.' }
     }
