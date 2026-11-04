@@ -40,6 +40,33 @@ test('style settings handler saves exactly one IstraArt prompt and rejects anoth
   assert.equal((await (await api.GET(request())).json()).prompt, 'Правка владельца')
 })
 
+test('style PUT permits the exact public Admin origin behind nginx and rejects foreign origins before DB access', async () => {
+  let writes = 0
+  const api = load('../app/api/projects/istraart-style/route.ts', {
+    '@/lib/istraart-style': styles, '@/lib/istraart-style-store': store,
+    '@/lib/db': { pool: { query: async (sql: string, args: unknown[]) => {
+      writes++; assert.match(sql, /^UPDATE projects/)
+      return { rows: [{ istraart_style_prompt: args[0] }] }
+    } } },
+  })
+  const request = (origin: string, extra: Record<string, string> = {}) => new Request('http://localhost:3140/api/projects/istraart-style?project=istraart', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: origin, ...extra }, body: JSON.stringify({ prompt: 'Стиль за nginx' }),
+  })
+  for (const extra of [{}, { Host: 'admin.olnoo.com', 'X-Forwarded-Host': 'admin.olnoo.com', 'X-Forwarded-Proto': 'https' }] as Record<string, string>[]) {
+    const response = await api.PUT(request('https://admin.olnoo.com', extra))
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).prompt, 'Стиль за nginx')
+  }
+  assert.equal(writes, 2)
+  for (const origin of ['https://evil.test', 'http://admin.olnoo.com', 'https://admin.olnoo.com.evil.test', 'https://admin.olnoo.com:444', 'null']) {
+    for (const extra of [{}, { 'X-Forwarded-Host': new URL(origin === 'null' ? 'https://evil.test' : origin).host, 'X-Forwarded-Proto': 'https' }] as Record<string, string>[]) {
+      assert.equal((await api.PUT(request(origin, extra))).status, 403)
+    }
+  }
+  assert.equal(writes, 2, 'foreign origins must not write even with spoofed proxy headers')
+  assert.equal((await api.PUT(request('http://localhost:3140'))).status, 200, 'retain direct same-origin development requests')
+})
+
 test('copy button writes the current card context and edited style to clipboard; failure offers visible text', async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
   try {
