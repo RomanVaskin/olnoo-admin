@@ -1010,6 +1010,8 @@ export const en = {
       generateError: 'Could not generate the article. Please try again.',
       publishError: 'Could not publish this material. Please try again.',
       publishedLinkLabel: 'Published post',
+      socialSection: 'Social networks',
+      socialSectionHint: 'Prepare text, choose a connected account, approve and publish. These actions do not publish the card in the website catalog.',
       languagesTitle: 'Telegram languages and channels',
       chooseChannel: 'Choose a connected channel',
       channelLoadError: 'Could not load Telegram channels.',

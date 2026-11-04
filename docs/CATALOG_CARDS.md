@@ -40,3 +40,27 @@ No DB integration was tested without the migration being applied to a disposable
 - IstraArt server calls these routes with its read-only project key and the existing external Basic Auth credentials (Authorization Basic plus the separate custom catalog header), then proxies only the published image bytes to visitors. No nginx exception, public opening of internal Admin APIs, shared browser secret, separate database or photo copy is required. Server variables must be configured by the operator through the existing secret mechanism; neither PR changes production/configuration.
 - Owner confirmed migration 0039 applied on KZ and table/four indexes/trigger verified. Do not reapply it for this stage. No additional migration is introduced.
 - Local tests cover draft/foreign project selection, token binding, unused photo denial, partial offers, whitelist and same-ID edits. No live Basic Auth/site/Telegram end-to-end check has been performed from this environment; perform after separately approved deployment and server secret setup.
+
+## Editor UX and validation (repository change, not deployed)
+- A new owner-material card suggests an editable title from the first source-text line
+  (then owner brief / generated title as fallbacks) and a Latin slug with an item-ID
+  suffix. It does not infer prices, availability, dimensions, or create offers.
+- The drawer separates **Каталог сайта IstraArt** from **Социальные сети**. Saving
+  a new card keeps it a **Черновик**. **Опубликовать на сайте** is the explicit human
+  approval action; **Опубликовано на сайте** shows a link to
+  `https://istraart.ru/#catalog`. Social preparation, account choice, approval and
+  publication remain independent and retain their Quality Gate.
+- `catalogCardErrors` is shared by the client and write APIs. Validation errors use
+  `fieldErrors` keyed by field path (for example `offers.raw.priceRub`), displayed
+  next to the corresponding input. New offers require an explicit availability
+  choice. Publication requires a confirmed positive price, description and selected
+  readable original photo for every enabled offer. Drafts can omit descriptions
+  and photos; published-card edits must stay complete. Fix fields and save before
+  publishing. Saving a published card updates the existing site card; unpublish
+  removes it from subsequent exports.
+- No schema, migration, export access policy or production configuration changes.
+  Local handler tests use isolated DB/file substitutes for raw and finished
+  materials: create/save/reload/edit/publish/unpublish, field errors, foreign project
+  denial and unreadable-photo denial. These are representative fixtures, not live
+  Telegram examples. Real source materials and live site acceptance still require
+  a separate post-deployment check; no production write is performed here.

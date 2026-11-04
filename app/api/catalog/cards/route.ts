@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
-import { validateCatalogCard } from '@/lib/catalog-card'
+import { catalogCardErrors, validateCatalogCard } from '@/lib/catalog-card'
 
 /** Internal OLNOO Admin route; remains behind the existing external Admin access layer. */
 export async function GET(req: Request) {
@@ -26,7 +26,7 @@ export async function POST(req: Request) {
   )
   if (!rows[0]) return NextResponse.json({ error: 'Owner material not found' }, { status: 404 })
   const files = rows[0].original_image_files
-  if (!Array.isArray(files) || !validateCatalogCard(body.card, files.length)) return NextResponse.json({ error: 'Invalid catalog card' }, { status: 422 })
+  if (!Array.isArray(files) || !validateCatalogCard(body.card, files.length)) return NextResponse.json({ error: 'Проверьте отмеченные поля.', fieldErrors: catalogCardErrors(body.card, Array.isArray(files) ? files.length : -1) }, { status: 422 })
   const card = body.card
   try {
     const created = await pool.query(
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
     )
     return NextResponse.json(created.rows[0], { status: 201 })
   } catch (error) {
-    if ((error as { code?: string }).code === '23505') return NextResponse.json({ error: 'Card or slug already exists' }, { status: 409 })
+    if ((error as { code?: string }).code === '23505') return NextResponse.json({ error: 'Карточка материала или адрес уже существуют. Перезагрузите редактор.', fieldErrors: { slug: 'Этот адрес уже используется. Если карточка материала уже создана, перезагрузите редактор.' } }, { status: 409 })
     throw error
   }
 }
