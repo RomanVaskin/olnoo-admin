@@ -19,32 +19,52 @@ export type CatalogCardInput = {
 }
 const kinds: OfferKind[] = ['raw', 'finished', 'guide']
 
-function validOffer(value: unknown, maxPhotoCount: number): value is Offer {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const v = value as Record<string, unknown>
-  return typeof v.title === 'string' && v.title.trim().length > 0 && v.title.length <= 160
-    && typeof v.description === 'string' && v.description.length <= 5000
-    && typeof v.priceRub === 'number' && Number.isSafeInteger(v.priceRub) && v.priceRub > 0 && v.priceRub <= 10_000_000
-    && typeof v.available === 'boolean'
-    && Array.isArray(v.imageIndexes)
-    && v.imageIndexes.length <= 10
-    && v.imageIndexes.every((n: unknown) => Number.isSafeInteger(n) && (n as number) >= 0 && (n as number) < maxPhotoCount)
-    && Object.keys(v).every((k) => ['title', 'description', 'priceRub', 'available', 'imageIndexes'].includes(k))
+export type CatalogFieldErrors = Record<string, string>
+
+/** One set of field rules for the editor and both write APIs. */
+export function catalogCardErrors(input: unknown, photoCount: number, publication = false): CatalogFieldErrors {
+  const errors: CatalogFieldErrors = {}
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { _form: 'Проверьте данные карточки.' }
+  const v = input as Record<string, unknown>
+  if (!Number.isSafeInteger(photoCount) || photoCount < 0 || photoCount > 10) errors._form = 'Исходные фотографии недоступны или их больше 10.'
+  if (typeof v.title !== 'string' || !v.title.trim() || v.title.length > 160) errors.title = 'Укажите название — от 1 до 160 символов.'
+  if (typeof v.slug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v.slug) || v.slug.length > 100) errors.slug = 'Используйте латинские буквы, цифры и одиночные дефисы, до 100 символов.'
+  if (typeof v.description !== 'string' || v.description.length > 10000) errors.description = 'Описание находки — не более 10 000 символов.'
+  for (const key of ['lengthCm', 'diameterCm']) {
+    const n = v[key]
+    if (n !== null && (typeof n !== 'number' || !Number.isFinite(n) || n <= 0 || n > 10000)) errors[key] = 'Укажите размер больше 0 и не больше 10 000 см или оставьте поле пустым.'
+  }
+  if (!v.offers || typeof v.offers !== 'object' || Array.isArray(v.offers)) errors.offers = 'Проверьте предложения карточки.'
+  else {
+    const offers = v.offers as Record<string, unknown>
+    if (publication && !Object.keys(offers).length) errors.offers = 'Добавьте хотя бы одно заполненное предложение для публикации.'
+    for (const [kind, value] of Object.entries(offers)) {
+      if (!kinds.includes(kind as OfferKind)) { errors.offers = 'Допустимы только заготовка, готовое изделие и DIY-гайд.'; continue }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) { errors.offers = 'Проверьте поля предложения.'; continue }
+      const o = value as Record<string, unknown>
+      const prefix = `offers.${kind}.`
+      if (typeof o.title !== 'string' || !o.title.trim() || o.title.length > 160) errors[prefix+'title'] = 'Укажите название предложения — от 1 до 160 символов.'
+      if (typeof o.description !== 'string' || o.description.length > 5000 || (publication && !o.description.trim())) errors[prefix+'description'] = publication ? 'Добавьте описание предложения, до 5000 символов.' : 'Описание предложения — не более 5000 символов.'
+      if (typeof o.priceRub !== 'number' || !Number.isSafeInteger(o.priceRub) || o.priceRub <= 0 || o.priceRub > 10000000) errors[prefix+'priceRub'] = 'Укажите подтверждённую цену: целое число от 1 до 10 000 000 ₽.'
+      if (typeof o.available !== 'boolean') errors[prefix+'available'] = 'Явно выберите доступность предложения.'
+      if (!Array.isArray(o.imageIndexes) || o.imageIndexes.length > 10 || !o.imageIndexes.every((n) => Number.isSafeInteger(n) && n >= 0 && n < photoCount) || (publication && (!o.imageIndexes.length || new Set(o.imageIndexes).size !== o.imageIndexes.length))) errors[prefix+'imageIndexes'] = 'Выберите хотя бы одно доступное исходное фото без повторов.'
+      if (Object.keys(o).some((key) => !['title','description','priceRub','available','imageIndexes'].includes(key))) errors._form = 'Предложение содержит неизвестные поля.'
+    }
+  }
+  if (Object.keys(v).some((key) => !['slug','title','description','lengthCm','diameterCm','offers'].includes(key))) errors._form = 'Карточка содержит неизвестные поля.'
+  return errors
+}
+export function validateCatalogCard(input: unknown, photoCount: number): input is CatalogCardInput {
+  return Object.keys(catalogCardErrors(input, photoCount)).length === 0
 }
 
-export function validateCatalogCard(input: unknown, photoCount: number): input is CatalogCardInput {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return false
-  if (!Number.isSafeInteger(photoCount) || photoCount < 0 || photoCount > 10) return false
-  const v = input as Record<string, unknown>
-  if (typeof v.slug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v.slug) || v.slug.length > 100) return false
-  if (typeof v.title !== 'string' || !v.title.trim() || v.title.length > 160) return false
-  if (typeof v.description !== 'string' || v.description.length > 10000) return false
-  if (![v.lengthCm, v.diameterCm].every((n) => n === null || (typeof n === 'number' && Number.isFinite(n) && n > 0 && n <= 10000))) return false
-  if (!v.offers || typeof v.offers !== 'object' || Array.isArray(v.offers)) return false
-  const offers = v.offers as Record<string, unknown>
-  if (!Object.keys(offers).every((key) => kinds.includes(key as OfferKind))) return false
-  if (!Object.values(offers).every((offer) => validOffer(offer, photoCount))) return false
-  return Object.keys(v).every((key) => ['slug','title','description','lengthCm','diameterCm','offers'].includes(key))
+export function suggestCatalogCard(source: { id: string; originalText?: string; ownBrief?: string; generatedTitle?: string }): CatalogCardInput {
+  const text = source.originalText?.trim() || source.ownBrief?.trim() || source.generatedTitle?.trim() || ''
+  const title = text.split(/\r?\n/).map((line) => line.trim()).find(Boolean)?.slice(0, 160) || 'Собственный материал'
+  const alphabet: Record<string, string> = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'ts',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya' }
+  const stem = title.toLowerCase().replace(/[а-яё]/g, (c) => alphabet[c]).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80).replace(/-$/, '') || 'material'
+  const suffix = source.id.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'new'
+  return { slug: `${stem}-${suffix}`, title, description: '', lengthCm: null, diameterCm: null, offers: {} }
 }
 
 /** Never expose an unfilled offer as a purchasable product. */
@@ -60,7 +80,5 @@ export function publicCatalogCard(input: CatalogCardInput) {
 
 /** Draft offers may be absent; every published offer needs confirmed content and a photo. */
 export function publishableCatalogCard(input: unknown, photoCount: number): input is CatalogCardInput {
-  return validateCatalogCard(input, photoCount) && Object.keys(input.offers).length > 0
-    && Object.values(input.offers).every((offer) => !!offer.description.trim() && offer.imageIndexes.length > 0
-      && new Set(offer.imageIndexes).size === offer.imageIndexes.length)
+  return Object.keys(catalogCardErrors(input, photoCount, true)).length === 0
 }

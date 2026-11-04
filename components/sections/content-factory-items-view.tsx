@@ -245,6 +245,10 @@ function ItemDetail({
 
           {item.originKind === 'own' && <CatalogCardEditor project={project} item={item} />}
 
+          <section className="flex flex-col gap-6 border-t border-hairline pt-4" aria-label={t.contentFactory.items.socialSection}>
+            <h3 className="label-mono">{t.contentFactory.items.socialSection}</h3>
+            {item.originKind === 'own' && <p className="text-sm text-muted-foreground">{t.contentFactory.items.socialSectionHint}</p>}
+
           {item.reviewReason && (
             <p className="border border-hairline bg-background p-3 text-sm text-foreground">
               <span className="label-mono text-muted-foreground">{t.contentFactory.items.reviewReasonLabel} </span>
@@ -400,6 +404,7 @@ function ItemDetail({
             })}
             <button onClick={publish} disabled={busy !== null || (!selectedRu && !selectedEn) || (selectedRu && channels.ru?.status !== 'published' && (!item.ruApprovedAt || ruAccount !== item.ruAccountId)) || (selectedEn && channels.en?.status !== 'published' && (!item.enApprovedAt || enAccount !== item.enAccountId)) || ((!selectedRu || channels.ru?.status === 'published') && (!selectedEn || channels.en?.status === 'published'))} className="label-mono border border-foreground bg-foreground px-3 py-2 text-background disabled:opacity-50">{busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.publishSelected}</button>
           </div>
+          </section>
         </div>
       </aside>
     </>
