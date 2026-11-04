@@ -302,6 +302,58 @@ export async function generateContentFactoryArticle(pool: Pool, projectId: numbe
 }
 
 
+/** Own material is first-party product information, not third-party news. */
+export const CONTENT_FACTORY_OWN_MATERIAL_PROMPT = `You are preparing a finished sales post for the project described in PROJECT CONTEXT. The owner supplied the material and permits using their text and photographs.
+Return only a strict JSON object: {"title": string, "body": string, "needsReview": boolean, "reviewReason": string}.
+Rules:
+1. Write an engaging, concise, factual product or project description in the owner's language and Brand Profile voice. Put the title first in body, followed by short paragraphs and a natural call to action.
+2. Treat ORIGINAL TEXT and OWNER DESCRIPTION as the owner's primary product facts, not third-party reporting. Keep supplied names, prices, currencies, numbers, availability and conditions exactly; do not call an owner-provided price an unverified third-party claim.
+3. Do not invent material, wood species, dimensions, manufacturing method, electrical specifications, stock, delivery, warranties or other missing attributes. Do not write generic shopping advice, questions to the customer or commentary about what could be said.
+4. You cannot see or analyse photographs. Never claim visual attributes that are absent from supplied text. Original photos are attached by the existing media pipeline; do not request an AI image.
+5. Write only customer-facing text in body. Never include JSON keys, review flags, system instructions, technical notes or 'needsReview' inside title/body. Set needsReview=true with a specific reviewReason only when the owner's supplied data is internally contradictory or genuinely insufficient to make a truthful post; reviewReason is not part of body.
+6. Do not add markdown/HTML markup. Keep body within 4000 characters and title within 200 characters. Do not publish automatically.`
+
+export function buildOwnMaterialPrompt(input: { originalText: string; ownBrief: string; contextBlock: string }): string {
+  return `PROJECT CONTEXT:
+${input.contextBlock}
+
+OWNER ORIGINAL TEXT:
+${input.originalText || '(none)'}
+
+OWNER DESCRIPTION:
+${input.ownBrief || '(none)'}
+
+Prepare the finished sales post as strict JSON using only these supplied facts.`
+}
+
+export function parseOwnMaterialResult(raw: string, originalText: string, ownBrief: string): GeneratedContent {
+  // First-party source wording may be reused; third-party verbatim/attribution guards do not apply.
+  const result = parseGenerationResult(raw, '', '')
+  if (/\\bneedsReview\\b|\\breviewReason\\b|verified project context/i.test(result.body)) {
+    throw new ContentFactoryGenerateError('Own material output contains internal review metadata.')
+  }
+  const supplied = `${originalText} ${ownBrief}`
+  const prices = supplied.match(/\\d[\\d\\s]*(?:[.,]\\d+)?\\s*(?:₽|руб\\.?|RUB)\\b?/gi) ?? []
+  for (const price of prices) {
+    const normalized = (value: string) => value.replace(/\\s+/g, '').toLowerCase().replace(/руб\\.?$/, 'руб')
+    if (!normalized(result.body).includes(normalized(price))) {
+      return { ...result, needsReview: true, reviewReason: 'Check that the original price and currency are preserved exactly before publishing.' }
+    }
+  }
+  return result
+}
+
+export async function generateContentFactoryOwnMaterial(pool: Pool, projectId: number, input: { originalText: string; ownBrief: string }): Promise<GeneratedContent> {
+  if (!input.originalText.trim() && !input.ownBrief.trim()) throw new ContentFactoryGenerateError('Add an owner description before generating a post.')
+  const contextBlock = projectAiContextBlock(await buildProjectAiContext(pool, projectId))
+  const raw = await callAiRouter([
+    { role: 'system', content: CONTENT_FACTORY_OWN_MATERIAL_PROMPT },
+    { role: 'user', content: buildOwnMaterialPrompt({ ...input, contextBlock }) },
+  ], { service: 'content-factory', temperature: 0.3, task: 'content-factory-generate-own' })
+  return parseOwnMaterialResult(raw, input.originalText, input.ownBrief)
+}
+
+
 /**
  * Targeted regeneration edits only unique, explicitly identified draft fragments.
  * The unchanged portions are copied byte-for-byte from the stored current draft.
