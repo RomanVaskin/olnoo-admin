@@ -26,7 +26,7 @@ export function CatalogManualUpload({ cardId, project, disabled, onMedia }: { ca
       const form = new FormData(); form.set('file', file); form.set('kind', kind); form.set('slot', slot); body = form
     }
     setBusy(true); setMessage('')
-    try { const r = await fetch(`/api/catalog/cards/${cardId}/media?project=${encodeURIComponent(project)}`, { method: 'POST', headers, body }); const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Ошибка загрузки.'); if (alive.current) { onMedia(data.media); setMessage('Изображение добавлено. Отметьте позицию фото и выберите файл в предложении ниже. Публикация не выполнялась.'); if (input.current) input.current.value = '' } }
+    try { const r = await fetch(`/api/catalog/cards/${cardId}/media?project=${encodeURIComponent(project)}`, { method: 'POST', headers, body }); const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Ошибка загрузки.'); if (alive.current) { onMedia(data.media); setMessage('Изображение добавлено. Отметьте позицию фото и выберите файл в галерее карточки. Публикация не выполнялась.'); if (input.current) input.current.value = '' } }
     catch (e) { if (alive.current) setMessage(e instanceof Error ? e.message : 'Ошибка загрузки.') }
     finally { if (alive.current) setBusy(false) }
   }

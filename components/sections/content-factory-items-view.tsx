@@ -209,18 +209,8 @@ function ItemDetail({
     call(`/api/content-factory/items/${item.id}/original-images`, { method: 'POST' }, 'originalImages')
   }
 
-  return (
-    <>
-      <div className="fixed inset-0 z-30 bg-foreground/10" onClick={onClose} aria-hidden />
-      <aside className="fixed right-0 top-0 z-40 flex h-full w-full max-w-lg flex-col overflow-y-auto border-l border-hairline bg-card">
-        <div className="flex items-center justify-between border-b border-hairline px-6 py-5">
-          <StatusPill status={item.status} />
-          <button onClick={onClose} className="label-mono flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground">
-            {t.common.close} <X className="size-3" aria-hidden />
-          </button>
-        </div>
-
-        <div className="flex flex-col gap-6 px-6 py-6">
+  const isIstraArt = project === 'istraart' && item.originKind === 'own'
+  const originalSection = (
           <div className="flex flex-col gap-1.5">
             {item.originKind === 'own' && <p className="text-sm font-medium">{t.contentFactory.items.ownMaterial}</p>}
             {isCopy && <p className="text-sm font-medium">{t.contentFactory.items.partnerCopy}</p>}
@@ -233,18 +223,8 @@ function ItemDetail({
               </a>
             )}
           </div>
-
-          {isCopy && <p className="border border-hairline bg-background p-3 text-sm">{t.contentFactory.items.previewWarning}</p>}
-          {(isCopy || item.originKind === 'own') && item.originalImageUrls.length > 0 && <div className="flex flex-col gap-2 border border-hairline bg-background p-3 text-sm">
-            <span className="label-mono text-muted-foreground">{t.contentFactory.items.originalImages} ({item.originalImageFiles.length}/{item.originalImageUrls.length})</span>
-            <div className="grid grid-cols-2 gap-2">{item.originalImageFiles.map((filename, index) => <img key={filename} src={`/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`${t.contentFactory.items.originalImages} ${index + 1}`} className="aspect-square w-full border border-hairline object-cover" />)}</div>
-            {item.originalImageError && <p className="text-destructive">{item.originalImageError}</p>}
-            {item.originalImageFiles.length !== item.originalImageUrls.length && !item.originalImageError && <p className="text-destructive">{t.contentFactory.items.imagesIncomplete}</p>}
-            {isCopy && !item.socialPostId && item.originalImageFiles.length !== item.originalImageUrls.length && <button onClick={retryOriginalImages} disabled={busy !== null} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.retryImages}</button>}
-          </div>}
-
-          {item.originKind === 'own' && <CatalogCardEditor project={project} item={item} />}
-
+  )
+  const socialSection = (
           <section className="flex flex-col gap-6 border-t border-hairline pt-4" aria-label={t.contentFactory.items.socialSection}>
             <h3 className="label-mono">{t.contentFactory.items.socialSection}</h3>
             {item.originKind === 'own' && <p className="text-sm text-muted-foreground">{t.contentFactory.items.socialSectionHint}</p>}
@@ -405,6 +385,34 @@ function ItemDetail({
             <button onClick={publish} disabled={busy !== null || (!selectedRu && !selectedEn) || (selectedRu && channels.ru?.status !== 'published' && (!item.ruApprovedAt || ruAccount !== item.ruAccountId)) || (selectedEn && channels.en?.status !== 'published' && (!item.enApprovedAt || enAccount !== item.enAccountId)) || ((!selectedRu || channels.ru?.status === 'published') && (!selectedEn || channels.en?.status === 'published'))} className="label-mono border border-foreground bg-foreground px-3 py-2 text-background disabled:opacity-50">{busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.publishSelected}</button>
           </div>
           </section>
+  )
+
+  return (
+    <>
+      <div className="fixed inset-0 z-30 bg-foreground/10" onClick={onClose} aria-hidden />
+      <aside className={`fixed right-0 top-0 z-40 flex h-full w-full flex-col overflow-y-auto border-l border-hairline bg-card ${isIstraArt ? 'max-w-3xl' : 'max-w-lg'}`}>
+        <div className="flex items-center justify-between border-b border-hairline px-6 py-5">
+          <StatusPill status={item.status} />
+          <button onClick={onClose} className="label-mono flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground">
+            {t.common.close} <X className="size-3" aria-hidden />
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-6 px-6 py-6">
+          {isIstraArt ? <details><summary className="cursor-pointer text-sm">Исходный материал и задание для соцсетей</summary><div className="mt-3">{originalSection}</div></details> : originalSection}
+
+          {isCopy && <p className="border border-hairline bg-background p-3 text-sm">{t.contentFactory.items.previewWarning}</p>}
+          {!isIstraArt && (isCopy || item.originKind === 'own') && item.originalImageUrls.length > 0 && <div className="flex flex-col gap-2 border border-hairline bg-background p-3 text-sm">
+            <span className="label-mono text-muted-foreground">{t.contentFactory.items.originalImages} ({item.originalImageFiles.length}/{item.originalImageUrls.length})</span>
+            <div className="grid grid-cols-2 gap-2">{item.originalImageFiles.map((filename, index) => <img key={filename} src={`/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`${t.contentFactory.items.originalImages} ${index + 1}`} className="aspect-square w-full border border-hairline object-cover" />)}</div>
+            {item.originalImageError && <p className="text-destructive">{item.originalImageError}</p>}
+            {item.originalImageFiles.length !== item.originalImageUrls.length && !item.originalImageError && <p className="text-destructive">{t.contentFactory.items.imagesIncomplete}</p>}
+            {isCopy && !item.socialPostId && item.originalImageFiles.length !== item.originalImageUrls.length && <button onClick={retryOriginalImages} disabled={busy !== null} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.retryImages}</button>}
+          </div>}
+
+          {item.originKind === 'own' && <CatalogCardEditor project={project} item={item} social={isIstraArt ? socialSection : undefined} />}
+
+          {!isIstraArt && socialSection}
         </div>
       </aside>
     </>
