@@ -10,17 +10,17 @@ import { ru } from './i18n/messages/ru.ts'
 
 function view(file: string, name: string, state: any[], modules: Record<string, unknown>) {
   let cursor = 0, refCursor = 0
-  const refs: any[] = []
+  const refs: any[] = [], effects: { run: () => void; deps: unknown[] }[] = []
   const compiled = ts.transpileModule(readFileSync(new URL(file, import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText
   const exports: Record<string, any> = {}
   const hooks = {
-    useEffect() {},
+    useEffect(run: () => void, deps: unknown[]) { effects.push({ run, deps }) },
     useRef(initial: any) { const slot = refCursor++; return refs[slot] ??= { current: initial } },
     useState(initial: any) { const slot = cursor++; if (!(slot in state)) state[slot] = typeof initial === 'function' ? initial() : initial; return [state[slot], (next: any) => { state[slot] = typeof next === 'function' ? next(state[slot]) : next }] },
   }
-  const dependencies = { ...modules, react: hooks, 'react/jsx-runtime': jsx }
+  const dependencies = { './manual-material-create': { ManualMaterialCreate: ManualCreate }, ...modules, react: hooks, 'react/jsx-runtime': jsx }
   new Function('require', 'exports', compiled + (name === 'ItemDetail' ? '\nexports.ItemDetail = ItemDetail;' : ''))((key: string) => { assert.ok(key in dependencies, key); return dependencies[key as keyof typeof dependencies] }, exports)
-  return Object.assign((props: any) => { cursor = 0; refCursor = 0; return exports[name](props) }, { refs })
+  return Object.assign((props: any) => { cursor = 0; refCursor = 0; effects.length = 0; return exports[name](props) }, { refs, effects })
 }
 function nodes(tree: any): any[] {
   if (!tree || typeof tree !== 'object') return []
@@ -34,7 +34,7 @@ const item = { id: '00000000-0000-4000-8000-000000000001', originalText: 'Кор
 const photoId = '00000000-0000-4000-8000-000000000002'
 const aiPhoto = { id: photoId, slot: 0, filename: `${photoId}.png`, kind: 'ai', origin: 'upload', mimeType: 'image/png', createdAt: '2026-11-05T00:00:00Z' }
 function row(kind = 'finished', id = 'card') { return { id, content_item_id: item.id, card_kind: kind, parent_card_id: kind === 'guide' ? 'card' : null, title: 'Название карточки', slug: `card-${kind}`, description: 'Отдельное описание карточки', length_cm: 50, diameter_cm: null, offers: { [kind]: { title: 'Название предложения', description: 'Описание предложения', priceRub: 1200, available: true, imageIndexes: [0] } }, manual_media: [aiPhoto], manual_photo_selection: {}, published_at: null as string | null } }
-const ManualUpload = () => null, ChatGptPrompt = () => null, CardCreate = () => null
+const ManualUpload = () => null, ChatGptPrompt = () => null, CardCreate = () => null, ManualCreate = () => null
 function editor(current = row(), cards = [current]) {
   const state: any[] = [true, current, cards, 'finished', null, false, false, 'finished', { title: current.title, slug: current.slug, description: current.description, lengthCm: current.length_cm, diameterCm: current.diameter_cm, offers: current.offers, manualPhotoSelection: current.manual_photo_selection }, {}, true, false, false, false, '']
   const render = view('../components/sections/catalog-card-editor.tsx', 'CatalogCardEditor', state, {
@@ -362,5 +362,72 @@ test('loading old guide/legacy records selects only a standalone product and nev
     assert.equal(nodes(render()).some((n) => n.type === 'option' && n.props.value === legacy.id), false)
     assert.deepEqual(records, original)
     assert.equal(requests, 1)
+  } finally { globalThis.fetch = before }
+})
+
+test('manual material form validates locally and reuses its request key across double saves and a failed response', async () => {
+  const before = globalThis.fetch
+  try {
+    const state: any[] = ['', false, ''], values: any[] = [], created: any[] = []
+    const render = view('../components/sections/manual-material-create.tsx', 'ManualMaterialCreate', state, {})
+    const props = { onCreated: (item: any) => created.push(item), onCancel() {} }
+    let requests = 0
+    globalThis.fetch = async (_url, init) => {
+      requests++
+      const form = init?.body as FormData
+      values.push({ key: form.get('requestId'), text: form.get('text'), file: await (form.get('file') as File).text() })
+      if (requests === 1) throw new Error('response lost')
+      return Response.json({ id: 'new-manual', originKind: 'own', status: 'new', originalText: form.get('text') })
+    }
+    const event = { preventDefault() {} }
+    await render(props).props.onSubmit(event)
+    assert.equal(requests, 0); assert.ok(text(render(props)).includes('Введите название'))
+    control(render(props), 'Название / описание').props.onChange({ target: { value: '  Коряга! 🌿  ' } })
+    render.refs[0].current = { files: [new File(['photo'], 'source.png')] }
+    const submit = render(props).props.onSubmit
+    await Promise.all([submit(event), submit(event)])
+    assert.equal(requests, 1); assert.equal(created.length, 0)
+    await render(props).props.onSubmit(event)
+    assert.equal(requests, 2); assert.equal(values[0].key, values[1].key)
+    assert.equal(values[1].text, '  Коряга! 🌿  '); assert.equal(values[1].file, 'photo')
+    assert.equal(created[0].status, 'new')
+  } finally { globalThis.fetch = before }
+})
+
+test('Add material is IstraArt-only; success inserts without reload, clears filter, opens existing editor and ignores stale list responses', async () => {
+  const before = globalThis.fetch
+  try {
+    const Header = () => null
+    const modules = { './catalog-card-editor': { CatalogCardEditor: () => null }, './own-material-upload': { OwnMaterialUpload: () => null }, 'lucide-react': { X: () => null }, '@/components/primitives': { SectionHeader: Header, StatusPill: () => null, TableShell: () => null, Th: () => null, Td: () => null }, '@/components/project-selector': { ProjectSelector: () => null }, '@/components/i18n-provider': { useI18n: () => ({ t: ru }) } }
+    const state: any[] = [[], 'ready', null, false, false]
+    const render = view('../components/sections/content-factory-items-view.tsx', 'ContentFactoryItemsView', state, modules)
+    const props = { project: 'istraart', onProjectChange() {} }
+    let releaseOld: (r: Response) => void = () => {}, calls = 0
+    globalThis.fetch = async () => { calls++; return calls === 1 ? new Promise<Response>((resolve) => { releaseOld = resolve }) : Response.json([created]) }
+    let tree = render(props)
+    const initialEffect = render.effects.find((e) => e.deps?.length === 2 && e.deps[0] === 'istraart')!
+    initialEffect.run()
+    const header = nodes(tree).find((n) => n.type === Header)
+    button(header.props.action, '+ Добавить материал').props.onClick()
+    tree = render(props)
+    const form = nodes(tree).find((n) => n.type === ManualCreate)
+    assert.ok(form)
+    const created = { ...item, id: 'manual-created', originKind: 'own', status: 'new' }
+    form.props.onCreated(created)
+    assert.deepEqual(state[0], [created]); assert.equal(state[1], ''); assert.equal(state[2].id, created.id); assert.equal(state[4], false)
+    tree = render(props)
+    assert.ok(nodes(tree).some((n) => n.props?.item?.id === created.id), 'opens the existing ItemDetail')
+    const filterEffect = render.effects.find((e) => e.deps?.length === 2 && e.deps[0] === 'istraart')!
+    filterEffect.run()
+    assert.equal(state[2].id, created.id, 'filter reset must not close the newly created editor')
+    releaseOld(Response.json([]))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(state[0], [created], 'older list response must not remove the new material')
+    form.props.onCreated(created)
+    assert.equal(state[0].length, 1)
+    const other = render({ ...props, project: 'other' })
+    assert.equal(button(nodes(other).find((n) => n.type === Header).props.action, '+ Добавить материал'), undefined)
+    form.props.onCreated({ ...created, id: 'late-other' })
+    assert.equal(state[0].length, 1, 'late creation callback cannot insert in another project')
   } finally { globalThis.fetch = before }
 })

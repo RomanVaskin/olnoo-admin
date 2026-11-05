@@ -555,3 +555,57 @@ exclusive types, additional independent products, no guide/legacy selection,
 uncertain responses, original upload/text preservation and project/status/error
 boundaries, alongside prior media/prompt/publication tests. Local tests are not
 live Telegram or production/browser acceptance. No migrations, merge or deploy.
+
+### Create a manual IstraArt source material in Admin
+
+Content Factory → Materials for project `istraart` has **+ Добавить материал**.
+The form requires text (up to 10,000 characters), accepts optional JPEG/PNG/WebP
+photos (up to 10, each <=10 MiB), and offers Save/Cancel. Success prepends the
+returned own-material DTO without a page reload, clears a status filter and opens
+the existing IstraArt editor. A stale list response cannot remove the new item;
+filter reset preserves the newly opened editor, and project switching prevents a
+late form response from inserting into a different project. Other projects do not
+get the button/form and retain the previous GET/filter/editor flow.
+
+A new multipart **POST /api/content-factory/items?project=istraart** extends the
+existing list endpoint; GET is unchanged. Fields: `text`, stable UUID `requestId`,
+and repeated `file`. Only this project, a live/non-archived project row, same
+origin or the exact canonical Admin HTTPS Origin are accepted. Existing external
+Admin Basic Auth still protects the route; no new public endpoint, role system,
+secret or browser token is added. Bodies are bounded to 101 MiB and extra,
+malformed/duplicate fields, unsupported formats and invalid/per-file oversized
+images are rejected. The existing decoder validates every photo before writes.
+
+`lib/content-factory-manual-intake.ts` reuses createSource,
+storeNewSourceMessages/getItem and the original-image writer/reader/storage. Like
+the bot, the existing mandatory source registry holds a disabled internal source
+(`own-bot:admin`, hidden by the existing own-source rules). No Telegram request or
+intake-table write occurs. Item source text is stored verbatim, local image markers
+and immutable filenames stay ordered; origin_kind is own, status is new. No card,
+AI/Quality Gate call, Social post or publication is created automatically.
+
+The project lock serializes internal-source creation and repeat requests, and
+existing UNIQUE(source_id, external_id) provides the durable idempotency guard
+(`external_id=admin:<requestId>`). The open form reuses its key after errors and
+blocks double submission. A repeat compares exact source text, file count and
+SHA-256 of stored/input bytes, returns the same material (200) without new writes,
+and refuses changed data under the same key (409). A fresh explicit form has a new
+intent/key; no content-based global deduplication prevents intentional materials.
+No new DB table/column/index is required.
+
+Creation of source/item plus all file metadata is one transaction. Before-commit
+failure rolls back rows and removes only this attempt's new files, so a failed
+photo does not leave an empty source material. An uncertain COMMIT retains files
+and asks for the same request to be retried: either a complete material is found,
+or creation can resume without duplicate records. It never returns success for a
+partially uploaded material. Text-only material is intentionally valid; bad text
+or a bad file is not silently converted to a text-only record.
+
+The resulting DTO uses the same catalog/raw/finished/own-context/RU Social paths
+as Telegram own materials. Tests exercise actual card-create/publish handlers
+with a manually created material. Telegram code, published items/cards, price and
+approval rules, project prompts, schema, site and infrastructure are unchanged.
+Tests include real local original-file byte preservation, isolated transactional
+DB/HTTP boundaries, concurrency/uncertain commit, rollback and malformed inputs,
+UI state/retry/project isolation and downstream card publication. They do not
+claim live KZ/browser/Telegram acceptance; no production action, merge or deploy.

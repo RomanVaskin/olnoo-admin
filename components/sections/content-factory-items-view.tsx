@@ -1,8 +1,9 @@
 'use client'
 
+import { ManualMaterialCreate } from './manual-material-create'
 import { OwnMaterialUpload } from './own-material-upload'
 import { CatalogCardEditor } from './catalog-card-editor'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
@@ -435,18 +436,22 @@ export function ContentFactoryItemsView({
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [selected, setSelected] = useState<Item | null>(null)
   const [loading, setLoading] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const generation = useRef(0), activeProject = useRef(project), keepNewSelection = useRef(false)
+  if (activeProject.current !== project) { generation.current++; activeProject.current = project }
 
   async function load() {
     if (project === 'all') {
       setItems([])
       return
     }
+    const started = generation.current
     setLoading(true)
     try {
       const qs = new URLSearchParams({ project })
       if (statusFilter) qs.set('status', statusFilter)
       const res = await fetch(`/api/content-factory/items?${qs.toString()}`)
-      if (res.ok) setItems(await res.json())
+      if (res.ok) { const data = await res.json(); if (started === generation.current) setItems(data) }
     } finally {
       setLoading(false)
     }
@@ -454,8 +459,18 @@ export function ContentFactoryItemsView({
 
   useEffect(() => {
     load()
-    setSelected(null)
+    if (!keepNewSelection.current || project !== 'istraart') setSelected(null)
+    keepNewSelection.current = false
   }, [project, statusFilter])
+
+  useEffect(() => { setAdding(false) }, [project])
+
+  function handleCreated(item: Item) {
+    if (activeProject.current !== 'istraart') return
+    generation.current++; keepNewSelection.current = statusFilter !== ''; setStatusFilter(''); setAdding(false)
+    setItems((current) => [item, ...current.filter((existing) => existing.id !== item.id)])
+    setSelected(item)
+  }
 
   function handleUpdated(updated: Item) {
     setItems((current) => current.map((it) => (it.id === updated.id ? updated : it)))
@@ -468,8 +483,10 @@ export function ContentFactoryItemsView({
         index="03"
         title={t.contentFactory.items.title}
         description={t.contentFactory.items.description}
-        action={<ProjectSelector value={project} onChange={onProjectChange} />}
+        action={project === 'istraart' ? <div className="flex flex-wrap items-center gap-3"><ProjectSelector value={project} onChange={onProjectChange} /><button type="button" disabled={adding} onClick={() => { setSelected(null); setAdding(true) }} className="label-mono border border-hairline px-3 py-2 disabled:opacity-50">+ Добавить материал</button></div> : <ProjectSelector value={project} onChange={onProjectChange} />}
       />
+
+      {project === 'istraart' && adding && <ManualMaterialCreate onCreated={handleCreated} onCancel={() => setAdding(false)} />}
 
       {project === 'all' ? (
         <p className="text-sm text-muted-foreground">{t.contentFactory.selectProjectHint}</p>
