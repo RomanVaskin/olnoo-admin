@@ -930,3 +930,13 @@ existing original-images POST, existing validation and original-file storage;
 source text additions use existing ownBrief. No schema change or new intake
 service. Full compatibility/guard details: docs/CATALOG_CARDS.md → “Single-product
 IstraArt MVP”. Production, Telegram and the IstraArt site are not changed here.
+
+**Manual IstraArt source creation (repository change, not deployed):** Materials
+has an IstraArt-only Add form and a guarded multipart POST on the existing items
+endpoint. It reuses the own-source/item/originals model and immutable uploads,
+with a disabled hidden own-bot:admin source and durable request idempotency through
+existing source_id/external_id uniqueness. All photo metadata and item creation
+commit together; no empty material survives a known upload failure. No schema,
+Telegram intake, AI, catalog auto-creation, site or production change. Contract,
+limits and tests: docs/CATALOG_CARDS.md → “Create a manual IstraArt source material
+in Admin”.
