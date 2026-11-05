@@ -64,7 +64,7 @@ test('catalog retains one save and gallery with collapsed extras and independent
   assert.equal(button(render(), 'Опубликовать на сайте').props.disabled, true, 'dirty card requires save')
 })
 
-test('only independent material/product cards are selectable; old guides and links stay stored but hidden', () => {
+test('only independent material/product cards are selectable; old guides expose deletion only in a collapsed legacy list', () => {
   const finished = row(), raw = row('raw', 'raw'), guide = { ...row('guide','guide'), title: 'HIDDEN_GUIDE' }
   const { state, render } = editor(finished, [finished, raw, guide])
   control(render(), 'Товары').props.onChange({ target: { value: 'raw' } })
@@ -72,8 +72,10 @@ test('only independent material/product cards are selectable; old guides and lin
   assert.equal(nodes(render()).find((n) => n.type === ChatGptPrompt).props.task, 'raw')
   control(render(), 'Товары').props.onChange({ target: { value: 'card' } })
   assert.equal(nodes(render()).find((n) => n.type === ChatGptPrompt).props.task, 'finished')
-  assert.equal(text(render()).includes('DIY'), false)
-  assert.equal(text(render()).includes('HIDDEN_GUIDE'), false)
+  const legacy = nodes(render()).find((n) => n.type === 'details' && text(n).includes('HIDDEN_GUIDE'))
+  assert.ok(legacy); assert.equal(!!legacy.props.open, false)
+  assert.ok(button(legacy, 'Удалить товар'))
+  assert.equal(nodes(control(render(), 'Товары')).some((n) => text(n) === 'HIDDEN_GUIDE'), false)
   assert.equal(state[2].length, 3)
   assert.equal(state[2][2].parent_card_id, 'card')
 })
@@ -97,7 +99,7 @@ test('photo selection keeps originals and variants; legacy cards share one galle
   const legacy = { ...row(), card_kind: 'legacy', offers: { ...row().offers, ...row('raw').offers, ...row('guide').offers } }
   const old = editor(legacy)
   assert.equal(nodes(old.render()).filter((n) => n.type === 'img').length, 0)
-  assert.ok(text(old.render()).includes('прежнего формата сохранены'))
+  assert.ok(text(old.render()).includes('Данные сохранены'))
   assert.equal(button(old.render(), 'Сохранить'), undefined)
   assert.equal(Object.keys(legacy.offers).length, 3)
 })
@@ -149,7 +151,7 @@ test('source is visible and IstraArt exposes RU Social only, with independent gu
     const state: any[] = ['', source.generatedTitle, source.generatedText, '', '', channels, 'ru-channel', '', true, false, false, null, '', false, false]
     const CardEditor = () => null
     const render = view('../components/sections/content-factory-items-view.tsx', 'ItemDetail', state, {
-      './catalog-card-editor': { CatalogCardEditor: CardEditor }, './own-material-upload': { OwnMaterialUpload: () => null }, 'lucide-react': { X: () => null }, '@/components/primitives': { StatusPill: () => null }, '@/components/project-selector': {}, '@/components/i18n-provider': { useI18n: () => ({ t: ru }) },
+      '@/lib/catalog-http': http, './catalog-card-editor': { CatalogCardEditor: CardEditor }, './own-material-upload': { OwnMaterialUpload: () => null }, 'lucide-react': { X: () => null }, '@/components/primitives': { StatusPill: () => null }, '@/components/project-selector': {}, '@/components/i18n-provider': { useI18n: () => ({ t: ru }) },
     })
     let updated: any = null
     const props = { item: source, project: 'istraart', onClose() {}, onUpdated(value: any) { updated = value } }
@@ -332,7 +334,7 @@ test('source text additions use existing ownBrief edit without overwriting Teleg
   try {
     const source = { ...item, originKind: 'own', processingMode: 'ai', generatedTitle: '', generatedText: '', sourceLanguage: null, status: 'new', enText: '', ruText: '', aiReview: null, ruApprovedAt: null, enApprovedAt: null }
     const render = view('../components/sections/content-factory-items-view.tsx', 'ItemDetail', [], {
-      './catalog-card-editor': { CatalogCardEditor: () => null }, './own-material-upload': { OwnMaterialUpload: () => null }, 'lucide-react': { X: () => null }, '@/components/primitives': { StatusPill: () => null }, '@/components/project-selector': {}, '@/components/i18n-provider': { useI18n: () => ({ t: ru }) },
+      '@/lib/catalog-http': http, './catalog-card-editor': { CatalogCardEditor: () => null }, './own-material-upload': { OwnMaterialUpload: () => null }, 'lucide-react': { X: () => null }, '@/components/primitives': { StatusPill: () => null }, '@/components/project-selector': {}, '@/components/i18n-provider': { useI18n: () => ({ t: ru }) },
     })
     const requests: any[] = []
     globalThis.fetch = async (url, init) => { if (init?.method) { requests.push(JSON.parse(String(init.body))); return Response.json({ ...source, ownBrief: 'Дополнительные факты' }) }; return Response.json({ accounts: [], ru: null, en: null }) }
@@ -363,4 +365,90 @@ test('loading old guide/legacy records selects only a standalone product and nev
     assert.deepEqual(records, original)
     assert.equal(requests, 1)
   } finally { globalThis.fetch = before }
+})
+
+test('delete product confirms the stored title, cancels without a request, prevents duplicate clicks, refreshes only on success', async () => {
+  const beforeFetch = globalThis.fetch, beforeWindow = globalThis.window
+  try {
+    const { render, state } = editor()
+    const confirmations: string[] = []
+    let allow = false, requests = 0
+    globalThis.window = { confirm: (message: string) => { confirmations.push(message); return allow } } as unknown as Window & typeof globalThis
+    globalThis.fetch = async () => { requests++; throw new Error('should not fetch on cancel') }
+    await button(render(), 'Удалить товар').props.onClick()
+    assert.equal(requests, 0); assert.ok(confirmations[0].includes('Название карточки'))
+    allow = true
+    globalThis.fetch = async (_url, init) => { requests++; assert.equal(init?.method, 'DELETE'); return Response.json({ error: 'Сначала удалите гайд' }, { status: 409 }) }
+    await button(render(), 'Удалить товар').props.onClick()
+    assert.ok(text(render()).includes('Сначала удалите гайд')); assert.equal(state[1].id, 'card')
+    let release: () => void = () => {}
+    const wait = new Promise<void>((resolve) => { release = resolve })
+    const urls: string[] = []
+    globalThis.fetch = async (url, init) => {
+      urls.push(String(url))
+      if (init?.method === 'DELETE') { await wait; return Response.json({ id: 'card' }) }
+      return Response.json([row('raw','remaining')])
+    }
+    const handler = button(render(), 'Удалить товар').props.onClick
+    const pending = handler()
+    await handler()
+    assert.equal(urls.length, 1, 'in-flight duplicate cannot issue another DELETE')
+    release(); await pending
+    assert.equal(state[1].id, 'remaining')
+    assert.deepEqual(urls, ['/api/catalog/cards/card?project=istraart', '/api/catalog/cards?project=istraart'])
+  } finally { globalThis.fetch = beforeFetch; globalThis.window = beforeWindow }
+})
+
+test('materials show IstraArt deletion only, warn with related count, cancel safely and remove just the successful row', async () => {
+  const beforeFetch = globalThis.fetch, beforeWindow = globalThis.window
+  try {
+    const source = { ...item, originKind: 'own', generatedTitle: '', createdAt: '2026-11-05' }
+    const second = { ...source, id: 'second' }
+    const state: any[] = [[source, second], '', source, false]
+    const primitives = { SectionHeader: () => null, StatusPill: () => null, TableShell: () => null, Th: () => null, Td: () => null }
+    const render = view('../components/sections/content-factory-items-view.tsx', 'ContentFactoryItemsView', state, {
+      '@/lib/catalog-http': http, './catalog-card-editor': { CatalogCardEditor: () => null }, './own-material-upload': { OwnMaterialUpload: () => null }, 'lucide-react': { X: () => null },
+      '@/components/primitives': primitives, '@/components/project-selector': { ProjectSelector: () => null }, '@/components/i18n-provider': { useI18n: () => ({ t: ru }) },
+    })
+    const props = { project: 'istraart', onProjectChange() {} }
+    assert.equal(button(render({ ...props, project: 'aurelmar' }), 'Удалить'), undefined)
+    let confirmed = 0, allow = false, deletes = 0, related = true, failure = false
+    globalThis.window = { confirm: () => { confirmed++; return allow } } as unknown as Window & typeof globalThis
+    globalThis.fetch = async (_url, init) => {
+      if (init?.method === 'DELETE') { deletes++; return failure ? Response.json({ error: 'Материал изменился' }, { status: 409 }) : Response.json({ id: item.id }) }
+      return Response.json(related ? [{ content_item_id: item.id }, { content_item_id: item.id }] : [])
+    }
+    let stopped = false
+    const event = { stopPropagation() { stopped = true } }
+    // Row click must not open the detail drawer when deleting.
+    button(render(props), 'Удалить').props.onClick(event)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(stopped, true); assert.equal(confirmed, 0); assert.equal(deletes, 0)
+    assert.ok(text(render(props)).includes('карточки товаров: 2'))
+    related = false
+    button(render(props), 'Удалить').props.onClick(event)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(confirmed, 1); assert.equal(deletes, 0); assert.equal(state[0].length, 2)
+    allow = true; failure = true
+    button(render(props), 'Удалить').props.onClick(event)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(text(render(props)).includes('Материал изменился')); assert.equal(state[0].length, 2)
+    failure = false
+    button(render(props), 'Удалить').props.onClick(event)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(state[0].map((r: any) => r.id), ['second']); assert.equal(state[2], null)
+  } finally { globalThis.fetch = beforeFetch; globalThis.window = beforeWindow }
+})
+
+test('a successful DELETE is reflected locally even if refreshing cards fails', async () => {
+  const beforeFetch = globalThis.fetch, beforeWindow = globalThis.window
+  try {
+    const { render, state } = editor()
+    globalThis.window = { confirm: () => true } as unknown as Window & typeof globalThis
+    globalThis.fetch = async (_url, init) => init?.method === 'DELETE' ? Response.json({ id: 'card' }) : Response.json({ error: 'Каталог временно недоступен' }, { status: 503 })
+    await button(render(), 'Удалить товар').props.onClick()
+    assert.equal(state[1], null); assert.deepEqual(state[2], [])
+    assert.ok(text(render()).includes('Каталог временно недоступен'))
+    assert.equal(button(render(), 'Удалить товар'), undefined)
+  } finally { globalThis.fetch = beforeFetch; globalThis.window = beforeWindow }
 })

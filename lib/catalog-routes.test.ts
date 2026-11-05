@@ -1,3 +1,4 @@
+import * as deletion from './istraart-delete.ts'
 import * as catalogSchema from './catalog-schema.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -44,6 +45,7 @@ function harness() {
     const exports: Record<string, any> = {}
     const modules: Record<string, unknown> = {
       '@/lib/catalog-schema': catalogSchema,
+      '@/lib/istraart-delete': deletion,
       'node:crypto': { randomUUID: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12, '0')}` },
       'next/server': { NextResponse: { json: (body: unknown, init?: ResponseInit) => Response.json(body, init) } },
       '@/lib/db': { pool: { query, connect: async () => ({ query, release() {} }) } },

@@ -930,3 +930,15 @@ existing original-images POST, existing validation and original-file storage;
 source text additions use existing ownBrief. No schema change or new intake
 service. Full compatibility/guard details: docs/CATALOG_CARDS.md → “Single-product
 IstraArt MVP”. Production, Telegram and the IstraArt site are not changed here.
+
+**IstraArt deletion (repository change, not deployed):** existing item/card routes
+now expose IstraArt-scoped DELETE behind the existing external Basic Auth, with
+forwarded Basic-header and explicit Origin checks. Materials with any catalog
+cards are blocked with a count under a row lock; existing parent FK blocks deleting
+an item-linked product before its guide. Selected rows are removed without a new
+migration; media files, Social posts/publications and completed intake receipts
+are retained. Public export/photo selection excludes removed rows, and the existing
+IstraArt dynamic slug page returns notFound when the card is absent. Legacy/guide
+rows can be explicitly deleted from a collapsed editor list; no cascading deletion.
+Contract and verification limits: `docs/CATALOG_CARDS.md` → “Удаление материалов
+и товаров IstraArt”. No production, infrastructure or IstraArt-site changes.
