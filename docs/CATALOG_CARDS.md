@@ -423,3 +423,82 @@ photo variants, legacy gallery, save/publish/unpublish, field errors, Social
 approval/Quality Gate and separate publish requests. Existing media/API and style
 copy tests remain. These are local UI/handler checks, not live KZ acceptance or
 real Telegram/site publication; no production action is performed.
+
+### Three-block IstraArt workflow (after PR #114)
+
+Own IstraArt material drawers have three top-level blocks: **Исходный материал**
+(full stored Telegram text and all downloaded originals), **Каталог сайта**, and
+**Соцсети**. No source/intake files are rewritten. Other projects retain their
+previous layout and multilingual controls.
+
+**Creation:** the catalog starts with raw/finished/guide checkboxes. Any selected
+set creates independent drafts through the existing single-card POST contract;
+there is no new batch API or migration. A guide always requires an explicit
+finished-card selection, including an explicit “new product in this set” option.
+Existing finished cards are shown by name and slug; no first-match parent is
+inferred. All price/availability/approval rules remain. Additional sets can be
+started explicitly with “Новая подборка”; saving an existing card still PATCHes
+that card. During creation editing is locked after the existing unsaved-change
+confirmation. A partial failure retains prior drafts; stable per-intent slugs and
+GET reconciliation before retry prevent duplicates after uncertain POST results.
+DB slug uniqueness remains the final guard. If the drawer is closed, already
+created drafts remain available in its selector; the in-memory pending plan does
+not become a background queue.
+
+**Prompt:** each independent kind selects the corresponding task in the existing
+ChatGPT prompt builder, with the chosen card context. It still reads the current
+project prompt, including the owner's IstraArt Style v1.1. No separate prompt
+store, model or AI call is introduced. Legacy multi-offer cards retain explicit
+task selection.
+
+**Photos:** one “Загрузить фото” button accepts JPEG/PNG/WebP from a computer or
+phone (multiple files allowed, existing limits retained). IstraArt's simple mode
+makes only media POSTs, without Telegram-list requests or a kind selector. New
+free positions are assigned from existing ten slots. If positions are exhausted,
+the upload is refused rather than replacing/deleting files. A failure keeps all
+previously stored files, including earlier files in that selection. Originals
+and historical versions remain; existing selected source images still appear in
+the catalog to preserve old cards, while unselected Telegram originals stay in
+the first block. New card uploads are previewed before inclusion; selecting them,
+choosing a main image and reordering only edits the existing offer imageIndexes
+and manual_photo_selection until explicit save. First imageIndex is the main
+photo. Legacy offers retain separate ordered lists.
+
+Minimal media API compatibility change: multipart **omitted** kind now means
+`unclassified` (not real, not AI). Explicit real/ai and existing Telegram-import
+API calls remain supported. Invalid explicit kinds are rejected. The JSON
+manual_media validator/store now preserves unclassified as well as previous real
+and ai entries, with unchanged immutable files and project/card checks. Existing
+0042 JSONB array/object columns need no schema change. The upload route also
+accepts exactly the canonical HTTPS Admin Origin behind nginx, as the existing
+style PUT does; arbitrary forwarded headers do not grant access.
+
+**Social:** IstraArt displays RU controls only. EN values/approvals/publications
+remain stored, but hidden EN selections cannot cause an EN request from this UI.
+Other projects still show both languages. Generation, Brand Profile, Quality Gate,
+RU editing/account approval and publication keep the same server paths/guards.
+If an IstraArt item's prepared source language is not RU, the existing language
+and approval checks remain blocking; the UI explains this instead of relabelling
+EN content as Russian or bypassing approval.
+
+**Public relations:** export passes its token-bound project to catalogPublicCards.
+For IstraArt only, a raw card also lists exportable guides of its source, in the
+existing relatedCards DTO. Finished/guide exact parent links and same-project,
+same-source grouping remain. Draft/invalid cards are filtered before relations;
+source IDs and metadata never enter the DTO. Other projects' relation behavior is
+unchanged. The selected published card's Admin link targets its /catalog/slug URL.
+
+**Site limitation (read-only verification):** current
+`RomanVaskin/istraart` main, `lib/catalog-data.ts`, filters raw relatedCards to
+finished only. Therefore raw → guide is now available from OLNOO export but will
+still be removed by that site parser until a separate authorized IstraArt change.
+This PR does not change the site or claim that the new link is visible live.
+Existing raw → finished, finished → raw/guide and guide → raw/finished remain
+compatible. No live production acceptance is claimed.
+
+Checks cover all seven type combinations, explicit guide parents, partial/uncertain
+creation and double clicks, independent save/publish, current prompt task/copy,
+original files/variants and ordering, simple multi-upload failures, neutral kind
+storage, source display, RU-only sending and unchanged RU/EN in other projects,
+plus export privacy. No DB migration, merge, deploy or production action is part
+of this change.

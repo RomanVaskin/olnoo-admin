@@ -60,9 +60,10 @@ test('Admin uploads and Telegram imports store immutable originals on one card, 
   try {
     await attachManualCatalogPhoto(pool, projectId, cardId, image, 'ai', 0, 'upload')
     await importTelegramCatalogPhoto(pool, projectId, cardId, itemId, 0, 'real', 0)
-    assert.equal(media.length, 2)
+    await attachManualCatalogPhoto(pool, projectId, cardId, image, 'unclassified', 1, 'upload')
+    assert.equal(media.length, 3)
     assert.notEqual(media[0].id, media[1].id)
-    assert.deepEqual(media.map((p) => [p.kind, p.origin]), [['ai', 'upload'], ['real', 'telegram']])
+    assert.deepEqual(media.map((p) => [p.kind, p.origin]), [['ai', 'upload'], ['real', 'telegram'], ['unclassified', 'upload']])
     assert.equal(media[1].sourceItemId, itemId)
     for (const photo of media) assert.deepEqual(await readManualCatalogPhoto(projectId, cardId, photo.filename), image)
     assert.deepEqual(await readFile(originalImagePath(projectId, itemId, original)), image)
@@ -71,7 +72,7 @@ test('Admin uploads and Telegram imports store immutable originals on one card, 
     await assert.rejects(() => readManualCatalogPhoto(projectId, randomUUID(), media[0].filename))
     fail = true
     await assert.rejects(() => attachManualCatalogPhoto(pool, projectId, cardId, image, 'ai', 0, 'upload'))
-    assert.equal(media.length, 2)
+    assert.equal(media.length, 3)
     for (const photo of media) assert.deepEqual(await readManualCatalogPhoto(projectId, cardId, photo.filename), image)
     await assert.rejects(() => inspectCatalogUpload(Buffer.from('<svg></svg>')))
     await assert.rejects(() => inspectCatalogUpload(Buffer.alloc(10 * 1024 * 1024 + 1)))

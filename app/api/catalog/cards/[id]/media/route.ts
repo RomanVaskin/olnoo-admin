@@ -2,7 +2,7 @@ import { withCatalogSchemaGuard } from '@/lib/catalog-schema'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
-import { catalogUuid, manualCatalogPhotos } from '@/lib/catalog-manual-photo-data'
+import { catalogUuid, manualCatalogPhotos, type ManualCatalogPhoto } from '@/lib/catalog-manual-photo-data'
 import { CATALOG_UPLOAD_MAX, CatalogMediaError, attachManualCatalogPhoto, importTelegramCatalogPhoto } from '@/lib/catalog-manual-media'
 const headers = { 'Cache-Control': 'no-store' }
 async function card(req: Request, id: string) {
@@ -19,7 +19,7 @@ async function get(req: Request, { params }: { params: Promise<{ id: string }> }
 }
 async function post(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const origin = req.headers.get('origin')
-  if (origin && origin !== new URL(req.url).origin) return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers })
+  if (origin && origin !== new URL(req.url).origin && origin !== 'https://admin.olnoo.com') return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers })
   const { id } = await params
   const found = await card(req, id)
   if (!found) return NextResponse.json({ error: 'Not found' }, { status: 404, headers })
@@ -38,9 +38,9 @@ async function post(req: Request, { params }: { params: Promise<{ id: string }> 
     } else if (type.startsWith('multipart/form-data')) {
       const form = await new Request(req.url, { method: 'POST', headers: { 'Content-Type': type }, body: bytes }).formData()
       if ([...form.keys()].some((k) => !['file','kind','slot'].includes(k))) throw new CatalogMediaError('Некорректная загрузка.')
-      const file = form.get('file'), kind = form.get('kind'), slot = form.get('slot')
-      if (!(file instanceof File) || !['real','ai'].includes(String(kind)) || !/^[0-9]$/.test(String(slot))) throw new CatalogMediaError('Выберите файл, его тип и позицию.')
-      media = await attachManualCatalogPhoto(pool, found.projectId, id, Buffer.from(await file.arrayBuffer()), kind as 'real'|'ai', Number(slot), 'upload')
+      const file = form.get('file'), kind = form.get('kind') ?? 'unclassified', slot = form.get('slot')
+      if (!(file instanceof File) || !['real','ai','unclassified'].includes(String(kind)) || !/^[0-9]$/.test(String(slot))) throw new CatalogMediaError('Выберите файл, его тип и позицию.')
+      media = await attachManualCatalogPhoto(pool, found.projectId, id, Buffer.from(await file.arrayBuffer()), kind as ManualCatalogPhoto['kind'], Number(slot), 'upload')
     } else throw new CatalogMediaError('Используйте загрузку файла или Telegram-материал.')
     return NextResponse.json({ media }, { status: 201, headers })
   } catch (err) { return NextResponse.json({ error: err instanceof CatalogMediaError ? err.message : 'Не удалось добавить изображение. Исходники сохранены.' }, { status: err instanceof CatalogMediaError ? err.status : 422, headers }) }

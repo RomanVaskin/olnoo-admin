@@ -1,10 +1,10 @@
-export type ManualCatalogPhoto = { id: string; slot: number; filename: string; kind: 'real' | 'ai'; mimeType: string; origin: 'upload' | 'telegram'; createdAt: string; sourceItemId?: string; sourceIndex?: number }
+export type ManualCatalogPhoto = { id: string; slot: number; filename: string; kind: 'real' | 'ai' | 'unclassified'; mimeType: string; origin: 'upload' | 'telegram'; createdAt: string; sourceItemId?: string; sourceIndex?: number }
 export type ManualPhotoSelection = Record<string, string>
 export const catalogUuid = (v: string) => /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(v)
 export function manualCatalogPhotos(raw: unknown): ManualCatalogPhoto[] {
   if (!Array.isArray(raw)) return []
   return raw.filter((p): p is ManualCatalogPhoto => p && typeof p === 'object' && typeof p.id === 'string' && catalogUuid(p.id)
-    && Number.isInteger(p.slot) && p.slot >= 0 && p.slot < 10 && ['real', 'ai'].includes(p.kind)
+    && Number.isInteger(p.slot) && p.slot >= 0 && p.slot < 10 && ['real', 'ai', 'unclassified'].includes(p.kind)
     && ['upload', 'telegram'].includes(p.origin) && typeof p.filename === 'string' && new RegExp(`^${p.id}\\.(jpg|png|webp)$`).test(p.filename)
     && ['image/jpeg', 'image/png', 'image/webp'].includes(p.mimeType) && typeof p.createdAt === 'string' && Number.isFinite(Date.parse(p.createdAt)))
     .map((p) => ({ id: p.id, slot: p.slot, filename: p.filename, kind: p.kind, mimeType: p.mimeType, origin: p.origin, createdAt: p.createdAt,

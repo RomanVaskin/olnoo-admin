@@ -111,6 +111,8 @@ function ItemDetail({
   const [copyCompared, setCopyCompared] = useState(false)
   const [imageRights, setImageRights] = useState(false)
   const isCopy = item.processingMode === 'copy'
+  const ruOnly = project === 'istraart'
+  const selectedPublishEn = !ruOnly && selectedEn
   const linked = !!(item.socialPostId || item.enSocialPostId || item.enPublishClaimed || item.status === 'scheduled')
   const dirty = title !== item.generatedTitle || text !== item.generatedText
   const reviewPassed = item.aiReview?.status === 'passed' && (item.aiReview.risk === 'low' || item.aiReview.risk === 'medium') && item.aiReview.quality?.passed === true
@@ -183,7 +185,7 @@ function ItemDetail({
     setError('')
     const errors: string[] = []
     for (const language of (['ru', 'en'] as const)) {
-      if (language === 'ru' ? !selectedRu : !selectedEn) continue
+      if (language === 'ru' ? !selectedRu : !selectedPublishEn) continue
       if (channels[language]?.status === 'published') continue
       try {
         const res = await fetch(`/api/content-factory/items/${item.id}/publish?project=${encodeURIComponent(project)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ language }) })
@@ -226,7 +228,7 @@ function ItemDetail({
   )
   const socialSection = (
           <section className="flex flex-col gap-6 border-t border-hairline pt-4" aria-label={t.contentFactory.items.socialSection}>
-            <h3 className="label-mono">{t.contentFactory.items.socialSection}</h3>
+            {ruOnly ? <h2 className="label-mono">Соцсети</h2> : <h3 className="label-mono">{t.contentFactory.items.socialSection}</h3>}
             {item.originKind === 'own' && <p className="text-sm text-muted-foreground">{t.contentFactory.items.socialSectionHint}</p>}
 
           {item.reviewReason && (
@@ -352,12 +354,13 @@ function ItemDetail({
             </div>
           </div>
           <div className="flex flex-col gap-4 border border-hairline bg-card p-4 text-sm">
-            <span className="label-mono text-muted-foreground">{t.contentFactory.items.languagesTitle}</span>
+            <span className="label-mono text-muted-foreground">{ruOnly ? 'Публикация RU' : t.contentFactory.items.languagesTitle}</span>
             {isCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={copyCompared} onChange={(e) => setCopyCompared(e.target.checked)} />{t.contentFactory.items.confirmCopyText}</label>}
             {isCopy && item.originalImageUrls.length > 0 && <label className="flex items-start gap-2"><input type="checkbox" checked={imageRights} onChange={(e) => setImageRights(e.target.checked)} />{t.contentFactory.items.confirmImageRights}</label>}
+            {ruOnly && item.sourceLanguage !== 'ru' && <p className="text-muted-foreground">Для RU-публикации нужна подготовленная русская версия. Проверки языка и утверждения сохранены.</p>}
             <p>{t.contentFactory.items.sourceLanguage}: {item.sourceLanguage?.toUpperCase() ?? t.contentFactory.items.unknownLanguage}</p>
-            {isCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={partnerTranslationRights} onChange={(e) => setPartnerTranslationRights(e.target.checked)} />{t.contentFactory.items.confirmTranslationRights}</label>}
-            {(['ru', 'en'] as const).map((language) => {
+            {!ruOnly && isCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={partnerTranslationRights} onChange={(e) => setPartnerTranslationRights(e.target.checked)} />{t.contentFactory.items.confirmTranslationRights}</label>}
+            {(ruOnly ? ['ru'] as const : ['ru', 'en'] as const).map((language) => {
               const account = language === 'ru' ? ruAccount : enAccount
               const approved = language === 'ru' ? item.ruApprovedAt : item.enApprovedAt
               const publication = channels[language]
@@ -374,7 +377,7 @@ function ItemDetail({
                 <p className="text-muted-foreground">{t.contentFactory.items.approvalStatus}: {approved ? t.contentFactory.items.approved : t.contentFactory.items.notApproved} · {t.contentFactory.items.publicationStatus}: {publication?.status || '—'}</p>
                 {publication?.error && <p className="text-destructive">{publication.error}</p>}
                 {publication?.external_url && <a href={publication.external_url} target="_blank" rel="noreferrer" className="text-blue underline">{t.contentFactory.items.publishedLinkLabel}</a>}
-                {!native && item.sourceLanguage && <>
+                {!ruOnly && !native && item.sourceLanguage && <>
                   <button onClick={() => languageAction('translate', language)} disabled={busy !== null || !nativeApproved || !item.generatedText || !!(language === 'ru' ? item.socialPostId : item.enSocialPostId) || (isCopy && !partnerTranslationRights)} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{language === 'ru' ? t.contentFactory.items.translateRussian : t.contentFactory.items.translateEnglish}</button>
                   <textarea rows={10} value={translation} onChange={(e) => language === 'ru' ? setRuText(e.target.value) : setEnText(e.target.value)} className="w-full border border-hairline bg-card p-3" disabled={!!(language === 'ru' ? item.socialPostId : item.enSocialPostId)} />
                   <button onClick={() => languageAction('save_translation', language, undefined, translation)} disabled={busy !== null || !savedTranslation || translation === savedTranslation || !!(language === 'ru' ? item.socialPostId : item.enSocialPostId)} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{language === 'ru' ? t.contentFactory.items.saveRussian : t.contentFactory.items.saveEnglish}</button>
@@ -382,7 +385,7 @@ function ItemDetail({
                 <button onClick={() => languageAction(language === 'ru' ? 'approve_ru' : 'approve_en', language, account)} disabled={busy !== null || !account || !item.sourceLanguage || (!!approved && account === (language === 'ru' ? item.ruAccountId : item.enAccountId)) || publication?.status === 'published' || publication?.status === 'publishing' || (native ? (!isCopy && (!reviewPassed || dirty || !['ready', 'failed', 'scheduled'].includes(item.status))) || (isCopy && (!copyCompared || (item.originalImageUrls.length > 0 && !imageRights))) : (!savedTranslation || translation !== savedTranslation || !nativeApproved || (isCopy && !partnerTranslationRights)))} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.actionApprove} {language.toUpperCase()}</button>
               </div>
             })}
-            <button onClick={publish} disabled={busy !== null || (!selectedRu && !selectedEn) || (selectedRu && channels.ru?.status !== 'published' && (!item.ruApprovedAt || ruAccount !== item.ruAccountId)) || (selectedEn && channels.en?.status !== 'published' && (!item.enApprovedAt || enAccount !== item.enAccountId)) || ((!selectedRu || channels.ru?.status === 'published') && (!selectedEn || channels.en?.status === 'published'))} className="label-mono border border-foreground bg-foreground px-3 py-2 text-background disabled:opacity-50">{busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.publishSelected}</button>
+            <button onClick={publish} disabled={busy !== null || (!selectedRu && !selectedPublishEn) || (selectedRu && channels.ru?.status !== 'published' && (!item.ruApprovedAt || ruAccount !== item.ruAccountId)) || (selectedPublishEn && channels.en?.status !== 'published' && (!item.enApprovedAt || enAccount !== item.enAccountId)) || ((!selectedRu || channels.ru?.status === 'published') && (!selectedPublishEn || channels.en?.status === 'published'))} className="label-mono border border-foreground bg-foreground px-3 py-2 text-background disabled:opacity-50">{busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.publishSelected}</button>
           </div>
           </section>
   )
@@ -399,7 +402,7 @@ function ItemDetail({
         </div>
 
         <div className="flex flex-col gap-6 px-6 py-6">
-          {isIstraArt ? <details><summary className="cursor-pointer text-sm">Исходный материал и задание для соцсетей</summary><div className="mt-3">{originalSection}</div></details> : originalSection}
+          {isIstraArt ? <section aria-label="Исходный материал" className="flex flex-col gap-3 border border-hairline p-4"><h2 className="label-mono">Исходный материал</h2>{originalSection}<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{item.originalImageFiles.map((filename, index) => <img key={filename} src={`/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`Оригинальное фото ${index + 1}`} className="aspect-[4/5] w-full border border-hairline object-contain" />)}</div>{item.originalImageError && <p role="alert" className="text-sm text-destructive">{item.originalImageError}</p>}{item.originalImageFiles.length !== item.originalImageUrls.length && !item.originalImageError && <p role="alert" className="text-sm text-destructive">{t.contentFactory.items.imagesIncomplete}</p>}</section> : originalSection}
 
           {isCopy && <p className="border border-hairline bg-background p-3 text-sm">{t.contentFactory.items.previewWarning}</p>}
           {!isIstraArt && (isCopy || item.originKind === 'own') && item.originalImageUrls.length > 0 && <div className="flex flex-col gap-2 border border-hairline bg-background p-3 text-sm">
@@ -410,9 +413,9 @@ function ItemDetail({
             {isCopy && !item.socialPostId && item.originalImageFiles.length !== item.originalImageUrls.length && <button onClick={retryOriginalImages} disabled={busy !== null} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.retryImages}</button>}
           </div>}
 
-          {item.originKind === 'own' && <CatalogCardEditor project={project} item={item} social={isIstraArt ? socialSection : undefined} />}
+          {item.originKind === 'own' && <CatalogCardEditor project={project} item={item} />}
 
-          {!isIstraArt && socialSection}
+          {socialSection}
         </div>
       </aside>
     </>

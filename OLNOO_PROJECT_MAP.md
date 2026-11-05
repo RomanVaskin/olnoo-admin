@@ -912,3 +912,12 @@ unmerged 0041. Known missing 0042 columns now yield safe 503 diagnostics, not an
 empty catalog/default prompt. Card/style controls expose retry; publication guards
 remain. This change does not establish whether 0042 is installed on KZ. See
 `docs/CATALOG_CARDS.md` for affected endpoints and operator verification/recovery.
+
+**IstraArt three-block workflow (repository change, production not modified):**
+source text/originals → independent site cards → RU-only Social UI. Existing
+single-card APIs, project prompt and storage are reused. Optional multipart kind
+now defaults to neutral `unclassified` in existing JSON metadata, without schema
+changes or reclassifying old images. IstraArt-only export relations also include
+published raw → guide links, which the current IstraArt site parser still filters
+out; that site is not changed here. See `docs/CATALOG_CARDS.md` → “Three-block
+IstraArt workflow” for creation/retry semantics, photo order and limitations.

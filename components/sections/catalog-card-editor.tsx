@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, type ReactNode } from 'react'
+import { CatalogCardCreate } from './catalog-card-create'
 import { catalogResponseError } from '@/lib/catalog-http'
 import { IstraArtChatGptPrompt } from '@/components/sections/istraart-style-panel'
 import { CatalogManualUpload } from '@/components/sections/catalog-manual-upload'
@@ -93,18 +94,15 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
   const hint = (key: string) => errors[key] ? <span id={`catalog-${item.id}-${key}`} role="alert" className="text-xs text-destructive">{errors[key]}</span> : null
   const invalid = (key: string) => ({ 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `catalog-${item.id}-${key}` : undefined })
   const field = 'border border-hairline bg-card px-3 py-2 text-sm'
-  if (project === 'istraart') return <div className="flex min-w-0 flex-col gap-5">
+  if (project === 'istraart') return <section aria-label="Каталог сайта" className="flex min-w-0 flex-col gap-5">
     <div className="flex flex-col gap-3 border border-hairline p-4">
-      <h2 className="label-mono">Карточка IstraArt</h2>
+      <h2 className="label-mono">Каталог сайта</h2>
+      <CatalogCardCreate key={item.id} project={project} item={item} cards={cards} disabled={busy || !loaded} onCreated={load} beforeCreate={discardChanges} onBusyChange={setBusy} />
       {!!cards.length && <label className="flex min-w-0 flex-col gap-1 text-sm">Карточки этого материала<select aria-label="Карточки этого материала" disabled={busy || !loaded} value={row?.id ?? ''} onChange={(e) => { const selected = cards.find((c) => c.id === e.target.value); if (selected && discardChanges()) selectCard(selected) }} className={`${field} w-full min-w-0`}>
         <option value="" disabled>Новая карточка</option>
         {cards.map((card) => <option key={card.id} value={card.id}>{card.card_kind === 'legacy' ? 'Прежняя карточка' : labels[card.card_kind]} · {card.title} · {card.published_at ? 'Опубликовано на сайте' : 'Черновик'}</option>)}
       </select></label>}
-      <details><summary className="cursor-pointer text-sm">Создать ещё карточку из этого материала</summary><div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" disabled={busy || !loaded} onClick={() => startNew('finished')} className={`${field} disabled:opacity-50`}>Создать изделие</button>
-        <button type="button" disabled={busy || !loaded} onClick={() => startNew('raw')} className={`${field} disabled:opacity-50`}>Создать карточку исходного материала</button>
-        {row?.card_kind === 'finished' && <button type="button" disabled={busy || !loaded} onClick={() => startNew('guide', row.id)} className={`${field} disabled:opacity-50`}>Создать DIY-гайд для изделия</button>}
-      </div></details>
+
     </div>
     {loading && <p role="status">Загрузка…</p>}
     {!loading && !loaded && <button type="button" disabled={busy} onClick={() => load()} className={`${field} self-start disabled:opacity-50`}>Повторить загрузку карточек</button>}
@@ -141,32 +139,41 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
             <label className="flex flex-col gap-1 text-sm">Дополнительное описание карточки<textarea rows={3} {...invalid('description')} value={draft.description} onChange={(e) => change({ description: e.target.value })} maxLength={10000} className={field} />{hint('description')}</label>
             {visibleKinds.map((kind) => draft.offers[kind] && <label key={kind} className="flex flex-col gap-1 text-sm">Название предложения: {labels[kind]}<input {...invalid(`offers.${kind}.title`)} value={draft.offers[kind]!.title} onChange={(e) => offer(kind, { title: e.target.value })} maxLength={160} className={field} />{hint(`offers.${kind}.title`)}</label>)}
             <p className="text-xs text-muted-foreground">Дополнительное описание и названия предложений — отдельные поля сайта. Они сохраняются независимо от основного названия и описания товара.</p>
-            {!row && newKind === 'finished' && <>
-              <label className="flex gap-2 text-sm"><input type="checkbox" checked={createRaw} onChange={(e) => setCreateRaw(e.target.checked)} />Создать карточку исходного материала</label>
-              <label className="flex gap-2 text-sm"><input type="checkbox" checked={createGuide} onChange={(e) => setCreateGuide(e.target.checked)} />Создать DIY-гайд для изделия</label>
-              <p className="text-xs text-muted-foreground">Дополнительные карточки создаются отдельными черновиками. Заполните и опубликуйте каждую отдельно.</p>
-            </>}
+
           </div>
         </details>
       </fieldset>
       <fieldset disabled={busy || !loaded} className="flex min-w-0 flex-col gap-3 border border-hairline p-4">
         <legend className="label-mono px-1">Фотографии</legend>
-        {item.originalImageError && <p role="alert" className="text-sm text-destructive">{item.originalImageError}</p>}
-        {item.originalImageUrls && item.originalImageFiles.length !== item.originalImageUrls.length && !item.originalImageError && <p role="alert" className="text-sm text-destructive">Исходные фотографии загружены не полностью.</p>}
         {hint('manualPhotoSelection')}
         {visibleKinds.map((kind) => <div key={kind}>{hint(`offers.${kind}.imageIndexes`)}</div>)}
-        {!photoSlots.length && <p className="text-sm text-muted-foreground">Фотографий пока нет. Сохраните карточку и добавьте фото.</p>}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{photoSlots.map((index) => {
+        {!media.length && !Object.values(draft.offers).some((o) => o?.imageIndexes.length) && <p className="text-sm text-muted-foreground">Фотографий пока нет. Сохраните карточку и добавьте фото.</p>}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{photoSlots.filter((index) => media.some((p) => p.slot === index) || Object.values(draft.offers).some((o) => o?.imageIndexes.includes(index))).map((index) => {
           const selected = draft.manualPhotoSelection?.[String(index)] ?? ''
           const variants = media.filter((p) => p.slot === index)
-          const variant = variants.find((p) => p.id === selected)
-          const src = selected && row ? `/api/catalog/cards/${row.id}/media/${selected}?project=${encodeURIComponent(project)}` : item.originalImageFiles[index] ? `/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}` : null
+          const inCard = Object.values(draft.offers).some((o) => o?.imageIndexes.includes(index))
+          const variant = variants.find((p) => p.id === selected) ?? (!inCard ? variants.at(-1) : undefined)
+          const src = variant && row ? `/api/catalog/cards/${row.id}/media/${variant.id}?project=${encodeURIComponent(project)}` : item.originalImageFiles[index] ? `/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}` : null
           return <div key={index} className="flex min-w-0 flex-col gap-2 text-xs">
             {src ? <img src={src} alt={`Фото ${index + 1}`} className="aspect-[4/5] w-full border border-hairline object-contain" /> : <span className="text-muted-foreground">Выберите изображение</span>}
-            <span>{variant ? variant.kind === 'real' ? 'Реальное фото' : 'ИИ-визуализация' : 'Оригинал материала · тип не указан'}</span>
+            <span>Фото {index + 1}</span>
             {visibleKinds.map((kind) => {
               const value = draft.offers[kind]
-              return value && <label key={kind} className="flex items-start gap-1"><input type="checkbox" checked={value.imageIndexes.includes(index)} onChange={(e) => offer(kind, { imageIndexes: e.target.checked ? [...value.imageIndexes, index] : value.imageIndexes.filter((n) => n !== index) })} />{cardKind === 'legacy' ? labels[kind] : `В карточке · фото ${index + 1}`}</label>
+              const position = value?.imageIndexes.indexOf(index) ?? -1
+              return value && <div key={kind} className="flex flex-col gap-1">
+                <label className="flex items-start gap-1"><input type="checkbox" checked={position >= 0} onChange={(e) => {
+                  const offers = { ...draft.offers, [kind]: { ...value, imageIndexes: e.target.checked ? [...value.imageIndexes, index] : value.imageIndexes.filter((n) => n !== index) } }
+                  if (e.target.checked && variant) change({ offers, manualPhotoSelection: { ...draft.manualPhotoSelection, [index]: variant.id } })
+                  else change({ offers })
+                }} />{cardKind === 'legacy' ? labels[kind] : 'В карточке'}</label>
+                {position >= 0 && <>
+                  <span>{position === 0 ? 'Главное фото' : `Порядок: ${position + 1}`}</span>
+                  <div className="flex flex-wrap gap-1">
+                    <button type="button" disabled={position === 0} onClick={() => offer(kind, { imageIndexes: [index, ...value.imageIndexes.filter((n) => n !== index)] })} className="border border-hairline p-1 disabled:opacity-50">Сделать главным</button>
+                    {([-1, 1] as const).map((step) => <button key={step} type="button" disabled={position + step < 0 || position + step >= value.imageIndexes.length} onClick={() => { const order = [...value.imageIndexes]; [order[position], order[position + step]] = [order[position + step], order[position]]; offer(kind, { imageIndexes: order }) }} className="border border-hairline p-1 disabled:opacity-50">{step < 0 ? 'Раньше' : 'Позже'}</button>)}
+                  </div>
+                </>}
+              </div>
             })}
             {!!variants.length && Object.values(draft.offers).some((value) => value?.imageIndexes.includes(index)) && <select aria-label={`Файл для фото ${index + 1}`} value={selected} onChange={(e) => {
               const next = { ...draft.manualPhotoSelection }
@@ -175,11 +182,11 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
               change({ manualPhotoSelection: next })
             }} className="w-full min-w-0 border border-hairline bg-card py-1">
               <option value="" disabled={!item.originalImageFiles[index]}>{item.originalImageFiles[index] ? 'Исходное фото материала' : 'Выберите файл'}</option>
-              {variants.map((p, i) => <option key={p.id} value={p.id}>{p.kind === 'real' ? 'Реальное фото' : 'ИИ-визуализация'} · {i + 1}</option>)}
+              {variants.map((p, i) => <option key={p.id} value={p.id}>Вариант {i + 1}</option>)}
             </select>}
           </div>
         })}</div>
-        {row ? <details><summary className="cursor-pointer text-sm">Загрузить из Admin / Telegram</summary><div className="mt-3"><CatalogManualUpload key={row.id} project={project} cardId={row.id} disabled={busy || !loaded} onMedia={(photos) => { const id = row.id; setRow((current) => current?.id === id ? { ...current, manual_media: photos } : current); setCards((cards) => cards.map((c) => c.id === id ? { ...c, manual_media: photos } : c)) }} /></div></details> : <p className="text-xs text-muted-foreground">Загрузка из Admin и Telegram станет доступна после сохранения черновика.</p>}
+        {row ? <CatalogManualUpload simple usedSlots={[...new Set([...media.map((p) => p.slot), ...Object.values(draft.offers).flatMap((o) => o?.imageIndexes ?? [])])]} key={row.id} project={project} cardId={row.id} disabled={busy || !loaded} onMedia={(photos) => { const id = row.id; setRow((current) => current?.id === id ? { ...current, manual_media: photos } : current); setCards((cards) => cards.map((c) => c.id === id ? { ...c, manual_media: photos } : c)) }} /> : <p className="text-xs text-muted-foreground">Загрузка фото станет доступна после сохранения черновика.</p>}
       </fieldset>
       <details className="border border-hairline p-4"><summary className="label-mono cursor-pointer">ИИ-помощник</summary><div className="mt-3">
         {cardKind === 'legacy' && <label className="text-sm">Задача для ChatGPT<select value={copyTask} onChange={(e) => setCopyTask(e.target.value as OfferKind)} className="ml-2 border border-hairline bg-card p-2">{kinds.map((k) => <option key={k} value={k}>{labels[k]}</option>)}</select></label>}
@@ -189,11 +196,11 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
     {hint('_form')}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     <section aria-label="Публикация" className="flex flex-col gap-4 border border-hairline p-4">
-      <h2 className="label-mono">Публикация</h2>
+      <h3 className="label-mono">Публикация на сайте</h3>
       <fieldset disabled={busy || !loaded} className="flex flex-col gap-3">
         <legend className="text-sm font-medium">Сайт IstraArt</legend>
         <p className="text-sm">{row?.published_at ? 'Опубликовано на сайте' : 'Черновик'}</p>
-        {row?.published_at && <a href="https://istraart.ru/#catalog" target="_blank" rel="noreferrer" className="text-sm text-blue underline">Открыть каталог IstraArt</a>}
+        {row?.published_at && <a href={`https://istraart.ru/catalog/${encodeURIComponent(row.slug)}`} target="_blank" rel="noreferrer" className="text-sm text-blue underline">Открыть карточку IstraArt</a>}
         <p className="text-xs text-muted-foreground">{!row ? 'Сохраните черновик, затем заполните предложение для публикации.' : dirty ? 'Сохраните изменения перед публикацией.' : 'Публикация — ручное подтверждение цены, наличия, описания и выбранных фото. Сохранение опубликованной карточки обновляет её на сайте.'}</p>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => action()} disabled={!dirty && !!row} className={`${field} border-foreground bg-foreground text-background disabled:opacity-50`}>Сохранить карточку</button>
@@ -201,9 +208,9 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
           {row?.published_at && <button type="button" onClick={() => action('unpublish')} disabled={dirty} className={field}>Снять с публикации</button>}
         </div>
       </fieldset>
-      {social && <details className="min-w-0 border-t border-hairline pt-3"><summary className="cursor-pointer text-sm font-medium">Социальные сети · отдельное утверждение</summary><p className="mt-2 text-xs text-muted-foreground">Текст, каналы и утверждение соцсетей сохраняются отдельно от карточки сайта.</p>{social}</details>}
+
     </section>
-  </div>
+  </section>
   return <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
     <button type="button" onClick={() => setOpen(!open)} className="label-mono text-left">{project === 'istraart' ? 'Каталог сайта IstraArt' : 'Каталог сайта'} · {open ? 'Скрыть' : 'Оформить / редактировать'}</button>
     {open && <>

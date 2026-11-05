@@ -21,8 +21,8 @@ export async function inspectCatalogUpload(bytes: Buffer) {
   await sharp(bytes, { limitInputPixels: 40_000_000 }).raw().toBuffer().catch(() => { throw new CatalogMediaError('Файл изображения повреждён.') })
   return { extension, mimeType: extension === 'jpg' ? 'image/jpeg' : `image/${extension}` }
 }
-export async function attachManualCatalogPhoto(pool: Pool, projectId: number, cardId: string, bytes: Buffer, kind: 'real' | 'ai', slot: number, origin: 'upload' | 'telegram', source?: { sourceItemId: string; sourceIndex: number }) {
-  if (!['real','ai'].includes(kind) || !Number.isInteger(slot) || slot < 0 || slot > 9 || !['upload','telegram'].includes(origin)) throw new CatalogMediaError('Укажите тип изображения и позицию от 1 до 10.')
+export async function attachManualCatalogPhoto(pool: Pool, projectId: number, cardId: string, bytes: Buffer, kind: ManualCatalogPhoto['kind'], slot: number, origin: 'upload' | 'telegram', source?: { sourceItemId: string; sourceIndex: number }) {
+  if (!['real','ai','unclassified'].includes(kind) || !Number.isInteger(slot) || slot < 0 || slot > 9 || !['upload','telegram'].includes(origin)) throw new CatalogMediaError('Укажите тип изображения и позицию от 1 до 10.')
   const format = await inspectCatalogUpload(bytes)
   const client = await pool.connect()
   let target = '', written = false, commitSent = false

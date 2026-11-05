@@ -173,3 +173,15 @@ test('the actual export handler includes relatedCards and scopes the query to th
     else process.env.CATALOG_SITE_TOKENS = previous
   }
 })
+
+test('IstraArt raw adds published guides only; drafts, other projects/sources stay private and other project behavior is unchanged', () => {
+  const raw = { ...row, id: 'raw', card_kind: 'raw', offers: { raw: row.offers.raw } }
+  const product = { ...row, id: 'product', card_kind: 'finished', offers: { finished: row.offers.raw } }
+  const guide = { ...row, id: 'guide', card_kind: 'guide', parent_card_id: product.id, offers: { guide: row.offers.raw } }
+  const hidden = [{ ...guide, id: 'draft', published_at: null }, { ...guide, id: 'foreign', project_id: 99 }, { ...guide, id: 'other-source', item_id: 'private-source' }]
+  const cards = catalogPublicCards([raw, product, guide, ...hidden], 'istraart')
+  assert.deepEqual(cards.find((c) => c.id === raw.id)!.relatedCards?.map((c) => c.id), ['product','guide'])
+  assert.deepEqual(catalogPublicCards([raw, product, guide], 'other').find((c) => c.id === raw.id)!.relatedCards?.map((c) => c.id), ['product'])
+  assert.equal(JSON.stringify(cards.find((c) => c.id === raw.id)).includes('private-source'), false)
+  assert.deepEqual(cards.find((c) => c.id === guide.id)!.relatedCards?.map((c) => c.id), ['raw','product'])
+})
