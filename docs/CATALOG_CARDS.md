@@ -386,3 +386,40 @@ proxy configuration change or implicit trust in unverified headers is required.
 Requests without Origin retain their existing behavior. External Basic Auth,
 project scope and schema checks remain unchanged. Handler tests reproduce the
 internal/public URL mismatch; live proxy request headers were not inspected.
+
+### Compact IstraArt editor (UI only)
+
+For an own material in project `istraart`, the drawer now opens the catalog editor
+with four blocks: **Товар**, **Фотографии**, collapsed **ИИ-помощник**, and
+**Публикация**. A selector keeps all independent cards of the source available;
+creation of raw/finished/linked guide cards and optional companion drafts stays
+explicit. Legacy cards retain each independent offer.
+
+- The main card title and offer price/availability/description are prominent.
+  An absent offer still requires the existing explicit checkbox; no price,
+  availability or offer is inferred. Extra dimensions, slug, card description and
+  independent offer titles remain editable in a closed details block (opens for
+  field errors). These are separate stored fields, not synchronized or merged.
+- One gallery shows each photo position once, with per-offer inclusion for legacy
+  cards and the existing original/variant selection. Owner-declared real/AI kinds
+  are shown; unclassified source originals are labelled as such. Upload/import
+  controls are in a details block and use the same Admin/Telegram paths. Originals
+  and previous variants are retained, including when no offer/photo is selected.
+- The assistant uses the current project prompt from the existing API/DB,
+  including owner edits to IstraArt Style v1.1. No default prompt overwrite,
+  AI call, generation or migration is introduced.
+- One primary **Сохранить карточку** action and separate site publish/unpublish
+  controls keep existing validation/approval. Errors are displayed after explicit
+  save attempts, next to their fields; unloaded forms still fail closed/retry.
+- Existing Social controls are placed once inside Publication, in a closed
+  subsection. Their text saves, account choice, RU/EN approvals, Quality Gate,
+  Brand Profile and publish callbacks/guards remain independent of site saving.
+  Source text/own brief remain available in a separate collapsed source section.
+- Other projects and source/partner workflows retain their prior layout.
+
+Regression checks exercise actual component callbacks with controlled hook state
+and HTTP responses: independent card creation/switching, distinct field values,
+photo variants, legacy gallery, save/publish/unpublish, field errors, Social
+approval/Quality Gate and separate publish requests. Existing media/API and style
+copy tests remain. These are local UI/handler checks, not live KZ acceptance or
+real Telegram/site publication; no production action is performed.
