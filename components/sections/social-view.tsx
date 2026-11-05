@@ -17,6 +17,18 @@ const CHANNELS = ['telegram', 'instagram', 'threads', 'vk'] as const
 // reads process.env) just for a type.
 const EDITOR_ACTIONS = ['improve', 'shorten', 'punchy_opening', 'remove_ai_cliches', 'write_post', 'custom'] as const
 type EditorAction = (typeof EDITOR_ACTIONS)[number]
+// Mirrors lib/social-quality-gate.ts's QUALITY_CATEGORIES — kept as a plain local literal (not
+// imported), same client-bundle-hygiene reasoning as EDITOR_ACTIONS above.
+const QUALITY_CATEGORIES = ['specificity', 'factuality', 'brand_profile', 'structure', 'repetition_cliches', 'platform_fit', 'cta'] as const
+type QualityCategory = (typeof QUALITY_CATEGORIES)[number]
+type QualityFinding = {
+  category: QualityCategory
+  excerpt: string
+  explanation: string
+  recommendation: string
+  needsVerification: boolean
+}
+type QualityGateResult = { summary: string; findings: QualityFinding[] }
 
 type SocialStatus = (typeof STATUSES)[number]
 type SocialChannel = (typeof CHANNELS)[number]
@@ -116,6 +128,12 @@ function PostDetail({
   // clicking Apply).
   const [editorProposal, setEditorProposal] = useState<{ text: string; forPostId: string; forText: string } | null>(null)
   const [editorCustomInstruction, setEditorCustomInstruction] = useState('')
+  const [qualityBusy, setQualityBusy] = useState(false)
+  const [qualityError, setQualityError] = useState('')
+  // Carries the snapshot it was generated FOR (forPostId/forText), same reasoning as
+  // editorProposal above — a stale result must never be shown as current once Content or the open
+  // post changes, checked again at render time below via isEditorResultStillValid.
+  const [qualityResult, setQualityResult] = useState<{ result: QualityGateResult; forPostId: string; forText: string } | null>(null)
   // Always mirrors the latest Content/post id, read from inside runEditor's async continuation
   // (after an `await`) where a plain closure over `body`/`post.id` would still hold whatever they
   // were at the moment the request was FIRED, not what's on screen once it resolves. Assigning
@@ -145,6 +163,8 @@ function PostDetail({
     // looking busy for the newly-opened post — its own result is discarded by the staleness guard
     // in runEditor below regardless, via latestPostIdRef.
     setEditorBusyAction(null)
+    setQualityResult(null)
+    setQualityError('')
   }, [post])
 
   function toggleChannel(channel: SocialChannel) {
@@ -220,9 +240,10 @@ function PostDetail({
    * mismatch via the always-current `latestBodyRef`/`latestPostIdRef`, and the stale result — on
    * success or on failure alike — is discarded silently: never shown as a proposal, never applied,
    * never surfacing a confusing error for a post/text that's no longer on screen. */
-  async function runEditor(action: EditorAction) {
+  async function runEditor(action: EditorAction, customInstructionOverride?: string) {
+    const customInstruction = customInstructionOverride ?? editorCustomInstruction
     if (editorBusyAction || !body.trim()) return
-    if (action === 'custom' && !editorCustomInstruction.trim()) return
+    if (action === 'custom' && !customInstruction.trim()) return
     const requested = { postId: post.id, text: body }
     setEditorBusyAction(action)
     setEditorError('')
@@ -230,7 +251,7 @@ function PostDetail({
       const res = await fetch('/api/social/ai-edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project, text: requested.text, action, customInstruction: editorCustomInstruction }),
+        body: JSON.stringify({ project, text: requested.text, action, customInstruction }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
@@ -271,6 +292,49 @@ function PostDetail({
   /** Discards the proposal — Content (`body`) was never touched, so this simply drops it. */
   function cancelEditorProposal() {
     setEditorProposal(null)
+  }
+
+  /** Asks the Quality Gate (via /api/social/quality-gate) to review the current, possibly unsaved,
+   * Content once, against a fixed set of criteria. Read-only — never saves/publishes anything.
+   *
+   * Staleness guard (requirement): tied to the exact post id + Content text it was fired for, same
+   * pattern as runEditor above — a result that arrives after Content changed or the post was
+   * switched is discarded silently via isEditorResultStillValid/latestPostIdRef/latestBodyRef. */
+  async function runQualityCheck() {
+    if (qualityBusy || !body.trim()) return
+    const requested = { postId: post.id, text: body }
+    setQualityBusy(true)
+    setQualityError('')
+    try {
+      const res = await fetch('/api/social/quality-gate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, text: requested.text, channels }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        const message = data && typeof data.error === 'string' ? data.error : t.socialView.qualityGateError
+        throw new Error(message)
+      }
+      if (!isEditorResultStillValid(requested, { postId: latestPostIdRef.current, text: latestBodyRef.current })) return
+      setQualityResult({ result: data as QualityGateResult, forPostId: requested.postId, forText: requested.text })
+    } catch (err) {
+      if (!isEditorResultStillValid(requested, { postId: latestPostIdRef.current, text: latestBodyRef.current })) return
+      setQualityError(err instanceof Error ? err.message : t.socialView.qualityGateError)
+    } finally {
+      setQualityBusy(false)
+    }
+  }
+
+  /** "Suggest a fixed version" hands the findings off to the EXISTING AI Editor custom-instruction
+   * flow (editorCustomInstruction + runEditor('custom')) — no new apply/compare mechanism of its
+   * own; the existing compare/Apply/Cancel UI below handles the rest, unchanged. */
+  function suggestFixFromQuality(result: QualityGateResult) {
+    const instruction = result.findings
+      .map((f, i) => `${i + 1}. [${t.socialView.qualityGateCategory[f.category]}] ${f.recommendation}`)
+      .join('\n')
+    setEditorCustomInstruction(instruction)
+    void runEditor('custom', instruction)
   }
 
   /** Uploads a JPEG to /api/social/upload-instagram-image (saved server-side under this app's own
@@ -448,6 +512,57 @@ function PostDetail({
               )}
             </div>
           )}
+
+          {body.trim() !== '' && (() => {
+            // Hide (not show-with-warning) a result whose snapshot no longer matches live
+            // post.id/body — e.g. the user kept typing after the check ran, or switched posts.
+            const liveQualityResult =
+              qualityResult && isEditorResultStillValid({ postId: qualityResult.forPostId, text: qualityResult.forText }, { postId: post.id, text: body })
+                ? qualityResult.result
+                : null
+            return (
+              <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
+                <div className="flex items-center justify-between">
+                  <span className="label-mono text-muted-foreground">{t.socialView.qualityGateTitle}</span>
+                  <button
+                    onClick={runQualityCheck}
+                    disabled={qualityBusy}
+                    className="label-mono border border-hairline px-3 py-2 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+                  >
+                    {qualityBusy ? t.socialView.qualityGateRunning : t.socialView.qualityGateRun}
+                  </button>
+                </div>
+                {qualityError && <p className="text-sm text-destructive">{qualityError}</p>}
+                {liveQualityResult && (
+                  <div className="flex flex-col gap-3 border-t border-hairline pt-3">
+                    {liveQualityResult.summary && <p className="text-sm text-foreground">{liveQualityResult.summary}</p>}
+                    {liveQualityResult.findings.slice(0, 5).map((finding, i) => (
+                      <div key={i} className="flex flex-col gap-1 border border-hairline bg-background p-2.5 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="label-mono text-muted-foreground">{t.socialView.qualityGateCategory[finding.category]}</span>
+                          {finding.needsVerification && (
+                            <span className="label-mono text-amber-600">{t.socialView.qualityGateNeedsVerification}</span>
+                          )}
+                        </div>
+                        <p className="italic text-muted-foreground">&ldquo;{finding.excerpt}&rdquo;</p>
+                        <p className="text-foreground">{finding.explanation}</p>
+                        <p className="text-foreground/80">{finding.recommendation}</p>
+                      </div>
+                    ))}
+                    {liveQualityResult.findings.length > 0 && (
+                      <button
+                        onClick={() => suggestFixFromQuality(liveQualityResult)}
+                        disabled={editorBusyAction !== null}
+                        className="label-mono w-fit border border-hairline px-3 py-2 text-foreground transition-colors hover:bg-muted/60 disabled:opacity-50"
+                      >
+                        {t.socialView.qualityGateSuggestFix}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
 
           <div className="flex flex-col gap-3">
             <span className="label-mono text-muted-foreground">{t.socialView.channels}</span>
