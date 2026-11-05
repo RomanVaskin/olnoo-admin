@@ -120,7 +120,7 @@ test('failed catalog GET shows retry instead of blank-field errors; retry restor
     assert.ok(nodes(tree).some((n) => n.type === 'input' && n.props.value === 'Деревянная заготовка'))
     assert.equal(nodes(tree).some((n) => n.props?.['aria-invalid'] === true), false)
     nodes(tree).find((n) => n.type === 'input' && n.props.value === 'Деревянная заготовка').props.onChange({ target: { value: '' } })
-    await button(render(props), 'Сохранить карточку').props.onClick()
+    await button(render(props), 'Сохранить').props.onClick()
     assert.equal(requests, 2, 'invalid draft must not be sent')
     assert.ok(nodes(render(props)).some((n) => n.props?.['aria-invalid'] === true), 'validation remains on explicit save')
   } finally { globalThis.fetch = before }
