@@ -18,7 +18,8 @@ function load(file: string, modules: Record<string, unknown>) {
   return exports
 }
 const missingColumn = (column: string) => Object.assign(new Error(`column "${column}" does not exist (private database details)`), { code: '42703' })
-const common = { 'node:crypto': crypto, '@/lib/catalog-schema': schema, '@/lib/catalog-http': http, '@/lib/istraart-style': styles, 'react/jsx-runtime': jsx }
+const Create = () => null
+const common = { './catalog-card-create': { CatalogCardCreate: Create }, 'node:crypto': crypto, '@/lib/catalog-schema': schema, '@/lib/catalog-http': http, '@/lib/istraart-style': styles, 'react/jsx-runtime': jsx }
 
 test('only missing 0042 columns produce a safe, uncached 503; unrelated errors propagate', async () => {
   for (const column of ['istraart_style_prompt', 'manual_media', 'manual_photo_selection']) {
@@ -106,7 +107,7 @@ test('failed catalog GET shows retry instead of blank-field errors; retry restor
     const props = { project: 'istraart', item: { id: 'item', originalText: 'Деревянная заготовка', originalImageFiles: [] } }
     let tree = render(props)
     assert.equal(nodes(tree).some((n) => n.type === 'input'), false)
-    assert.equal(button(tree, 'Создать изделие').props.disabled, true)
+    assert.equal(nodes(tree).find((n) => n.type === Create).props.disabled, true)
     await button(tree, 'Повторить загрузку карточек').props.onClick()
     tree = render(props)
     assert.ok(text(tree).includes(schema.CATALOG_MIGRATION_MESSAGE))
@@ -114,7 +115,7 @@ test('failed catalog GET shows retry instead of blank-field errors; retry restor
     ready = true
     await button(tree, 'Повторить загрузку карточек').props.onClick()
     tree = render(props)
-    assert.equal(button(tree, 'Создать изделие').props.disabled, false)
+    assert.equal(nodes(tree).find((n) => n.type === Create).props.disabled, false)
     assert.equal(button(tree, 'Опубликовать на сайте').props.disabled, true)
     assert.ok(nodes(tree).some((n) => n.type === 'input' && n.props.value === 'Деревянная заготовка'))
     assert.equal(nodes(tree).some((n) => n.props?.['aria-invalid'] === true), false)

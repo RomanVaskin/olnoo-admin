@@ -97,7 +97,7 @@ test('upload endpoint and private preview scope card/project IDs, require an exp
     '@/lib/catalog-manual-photo-data': mediaData,
     '@/lib/db': { pool: { query: async (sql: string, args: unknown[]) => { assert.match(sql, /c.project_id=\$2 AND i.origin_kind='own'/); assert.equal(args[1], 7); return { rows: args[0] === cardId ? [{ manual_media: [asset] }] : [] } } } },
     '@/lib/catalog-manual-media': { CatalogMediaError, CATALOG_UPLOAD_MAX: 10 * 1024 * 1024,
-      attachManualCatalogPhoto: async (_db: unknown, project: number, id: string, bytes: Buffer, kind: string, slot: number, origin: string) => { uploads++; assert.equal(project, 7); assert.equal(id, cardId); assert.equal(bytes.toString(), 'fixture bytes'); assert.equal(kind, 'ai'); assert.equal(slot, 0); assert.equal(origin, 'upload'); return [asset] },
+      attachManualCatalogPhoto: async (_db: unknown, project: number, id: string, bytes: Buffer, kind: string, slot: number, origin: string) => { uploads++; assert.equal(project, 7); assert.equal(id, cardId); assert.equal(bytes.toString(), 'fixture bytes'); assert.ok(['ai','unclassified'].includes(kind)); assert.equal(slot, 0); assert.equal(origin, 'upload'); return [asset] },
       importTelegramCatalogPhoto: async (_db: unknown, project: number, id: string, source: string, index: number, kind: string, slot: number) => { assert.equal(project, 7); assert.equal(id, cardId); if (source !== sourceId) throw new CatalogMediaError('Фото не найдено.', 404); imports++; assert.equal(index, 0); assert.equal(kind, 'real'); assert.equal(slot, 1); return [asset] },
       readManualCatalogPhoto: async (project: number, id: string, filename: string) => { reads++; assert.equal(project, 7); assert.equal(id, cardId); assert.equal(filename, asset.filename); return Buffer.from('private image') },
     },
@@ -108,9 +108,11 @@ test('upload endpoint and private preview scope card/project IDs, require an exp
   const form = (kind?: string) => { const data = new FormData(); data.set('file', new File(['fixture bytes'], 'upload.png', { type: 'image/png' })); if (kind) data.set('kind', kind); data.set('slot', '0'); return data }
   assert.equal((await api.POST(new Request(url('other'), { method: 'POST', body: form('ai') }), params)).status, 404)
   assert.equal((await api.POST(new Request(url(), { method: 'POST', headers: { Origin: 'https://evil.test' }, body: form('ai') }), params)).status, 403)
-  assert.equal((await api.POST(new Request(url(), { method: 'POST', body: form() }), params)).status, 422)
+  assert.equal((await api.POST(new Request(url(), { method: 'POST', body: form('invalid') }), params)).status, 422)
   assert.equal(uploads, 0)
   assert.equal((await api.POST(new Request(url(), { method: 'POST', body: form('ai') }), params)).status, 201)
+  assert.equal((await api.POST(new Request(url(), { method: 'POST', body: form() }), params)).status, 201)
+  assert.equal((await api.POST(new Request('http://localhost:3140/api/catalog/cards/'+cardId+'/media?project=istraart', { method: 'POST', headers: { Origin: 'https://admin.olnoo.com' }, body: form() }), params)).status, 201)
   const telegram = (itemId: string) => new Request(url(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemId, index: 0, kind: 'real', slot: 1 }) })
   assert.equal((await api.POST(telegram(sourceId), params)).status, 201)
   assert.equal((await api.POST(telegram(imageId), params)).status, 404)

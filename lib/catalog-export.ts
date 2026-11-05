@@ -33,7 +33,7 @@ export function catalogPublicProjection(row: Record<string, unknown>) {
 export type RelatedCatalogCard = { id: string; slug: string; title: string; type: Exclude<CatalogCardKind, 'legacy'> }
 
 /** Relations reuse only exportable cards; source/parent identifiers remain server-only. */
-export function catalogPublicCards(rows: Record<string, unknown>[]): (NonNullable<ReturnType<typeof catalogPublicProjection>> & { relatedCards?: RelatedCatalogCard[] })[] {
+export function catalogPublicCards(rows: Record<string, unknown>[], project = ''): (NonNullable<ReturnType<typeof catalogPublicProjection>> & { relatedCards?: RelatedCatalogCard[] })[] {
   const entries = rows.flatMap((row) => {
     const card = catalogPublicProjection(row)
     return card ? [{ row, card }] : []
@@ -56,7 +56,7 @@ export function catalogPublicCards(rows: Record<string, unknown>[]): (NonNullabl
     if (!key || !['raw', 'finished', 'guide'].includes(String(row.card_kind))) return card
     const relatedCards = (sources.get(key) ?? []).filter(({ row: other }) => {
       if (other.id === row.id) return false
-      if (row.card_kind === 'raw') return other.card_kind === 'finished'
+      if (row.card_kind === 'raw') return other.card_kind === 'finished' || (project === 'istraart' && other.card_kind === 'guide')
       if (other.card_kind === 'raw') return true
       if (row.card_kind === 'finished') return other.card_kind === 'guide' && other.parent_card_id === row.id
       return other.card_kind === 'finished' && row.parent_card_id === other.id

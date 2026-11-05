@@ -2,10 +2,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ManualCatalogPhoto } from '@/lib/catalog-manual-photo-data'
 type OwnItem = { id: string; originKind: string; originalText: string; originalImageFiles: string[] }
-export function CatalogManualUpload({ cardId, project, disabled, onMedia }: { cardId: string; project: string; disabled: boolean; onMedia: (media: ManualCatalogPhoto[]) => void }) {
+export function CatalogManualUpload({ cardId, project, disabled, onMedia, simple = false, usedSlots = [] }: { cardId: string; project: string; disabled: boolean; onMedia: (media: ManualCatalogPhoto[]) => void; simple?: boolean; usedSlots?: number[] }) {
   const [kind, setKind] = useState(''), [slot, setSlot] = useState('0'), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
   const [items, setItems] = useState<OwnItem[]>([]), [source, setSource] = useState('')
-  const input = useRef<HTMLInputElement>(null), alive = useRef(true)
+  const input = useRef<HTMLInputElement>(null), alive = useRef(true), uploadRunning = useRef(false)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   async function telegramItems() {
     setMessage(''); setBusy(true)
@@ -30,6 +30,30 @@ export function CatalogManualUpload({ cardId, project, disabled, onMedia }: { ca
     catch (e) { if (alive.current) setMessage(e instanceof Error ? e.message : 'Ошибка загрузки.') }
     finally { if (alive.current) setBusy(false) }
   }
+  async function uploadFiles() {
+    const files = Array.from(input.current?.files ?? [])
+    if (!files.length || busy || disabled || uploadRunning.current) return
+    const slots = Array.from({ length: 10 }, (_, i) => i).filter((i) => !usedSlots.includes(i))
+    if (files.length > slots.length) { setMessage('В карточке доступно не более 10 позиций фото. Выберите меньше файлов.'); return }
+    uploadRunning.current = true; setBusy(true); setMessage('')
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const form = new FormData(); form.set('file', files[i]); form.set('slot', String(slots[i]))
+        // Omitted kind means unclassified; do not infer real/AI provenance.
+        const response = await fetch(`/api/catalog/cards/${cardId}/media?project=${encodeURIComponent(project)}`, { method: 'POST', body: form })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.error || 'Не удалось загрузить фото. Уже добавленные файлы сохранены.')
+        if (alive.current) onMedia(data.media)
+      }
+      if (alive.current) setMessage('Фото добавлены. Выберите их и порядок в галерее, затем сохраните карточку.')
+    } catch (error) { if (alive.current) setMessage(error instanceof Error ? error.message : 'Ошибка загрузки. Уже добавленные файлы сохранены.') }
+    finally { uploadRunning.current = false; if (alive.current) { setBusy(false); if (input.current) input.current.value = '' } }
+  }
+  if (simple) return <div className="flex flex-col gap-2">
+    <input ref={input} type="file" multiple accept="image/jpeg,image/png,image/webp" aria-label="Фотографии карточки" className="hidden" onChange={uploadFiles} disabled={busy || disabled} />
+    <button type="button" disabled={busy || disabled} onClick={() => input.current?.click()} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{busy ? 'Загрузка…' : 'Загрузить фото'}</button>
+    {message && <p role="status" className="text-sm">{message}</p>}
+  </div>
   return <fieldset disabled={busy || disabled} className="flex flex-col gap-3 border border-hairline p-3">
     <legend className="label-mono px-1">Добавить фото в эту карточку</legend>
     <p className="text-xs text-muted-foreground">JPEG / PNG / WebP до 10 МБ. Оригиналы не изменяются. В каждой из 10 позиций можно хранить варианты и вручную выбрать один. Тип изображения указывает владелец; ИИ-визуализация не подтверждает существование изготовленного товара.</p>

@@ -7,7 +7,7 @@ async function get(req: Request) {
   const project = catalogSiteProject(req.headers.get('x-olnoo-catalog-token'))
   if (!project) return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
   const rows = await publishedCatalogRows(pool, project)
-  return NextResponse.json({ project, cards: catalogPublicCards(rows) }, { headers: { 'Cache-Control': 'no-store', 'X-Olnoo-Catalog-Project': project } })
+  return NextResponse.json({ project, cards: catalogPublicCards(rows, project) }, { headers: { 'Cache-Control': 'no-store', 'X-Olnoo-Catalog-Project': project } })
 }
 
 export const GET = withCatalogSchemaGuard(get)
