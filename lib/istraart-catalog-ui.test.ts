@@ -48,7 +48,7 @@ test('catalog retains one save and gallery with collapsed extras and independent
   const { state, render } = editor()
   const tree = render()
   for (const label of ['Товар', 'Фотографии', 'ИИ-помощник', 'Публикация']) assert.ok(text(tree).includes(label))
-  assert.equal(nodes(tree).filter((n) => n.type === 'button' && text(n) === 'Сохранить карточку').length, 1)
+  assert.equal(nodes(tree).filter((n) => n.type === 'button' && text(n) === 'Сохранить').length, 1)
   assert.equal(nodes(tree).filter((n) => n.type === 'img').length, 1)
   for (const label of ['Размеры и дополнительные данные', 'ИИ-помощник']) {
     const details = nodes(tree).find((n) => n.type === 'details' && nodes(n).some((c) => c.type === 'summary' && text(c) === label))
@@ -64,19 +64,18 @@ test('catalog retains one save and gallery with collapsed extras and independent
   assert.equal(button(render(), 'Опубликовать на сайте').props.disabled, true, 'dirty card requires save')
 })
 
-test('switching raw/finished/linked guide preserves the source and separate drafts', () => {
-  const finished = row(), raw = row('raw', 'raw'), guide = row('guide', 'guide')
+test('only independent material/product cards are selectable; old guides and links stay stored but hidden', () => {
+  const finished = row(), raw = row('raw', 'raw'), guide = { ...row('guide','guide'), title: 'HIDDEN_GUIDE' }
   const { state, render } = editor(finished, [finished, raw, guide])
-  control(render(), 'Карточки этого материала').props.onChange({ target: { value: 'raw' } })
-  assert.equal(state[1].id, 'raw'); assert.equal(state[8].offers.raw.priceRub, 1200)
+  control(render(), 'Товары').props.onChange({ target: { value: 'raw' } })
+  assert.equal(state[1].id, 'raw')
   assert.equal(nodes(render()).find((n) => n.type === ChatGptPrompt).props.task, 'raw')
-  control(render(), 'Карточки этого материала').props.onChange({ target: { value: 'guide' } })
-  assert.ok(text(render()).includes('Изделие: Название карточки'))
-  assert.equal(nodes(render()).find((n) => n.type === ChatGptPrompt).props.task, 'guide')
-  control(render(), 'Карточки этого материала').props.onChange({ target: { value: 'card' } })
-  assert.equal(state[2].length, 3)
-  assert.equal(state[1].id, 'card')
+  control(render(), 'Товары').props.onChange({ target: { value: 'card' } })
   assert.equal(nodes(render()).find((n) => n.type === ChatGptPrompt).props.task, 'finished')
+  assert.equal(text(render()).includes('DIY'), false)
+  assert.equal(text(render()).includes('HIDDEN_GUIDE'), false)
+  assert.equal(state[2].length, 3)
+  assert.equal(state[2][2].parent_card_id, 'card')
 })
 
 test('photo selection keeps originals and variants; legacy cards share one gallery with independent offer selections', () => {
@@ -97,8 +96,10 @@ test('photo selection keeps originals and variants; legacy cards share one galle
   assert.equal(nodes(render()).filter((n) => n.type === 'img').length, 2, 'uploaded variants appear before inclusion')
   const legacy = { ...row(), card_kind: 'legacy', offers: { ...row().offers, ...row('raw').offers, ...row('guide').offers } }
   const old = editor(legacy)
-  assert.equal(nodes(old.render()).filter((n) => n.type === 'img').length, 1)
-  assert.equal(nodes(old.render()).filter((n) => n.type === 'input' && n.props.type === 'checkbox' && n.props.checked).length, 6)
+  assert.equal(nodes(old.render()).filter((n) => n.type === 'img').length, 0)
+  assert.ok(text(old.render()).includes('прежнего формата сохранены'))
+  assert.equal(button(old.render(), 'Сохранить'), undefined)
+  assert.equal(Object.keys(legacy.offers).length, 3)
 })
 
 test('save/publish/unpublish keep existing API bodies and refresh; required errors appear only after save', async () => {
@@ -118,7 +119,7 @@ test('save/publish/unpublish keep existing API bodies and refresh; required erro
     }
     const { render } = editor()
     control(render(), 'Название').props.onChange({ target: { value: 'Изменённое имя' } })
-    await button(render(), 'Сохранить карточку').props.onClick()
+    await button(render(), 'Сохранить').props.onClick()
     assert.equal(requests[0].method, 'PATCH')
     assert.equal(requests[0].body.card.title, 'Изменённое имя')
     assert.equal(requests[0].body.card.offers.finished.title, 'Название предложения')
@@ -133,7 +134,7 @@ test('save/publish/unpublish keep existing API bodies and refresh; required erro
     control(render(), 'Название').props.onChange({ target: { value: '' } })
     assert.equal(nodes(render()).some((n) => n.props?.['aria-invalid']), false)
     control(render(), 'Адрес карточки').props.onChange({ target: { value: 'invalid slug' } })
-    await button(render(), 'Сохранить карточку').props.onClick()
+    await button(render(), 'Сохранить').props.onClick()
     assert.equal(requests.length, 3)
     assert.ok(control(render(), 'Название').props['aria-invalid'])
     assert.ok(nodes(render()).some((n) => n.type === 'details' && n.props.open), 'extra fields open to reveal errors')
@@ -148,7 +149,7 @@ test('source is visible and IstraArt exposes RU Social only, with independent gu
     const state: any[] = ['', source.generatedTitle, source.generatedText, '', '', channels, 'ru-channel', '', true, false, false, null, '', false, false]
     const CardEditor = () => null
     const render = view('../components/sections/content-factory-items-view.tsx', 'ItemDetail', state, {
-      './catalog-card-editor': { CatalogCardEditor: CardEditor }, 'lucide-react': { X: () => null }, '@/components/primitives': { StatusPill: () => null }, '@/components/project-selector': {}, '@/components/i18n-provider': { useI18n: () => ({ t: ru }) },
+      './catalog-card-editor': { CatalogCardEditor: CardEditor }, './own-material-upload': { OwnMaterialUpload: () => null }, 'lucide-react': { X: () => null }, '@/components/primitives': { StatusPill: () => null }, '@/components/project-selector': {}, '@/components/i18n-provider': { useI18n: () => ({ t: ru }) },
     })
     let updated: any = null
     const props = { item: source, project: 'istraart', onClose() {}, onUpdated(value: any) { updated = value } }
@@ -196,80 +197,67 @@ test('source is visible and IstraArt exposes RU Social only, with independent gu
   } finally { globalThis.fetch = before }
 })
 
-test('new raw, finished and linked guide submit the same independent-card POST contract', async () => {
+test('new raw and finished products submit the same independent-card POST contract', async () => {
   const before = globalThis.fetch
   try {
-    for (const kind of ['raw', 'finished', 'guide']) {
+    for (const kind of ['raw', 'finished']) {
       const current = row(kind)
       const { state, render } = editor(current)
-      state[1] = null; state[3] = kind; state[4] = kind === 'guide' ? 'finished-parent' : null; state[11] = true
-      state[5] = kind === 'finished'; state[6] = kind === 'finished'
+      state[1] = null; state[3] = kind; state[4] = null; state[11] = true
+      state[5] = false; state[6] = false
       let request: any
       globalThis.fetch = async (url, init) => {
         if (init?.method) { request = { url, method: init.method, body: JSON.parse(String(init.body)) }; return Response.json(current) }
         return Response.json([current])
       }
-      await button(render(), 'Сохранить карточку').props.onClick()
+      await button(render(), 'Сохранить').props.onClick()
       assert.equal(request.url, '/api/catalog/cards?project=istraart')
       assert.equal(request.method, 'POST')
       assert.equal(request.body.contentItemId, item.id)
       assert.equal(request.body.cardKind, kind)
-      assert.equal(request.body.parentCardId, kind === 'guide' ? 'finished-parent' : null)
-      assert.equal(request.body.createRaw, kind === 'finished')
-      assert.equal(request.body.createGuide, kind === 'finished')
+      assert.equal(request.body.parentCardId, null)
+      assert.equal(request.body.createRaw, false)
+      assert.equal(request.body.createGuide, false)
       assert.deepEqual(request.body.card.offers, current.offers)
     }
   } finally { globalThis.fetch = before }
 })
 
-test('all one/two/three-type combinations create separate drafts with explicit guide parent and no double-click duplication', async () => {
+test('single type creates exactly one independent product; double clicks and uncertain responses do not duplicate it', async () => {
   const before = globalThis.fetch
   try {
-    for (const chosen of [['raw'], ['finished'], ['guide'], ['raw','finished'], ['raw','guide'], ['finished','guide'], ['raw','finished','guide']]) {
-      const state: any[] = [chosen, chosen.includes('guide') ? chosen.includes('finished') ? 'new' : 'product-2' : '', 'idle', '']
+    for (const kind of ['raw','finished']) {
+      const state = [kind, 'idle', '']
       const render = view('../components/sections/catalog-card-create.tsx', 'CatalogCardCreate', state, { '@/lib/catalog-card': validation, '@/lib/catalog-http': http })
-      const bodies: any[] = [], busy: boolean[] = []
-      const props = { project: 'istraart', item, cards: [row('finished','product-1'), row('finished','product-2')], disabled: false, beforeCreate: () => true, onBusyChange: (v: boolean) => busy.push(v), onCreated: async () => {} }
-      globalThis.fetch = async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return Response.json({ id: `created-${bodies.at(-1).cardKind}` }) }
-      const click = button(render(props), 'Создать карточки').props.onClick
+      const stored: any[] = []; let posts = 0, fail = true
+      globalThis.fetch = async (_url, init) => {
+        if (!init?.method) return Response.json(stored)
+        posts++; const body = JSON.parse(String(init.body))
+        assert.equal(body.cardKind, kind); assert.equal(body.parentCardId, null)
+        assert.equal(body.createGuide, undefined); assert.equal(body.createRaw, undefined)
+        assert.deepEqual(body.card.offers, {})
+        const created = { id: 'new-product', content_item_id: item.id, card_kind: kind, parent_card_id: null, slug: body.card.slug }
+        stored.push(created)
+        if (fail) { fail = false; throw new Error('response lost after commit') }
+        return Response.json(created)
+      }
+      const props = { project: 'istraart', item, cards: [], disabled: false, beforeCreate: () => true, onBusyChange() {}, onCreated: async () => {} }
+      let tree = render(props)
+      assert.equal(nodes(tree).filter((n) => n.type === 'input').length, 2)
+      assert.ok(nodes(tree).filter((n) => n.type === 'input').every((n) => n.props.type === 'radio'))
+      assert.equal(text(tree).includes('DIY'), false)
+      const click = button(tree, 'Создать товар').props.onClick
       await Promise.all([click(), click()])
-      assert.equal(bodies.length, chosen.length)
-      assert.deepEqual(new Set(bodies.map((b) => b.cardKind)), new Set(chosen))
-      for (const body of bodies) { assert.equal(body.contentItemId, item.id); assert.deepEqual(body.card.offers, {}); assert.equal(body.parentCardId, body.cardKind === 'guide' ? chosen.includes('finished') ? 'created-finished' : 'product-2' : null) }
-      assert.deepEqual(busy, [true, false])
-      assert.equal(button(render(props), 'Создать карточки').props.disabled, true)
+      assert.equal(state[1], 'error'); assert.equal(stored.length, 1)
+      await button(render(props), 'Проверить создание').props.onClick()
+      assert.equal(posts, 1); assert.equal(stored.length, 1); assert.equal(state[1], 'done')
+      assert.equal(button(render(props), 'Создать товар').props.disabled, true)
+      button(render(props), 'Ещё один товар').props.onClick()
+      tree = render(props)
+      await button(tree, 'Создать товар').props.onClick()
+      assert.equal(posts, 2); assert.equal(stored.length, 2)
+      assert.notEqual(stored[0].slug, stored[1].slug)
     }
-    const state = [['guide'], '', 'idle', '']
-    const render = view('../components/sections/catalog-card-create.tsx', 'CatalogCardCreate', state, { '@/lib/catalog-card': validation, '@/lib/catalog-http': http })
-    let calls = 0; globalThis.fetch = async () => { calls++; return Response.json({}) }
-    const props = { project: 'istraart', item, cards: [row('finished','one'), row('finished','two')], disabled: false, beforeCreate: () => true, onBusyChange() {}, onCreated: async () => {} }
-    await button(render(props), 'Создать карточки').props.onClick()
-    assert.equal(calls, 0); assert.ok(text(render(props)).includes('конкретное изделие'))
-  } finally { globalThis.fetch = before }
-})
-
-test('uncertain creation response is reconciled by stable slug, keeping partial drafts without duplicate POST', async () => {
-  const before = globalThis.fetch
-  try {
-    const state = [['raw','finished','guide'], 'new', 'idle', '']
-    const render = view('../components/sections/catalog-card-create.tsx', 'CatalogCardCreate', state, { '@/lib/catalog-card': validation, '@/lib/catalog-http': http })
-    const stored: any[] = [], calls: string[] = []; let fail = true
-    globalThis.fetch = async (_url, init) => {
-      if (!init?.method) return Response.json(stored)
-      const body = JSON.parse(String(init.body)); calls.push(body.cardKind)
-      const created = { id: `id-${body.cardKind}`, content_item_id: item.id, card_kind: body.cardKind, parent_card_id: body.parentCardId, slug: body.card.slug }
-      stored.push(created)
-      if (fail && body.cardKind === 'raw') { fail = false; throw new Error('response lost after commit') }
-      return Response.json(created)
-    }
-    const props = { project: 'istraart', item, cards: [], disabled: false, beforeCreate: () => true, onBusyChange() {}, onCreated: async () => {} }
-    await button(render(props), 'Создать карточки').props.onClick()
-    assert.equal(state[2], 'error'); assert.equal(stored.length, 2)
-    await button(render(props), 'Продолжить создание').props.onClick()
-    assert.deepEqual(calls, ['finished','raw','guide'])
-    assert.equal(stored.length, 3); assert.equal(new Set(stored.map((c) => c.slug)).size, 3)
-    assert.equal(stored.find((c) => c.card_kind === 'guide').parent_card_id, 'id-finished')
-    assert.equal(state[2], 'done')
   } finally { globalThis.fetch = before }
 })
 
@@ -315,4 +303,64 @@ test('main photo and relative order edit only existing imageIndexes, preserving 
   assert.deepEqual(state[8].offers.finished.imageIndexes, [0,1,2])
   assert.equal(current.manual_media.length, 3); assert.deepEqual(item.originalImageFiles, ['original.png'])
   assert.equal(state[11], true)
+})
+
+test('desktop source upload uses original-images only and preserves successfully appended photos on a later error', async () => {
+  const before = globalThis.fetch
+  try {
+    const render = view('../components/sections/own-material-upload.tsx', 'OwnMaterialUpload', [], {})
+    const updates: any[] = [], requests: any[] = []
+    const props = { itemId: item.id, disabled: false, onUpdated: (value: any) => updates.push(value) }
+    const tree = render(props)
+    const files = [new File(['one'], 'one.png'), new File(['two'], 'two.png')]
+    render.refs[0].current = { files, value: 'files' }
+    globalThis.fetch = async (url, init) => {
+      requests.push(String(url)); assert.equal(init?.method, 'POST')
+      assert.deepEqual([...(init?.body as FormData).keys()], ['file'])
+      return requests.length === 1 ? Response.json({ ...item, originalImageFiles: [...item.originalImageFiles, 'one.png'] }) : Response.json({ error: 'later upload failed' }, { status: 409 })
+    }
+    await nodes(tree).find((n) => n.type === 'input').props.onChange()
+    assert.equal(updates.length, 1); assert.deepEqual(updates[0].originalImageFiles, ['original.png','one.png'])
+    assert.ok(requests.every((url) => url.includes('/original-images?project=istraart')))
+    assert.ok(text(render(props)).includes('later upload failed'))
+    assert.equal(await files[0].text(), 'one')
+  } finally { globalThis.fetch = before }
+})
+
+test('source text additions use existing ownBrief edit without overwriting Telegram original', async () => {
+  const before = globalThis.fetch
+  try {
+    const source = { ...item, originKind: 'own', processingMode: 'ai', generatedTitle: '', generatedText: '', sourceLanguage: null, status: 'new', enText: '', ruText: '', aiReview: null, ruApprovedAt: null, enApprovedAt: null }
+    const render = view('../components/sections/content-factory-items-view.tsx', 'ItemDetail', [], {
+      './catalog-card-editor': { CatalogCardEditor: () => null }, './own-material-upload': { OwnMaterialUpload: () => null }, 'lucide-react': { X: () => null }, '@/components/primitives': { StatusPill: () => null }, '@/components/project-selector': {}, '@/components/i18n-provider': { useI18n: () => ({ t: ru }) },
+    })
+    const requests: any[] = []
+    globalThis.fetch = async (url, init) => { if (init?.method) { requests.push(JSON.parse(String(init.body))); return Response.json({ ...source, ownBrief: 'Дополнительные факты' }) }; return Response.json({ accounts: [], ru: null, en: null }) }
+    const props = { item: source, project: 'istraart', onClose() {}, onUpdated() {} }
+    control(render(props), 'Дополнительный исходный текст').props.onChange({ target: { value: 'Дополнительные факты' } })
+    button(render(props), 'Сохранить исходный текст').props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(requests, [{ ownBrief: 'Дополнительные факты' }])
+    assert.equal(source.originalText, 'Коряга')
+  } finally { globalThis.fetch = before }
+})
+
+test('loading old guide/legacy records selects only a standalone product and never writes or converts old data', async () => {
+  const before = globalThis.fetch
+  try {
+    const old = { ...row('guide','old-guide'), published_at: '2026-11-05' }
+    const legacy = { ...row(), id: 'legacy', card_kind: 'legacy', published_at: '2026-11-05' }
+    const raw = { ...row('raw','raw-product'), published_at: '2026-11-05' }
+    const records = [old, legacy, raw], original = structuredClone(records)
+    const { render, state } = editor()
+    let requests = 0
+    globalThis.fetch = async (_url, init) => { requests++; assert.equal(init?.method, undefined); return Response.json(records) }
+    await nodes(render()).find((n) => n.type === CardCreate).props.onCreated(old.id)
+    assert.equal(state[1].id, raw.id)
+    assert.equal(nodes(render()).find((n) => n.type === ChatGptPrompt).props.task, 'raw')
+    assert.equal(nodes(render()).some((n) => n.type === 'option' && n.props.value === old.id), false)
+    assert.equal(nodes(render()).some((n) => n.type === 'option' && n.props.value === legacy.id), false)
+    assert.deepEqual(records, original)
+    assert.equal(requests, 1)
+  } finally { globalThis.fetch = before }
 })

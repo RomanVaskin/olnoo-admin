@@ -921,3 +921,12 @@ changes or reclassifying old images. IstraArt-only export relations also include
 published raw → guide links, which the current IstraArt site parser still filters
 out; that site is not changed here. See `docs/CATALOG_CARDS.md` → “Three-block
 IstraArt workflow” for creation/retry semantics, photo order and limitations.
+
+**IstraArt single-product MVP (repository change, not deployed):** the own-material
+UI creates/selects raw or finished standalone products only; guide/legacy cards
+and relations remain stored/exported but hidden in this editor. Original uploads
+from the current material now use a guarded IstraArt-only multipart mode of the
+existing original-images POST, existing validation and original-file storage;
+source text additions use existing ownBrief. No schema change or new intake
+service. Full compatibility/guard details: docs/CATALOG_CARDS.md → “Single-product
+IstraArt MVP”. Production, Telegram and the IstraArt site are not changed here.

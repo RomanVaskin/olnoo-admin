@@ -39,7 +39,8 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
       const rows = await res.json() as Row[]
       const ownCards = rows.filter((r) => r.content_item_id === item.id)
       setCards(ownCards)
-      const current = ownCards.find((r) => r.id === (preferredId ?? row?.id)) ?? ownCards[0]
+      const editable = project === 'istraart' ? ownCards.filter((r) => r.card_kind === 'raw' || r.card_kind === 'finished') : ownCards
+      const current = editable.find((r) => r.id === (preferredId ?? row?.id)) ?? editable[0]
       if (current) selectCard(current)
       else startNew('finished', null, false)
       setLoaded(true)
@@ -49,14 +50,15 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
   useEffect(() => { if (open) void load() }, [open, project, item.id])
   function selectCard(current: Row) {
     setRow(current); setError(''); setServerErrors({}); setCreateRaw(false); setCreateGuide(false)
-    setDraft({ slug: current.slug, title: current.title, description: current.description, lengthCm: current.length_cm == null ? null : Number(current.length_cm), diameterCm: current.diameter_cm == null ? null : Number(current.diameter_cm), offers: current.offers, manualPhotoSelection: current.manual_photo_selection ?? {} })
+    setDraft({ slug: current.slug, title: current.title, description: current.description, lengthCm: current.length_cm == null ? null : Number(current.length_cm), diameterCm: current.diameter_cm == null ? null : Number(current.diameter_cm), offers: project === 'istraart' && !current.published_at && (current.card_kind === 'raw' || current.card_kind === 'finished') && !current.offers[current.card_kind] ? { ...current.offers, [current.card_kind]: { title: current.title, description: '', priceRub: 0, available: null, imageIndexes: [] } } : current.offers, manualPhotoSelection: current.manual_photo_selection ?? {} })
     setDirty(false)
   }
   function discardChanges() { return !dirty || window.confirm('Несохранённые изменения будут потеряны. Продолжить?') }
   function startNew(kind: Exclude<CatalogCardKind, 'legacy'>, parent: string | null = null, confirm = true) {
     if (confirm && !discardChanges()) return
     setRow(null); setNewKind(kind); setParentId(parent); setCreateRaw(false); setCreateGuide(false); setServerErrors({}); setError('')
-    setDraft(suggestCatalogCard({ ...item, id: crypto.randomUUID() })); setDirty(true)
+    const suggested = suggestCatalogCard({ ...item, id: crypto.randomUUID() })
+    setDraft(project === 'istraart' && kind !== 'guide' ? { ...suggested, offers: { [kind]: { title: suggested.title, description: '', priceRub: 0, available: null, imageIndexes: [] } } } : suggested); setDirty(true)
   }
   const cardKind = row?.card_kind ?? newKind
   const visibleKinds = cardKind === 'legacy' ? kinds : kinds.filter((kind) => kind === cardKind)
@@ -81,7 +83,7 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
     }
     setBusy(true); setError(''); setServerErrors({})
     try {
-      const res = await fetch(row ? `/api/catalog/cards/${row.id}?project=${encodeURIComponent(project)}` : url, { method: row ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action ? { action } : row ? { card: draft } : { contentItemId: item.id, card: draft, cardKind: newKind, parentCardId: parentId, createRaw, createGuide }) })
+      const res = await fetch(row ? `/api/catalog/cards/${row.id}?project=${encodeURIComponent(project)}` : url, { method: row ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action ? { action } : row ? { card: draft } : { contentItemId: item.id, card: draft, cardKind: newKind, parentCardId: project === 'istraart' ? null : parentId, createRaw: project === 'istraart' ? false : createRaw, createGuide: project === 'istraart' ? false : createGuide }) })
       const data = await res.json()
       if (!res.ok) { setServerErrors(data.fieldErrors || {}); throw new Error(data.error || 'Ошибка сохранения карточки.') }
       await load(data.id)
@@ -94,40 +96,34 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
   const hint = (key: string) => errors[key] ? <span id={`catalog-${item.id}-${key}`} role="alert" className="text-xs text-destructive">{errors[key]}</span> : null
   const invalid = (key: string) => ({ 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `catalog-${item.id}-${key}` : undefined })
   const field = 'border border-hairline bg-card px-3 py-2 text-sm'
-  if (project === 'istraart') return <section aria-label="Каталог сайта" className="flex min-w-0 flex-col gap-5">
+  if (project === 'istraart') return <section aria-label="Карточка товара" className="flex min-w-0 flex-col gap-5">
     <div className="flex flex-col gap-3 border border-hairline p-4">
-      <h2 className="label-mono">Каталог сайта</h2>
+      <h2 className="label-mono">Карточка товара</h2>
       <CatalogCardCreate key={item.id} project={project} item={item} cards={cards} disabled={busy || !loaded} onCreated={load} beforeCreate={discardChanges} onBusyChange={setBusy} />
-      {!!cards.length && <label className="flex min-w-0 flex-col gap-1 text-sm">Карточки этого материала<select aria-label="Карточки этого материала" disabled={busy || !loaded} value={row?.id ?? ''} onChange={(e) => { const selected = cards.find((c) => c.id === e.target.value); if (selected && discardChanges()) selectCard(selected) }} className={`${field} w-full min-w-0`}>
+      {cards.some((c) => c.card_kind !== 'raw' && c.card_kind !== 'finished') && <p className="text-xs text-muted-foreground">Карточки прежнего формата сохранены без изменений и скрыты в этом редакторе.</p>}
+      {cards.some((c) => c.card_kind === 'raw' || c.card_kind === 'finished') && <label className="flex min-w-0 flex-col gap-1 text-sm">Товары<select aria-label="Товары" disabled={busy || !loaded} value={row?.id ?? ''} onChange={(e) => { const selected = cards.find((c) => c.id === e.target.value); if (selected && discardChanges()) selectCard(selected) }} className={`${field} w-full min-w-0`}>
         <option value="" disabled>Новая карточка</option>
-        {cards.map((card) => <option key={card.id} value={card.id}>{card.card_kind === 'legacy' ? 'Прежняя карточка' : labels[card.card_kind]} · {card.title} · {card.published_at ? 'Опубликовано на сайте' : 'Черновик'}</option>)}
+        {cards.filter((c) => c.card_kind === 'raw' || c.card_kind === 'finished').map((card) => <option key={card.id} value={card.id}>{card.card_kind === 'legacy' ? 'Прежняя карточка' : labels[card.card_kind]} · {card.title} · {card.published_at ? 'Опубликовано на сайте' : 'Черновик'}</option>)}
       </select></label>}
 
     </div>
     {loading && <p role="status">Загрузка…</p>}
     {!loading && !loaded && <button type="button" disabled={busy} onClick={() => load()} className={`${field} self-start disabled:opacity-50`}>Повторить загрузку карточек</button>}
-    {loaded && <>
+    {loaded && (cardKind === 'raw' || cardKind === 'finished') && <>
       <fieldset disabled={busy || !loaded} className="flex min-w-0 flex-col gap-5 border border-hairline p-4">
         <legend className="label-mono px-1">Товар</legend>
-        <p className="text-sm">Тип: {cardKind === 'legacy' ? 'Прежняя карточка с независимыми предложениями' : cardKind === 'raw' ? 'Исходный материал' : labels[cardKind]}</p>
-        {cardKind === 'guide' && <p className="text-sm text-muted-foreground">Изделие: {cards.find((c) => c.id === (row?.parent_card_id ?? parentId))?.title ?? '—'}</p>}
+        <p className="text-sm">Тип: {cardKind === 'raw' ? 'Исходный материал' : labels[cardKind]}</p>
         <label className="flex flex-col gap-1 text-sm">Название<input {...invalid('title')} value={draft.title} onChange={(e) => change({ title: e.target.value })} maxLength={160} className={field} />{hint('title')}</label>
         {hint('offers')}
         {visibleKinds.map((kind) => {
           const value = draft.offers[kind]
           return <div key={kind} className="flex flex-col gap-3">
-            <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={!!value} onChange={(e) => {
-              const next = { ...draft.offers }
-              if (e.target.checked) next[kind] = { title: draft.title || labels[kind], description: '', priceRub: 0, available: null, imageIndexes: [] }
-              else delete next[kind]
-              change({ offers: next })
-            }} />{cardKind === 'legacy' ? labels[kind] : 'Заполнить предложение для сайта'}</label>
             <fieldset disabled={!value} className="flex min-w-0 flex-col gap-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-1 text-sm">Подтверждённая цена, ₽<input type="number" min="1" step="1" {...invalid(`offers.${kind}.priceRub`)} value={value?.priceRub || ''} onChange={(e) => offer(kind, { priceRub: Number(e.target.value) })} className={`${field} min-w-0`} />{hint(`offers.${kind}.priceRub`)}</label>
                 <label className="flex flex-col gap-1 text-sm">Доступность<select {...invalid(`offers.${kind}.available`)} value={value?.available == null ? '' : value.available ? 'yes' : 'no'} onChange={(e) => offer(kind, { available: e.target.value === '' ? null : e.target.value === 'yes' })} className={`${field} min-w-0`}><option value="">Выберите доступность</option><option value="no">Недоступно</option><option value="yes">Доступно для заказа / покупки</option></select>{hint(`offers.${kind}.available`)}</label>
               </div>
-              <label className="flex flex-col gap-1 text-sm">{cardKind === 'legacy' ? `Описание: ${labels[kind]}` : 'Описание'}<textarea rows={5} {...invalid(`offers.${kind}.description`)} value={value?.description ?? ''} onChange={(e) => offer(kind, { description: e.target.value })} maxLength={5000} className={field} />{hint(`offers.${kind}.description`)}</label>
+              <label className="flex flex-col gap-1 text-sm">Описание<textarea rows={5} {...invalid(`offers.${kind}.description`)} value={value?.description ?? ''} onChange={(e) => offer(kind, { description: e.target.value })} maxLength={5000} className={field} />{hint(`offers.${kind}.description`)}</label>
             </fieldset>
           </div>
         })}
@@ -165,7 +161,7 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
                   const offers = { ...draft.offers, [kind]: { ...value, imageIndexes: e.target.checked ? [...value.imageIndexes, index] : value.imageIndexes.filter((n) => n !== index) } }
                   if (e.target.checked && variant) change({ offers, manualPhotoSelection: { ...draft.manualPhotoSelection, [index]: variant.id } })
                   else change({ offers })
-                }} />{cardKind === 'legacy' ? labels[kind] : 'В карточке'}</label>
+                }} />В карточке</label>
                 {position >= 0 && <>
                   <span>{position === 0 ? 'Главное фото' : `Порядок: ${position + 1}`}</span>
                   <div className="flex flex-wrap gap-1">
@@ -189,13 +185,12 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
         {row ? <CatalogManualUpload simple usedSlots={[...new Set([...media.map((p) => p.slot), ...Object.values(draft.offers).flatMap((o) => o?.imageIndexes ?? [])])]} key={row.id} project={project} cardId={row.id} disabled={busy || !loaded} onMedia={(photos) => { const id = row.id; setRow((current) => current?.id === id ? { ...current, manual_media: photos } : current); setCards((cards) => cards.map((c) => c.id === id ? { ...c, manual_media: photos } : c)) }} /> : <p className="text-xs text-muted-foreground">Загрузка фото станет доступна после сохранения черновика.</p>}
       </fieldset>
       <details className="border border-hairline p-4"><summary className="label-mono cursor-pointer">ИИ-помощник</summary><div className="mt-3">
-        {cardKind === 'legacy' && <label className="text-sm">Задача для ChatGPT<select value={copyTask} onChange={(e) => setCopyTask(e.target.value as OfferKind)} className="ml-2 border border-hairline bg-card p-2">{kinds.map((k) => <option key={k} value={k}>{labels[k]}</option>)}</select></label>}
-        <IstraArtChatGptPrompt task={cardKind === 'legacy' ? copyTask : cardKind} card={draft} originalText={item.originalText || item.ownBrief || ''} />
+        <IstraArtChatGptPrompt task={cardKind === 'raw' ? 'raw' : 'finished'} card={draft} originalText={item.originalText || item.ownBrief || ''} />
       </div></details>
     </>}
     {hint('_form')}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-    <section aria-label="Публикация" className="flex flex-col gap-4 border border-hairline p-4">
+    {(cardKind === 'raw' || cardKind === 'finished') && <section aria-label="Публикация" className="flex flex-col gap-4 border border-hairline p-4">
       <h3 className="label-mono">Публикация на сайте</h3>
       <fieldset disabled={busy || !loaded} className="flex flex-col gap-3">
         <legend className="text-sm font-medium">Сайт IstraArt</legend>
@@ -203,13 +198,13 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
         {row?.published_at && <a href={`https://istraart.ru/catalog/${encodeURIComponent(row.slug)}`} target="_blank" rel="noreferrer" className="text-sm text-blue underline">Открыть карточку IstraArt</a>}
         <p className="text-xs text-muted-foreground">{!row ? 'Сохраните черновик, затем заполните предложение для публикации.' : dirty ? 'Сохраните изменения перед публикацией.' : 'Публикация — ручное подтверждение цены, наличия, описания и выбранных фото. Сохранение опубликованной карточки обновляет её на сайте.'}</p>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => action()} disabled={!dirty && !!row} className={`${field} border-foreground bg-foreground text-background disabled:opacity-50`}>Сохранить карточку</button>
+          <button type="button" onClick={() => action()} disabled={!dirty && !!row} className={`${field} border-foreground bg-foreground text-background disabled:opacity-50`}>Сохранить</button>
           <button type="button" onClick={() => action('publish')} disabled={!row || dirty || !!row.published_at || Object.keys(publicationErrors).length > 0} className={`${field} disabled:opacity-50`}>Опубликовать на сайте</button>
           {row?.published_at && <button type="button" onClick={() => action('unpublish')} disabled={dirty} className={field}>Снять с публикации</button>}
         </div>
       </fieldset>
 
-    </section>
+    </section>}
   </section>
   return <div className="flex flex-col gap-3 border border-hairline bg-card p-4">
     <button type="button" onClick={() => setOpen(!open)} className="label-mono text-left">{project === 'istraart' ? 'Каталог сайта IstraArt' : 'Каталог сайта'} · {open ? 'Скрыть' : 'Оформить / редактировать'}</button>

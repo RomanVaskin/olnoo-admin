@@ -502,3 +502,56 @@ original files/variants and ordering, simple multi-upload failures, neutral kind
 storage, source display, RU-only sending and unchanged RU/EN in other projects,
 plus export privacy. No DB migration, merge, deploy or production action is part
 of this change.
+
+### Single-product IstraArt MVP (supersedes the multi-type UI above)
+
+The three blocks remain: original material, one product card, RU Social. The new
+product control is mutually exclusive **raw / finished**. It creates one draft
+through the same POST, with no parent or companion flags; “Ещё один товар” starts
+another explicit intent. The stable slug, double-click guard and GET reconciliation
+on an uncertain response remain. Saving an existing product remains PATCH.
+
+Only independent raw/finished cards appear in the product selector. Stored guide
+and legacy multi-offer records, parents and public relations are not deleted,
+converted, unpublished or changed. They are hidden from the new MVP editor, with
+a neutral notice. Server support and existing export/site data remain unchanged;
+there is no linked-card/guide creation or task selection in this UI.
+
+Each product exposes name, description, price, availability, gallery/main/order,
+save and publish. Empty unpublished offers are initialized only in form state
+with blank/unconfirmed price/availability; no default price or availability is
+written. Existing published offers are loaded intact. Extra existing fields remain
+in the collapsed section to avoid losing independent stored values. Price,
+availability, photo and publication validation/approval are unchanged. The current
+project prompt is copied with raw or finished task context; stored IstraArt Style
+is not edited or replaced. Old template text itself remains owner-controlled in
+project settings. Catalog uploads still use neutral unclassified and immutable
+variants, without a Telegram attachment/type selector.
+
+**Source block:** original Telegram text and files remain unchanged. The existing
+ownBrief PATCH adds owner text separately before preparation. Existing intake via
+the bot remains; no new bot/client/source service is introduced. A local file
+picker adds images to the currently opened own material using multipart POST on
+the existing /api/content-factory/items/[id]/original-images endpoint. This is the
+only server extension in this change; the normal bodyless partner-copy retry
+continues unchanged. No new source record is created by this picker.
+
+The multipart mode is IstraArt-only, behind existing Admin protection and exact
+Origin checks. It reuses image validation and writeOriginalImage, limits input,
+locks the scoped material and existing catalog rows, and refuses non-owner,
+prepared/linked or already-published sources/cards, incomplete originals and more
+than ten photos. Existing source text/files are never overwritten: a valid file
+is appended with a local upload marker to existing metadata in one transaction.
+No bytes are kept in PostgreSQL. Pre-commit failure removes only the newly written
+unreferenced file. An uncertain COMMIT retains it and responds 503 instructing the
+owner to reload/check before retry, with no automatic repeat. A later multi-file
+failure retains earlier successful files. Once prepared/published, new product
+photos can still be added to that independent draft's catalog gallery by its
+existing path; original source editing is restricted.
+
+RU Social, Quality Gate, existing Telegram delivery, other-project UI/APIs,
+published-card data, API export and schema remain unchanged. Tests exercise two
+exclusive types, additional independent products, no guide/legacy selection,
+uncertain responses, original upload/text preservation and project/status/error
+boundaries, alongside prior media/prompt/publication tests. Local tests are not
+live Telegram or production/browser acceptance. No migrations, merge or deploy.
