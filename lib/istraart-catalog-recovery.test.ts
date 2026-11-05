@@ -56,7 +56,7 @@ test('actual prompt and card GET handlers fail closed without 0042 and recover w
 
 function view(file: string, name: string, state: any[], extra: Record<string, unknown> = {}) {
   let cursor = 0
-  const component = load(file, { ...common, ...extra, react: { useEffect() {}, useState(initial: any) { const slot = cursor++; if (!(slot in state)) state[slot] = typeof initial === 'function' ? initial() : initial; return [state[slot], (next: any) => { state[slot] = typeof next === 'function' ? next(state[slot]) : next }] } } })[name]
+  const component = load(file, { ...common, ...extra, react: { useEffect() {}, useRef(initial: any) { return { current: initial } }, useState(initial: any) { const slot = cursor++; if (!(slot in state)) state[slot] = typeof initial === 'function' ? initial() : initial; return [state[slot], (next: any) => { state[slot] = typeof next === 'function' ? next(state[slot]) : next }] } } })[name]
   return (props = {}) => { cursor = 0; return component(props) }
 }
 function nodes(tree: any): any[] {

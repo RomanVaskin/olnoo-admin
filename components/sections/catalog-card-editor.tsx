@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { CatalogCardCreate } from './catalog-card-create'
 import { catalogResponseError } from '@/lib/catalog-http'
 import { IstraArtChatGptPrompt } from '@/components/sections/istraart-style-panel'
@@ -30,6 +30,7 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const deleting = useRef(false)
   const url = `/api/catalog/cards?project=${encodeURIComponent(project)}`
   async function load(preferredId?: string) {
     setLoading(true); setLoaded(false); setError(''); setServerErrors({})
@@ -90,6 +91,22 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
     } catch (err) { setError(err instanceof Error ? err.message : 'Ошибка запроса.') }
     finally { setBusy(false) }
   }
+  async function deleteCard(card: Row) {
+    if (deleting.current || busy) return
+    if (card.id !== row?.id && !discardChanges()) return
+    if (!window.confirm(`Удалить товар «${card.title}»? Он исчезнет с сайта. Фотографии и публикации в соцсетях сохранятся. Это действие нельзя отменить.`)) return
+    deleting.current = true
+    setBusy(true); setError('')
+    try {
+      const response = await fetch(`/api/catalog/cards/${card.id}?project=${encodeURIComponent(project)}`, { method: 'DELETE' })
+      if (!response.ok) throw new Error(await catalogResponseError(response, 'Не удалось удалить товар.'))
+      // Remove the known-deleted row even if the subsequent refresh fails.
+      setCards((current) => current.filter((saved) => saved.id !== card.id))
+      if (row?.id === card.id) { setRow(null); setDirty(false) }
+      await load()
+    } catch (err) { setError(err instanceof Error ? err.message : 'Не удалось удалить товар.') }
+    finally { deleting.current = false; setBusy(false) }
+  }
   const publicationErrors = catalogCardErrors(draft, photoCount, true, cardKind)
   if (!manualPhotoSelectionValid(draft, item.originalImageFiles, media)) publicationErrors.manualPhotoSelection = 'Выберите доступный файл для каждой отмеченной позиции.'
   const errors = serverErrors
@@ -100,7 +117,13 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
     <div className="flex flex-col gap-3 border border-hairline p-4">
       <h2 className="label-mono">Карточка товара</h2>
       <CatalogCardCreate key={item.id} project={project} item={item} cards={cards} disabled={busy || !loaded} onCreated={load} beforeCreate={discardChanges} onBusyChange={setBusy} />
-      {cards.some((c) => c.card_kind !== 'raw' && c.card_kind !== 'finished') && <p className="text-xs text-muted-foreground">Карточки прежнего формата сохранены без изменений и скрыты в этом редакторе.</p>}
+      {cards.some((c) => c.card_kind !== 'raw' && c.card_kind !== 'finished') && <details>
+        <summary className="cursor-pointer text-sm">Карточки прежнего формата</summary>
+        <p className="text-xs text-muted-foreground">Данные сохранены. Связанный гайд нужно удалить перед удалением изделия.</p>
+        {cards.filter((c) => c.card_kind !== 'raw' && c.card_kind !== 'finished').map((card) => <div key={card.id} className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+          <span>{card.title}</span><button type="button" disabled={busy || !loaded} onClick={() => deleteCard(card)} className="text-destructive underline disabled:opacity-50">Удалить товар</button>
+        </div>)}
+      </details>}
       {cards.some((c) => c.card_kind === 'raw' || c.card_kind === 'finished') && <label className="flex min-w-0 flex-col gap-1 text-sm">Товары<select aria-label="Товары" disabled={busy || !loaded} value={row?.id ?? ''} onChange={(e) => { const selected = cards.find((c) => c.id === e.target.value); if (selected && discardChanges()) selectCard(selected) }} className={`${field} w-full min-w-0`}>
         <option value="" disabled>Новая карточка</option>
         {cards.filter((c) => c.card_kind === 'raw' || c.card_kind === 'finished').map((card) => <option key={card.id} value={card.id}>{card.card_kind === 'legacy' ? 'Прежняя карточка' : labels[card.card_kind]} · {card.title} · {card.published_at ? 'Опубликовано на сайте' : 'Черновик'}</option>)}
@@ -201,6 +224,7 @@ export function CatalogCardEditor({ project, item, social }: { project: string; 
           <button type="button" onClick={() => action()} disabled={!dirty && !!row} className={`${field} border-foreground bg-foreground text-background disabled:opacity-50`}>Сохранить</button>
           <button type="button" onClick={() => action('publish')} disabled={!row || dirty || !!row.published_at || Object.keys(publicationErrors).length > 0} className={`${field} disabled:opacity-50`}>Опубликовать на сайте</button>
           {row?.published_at && <button type="button" onClick={() => action('unpublish')} disabled={dirty} className={field}>Снять с публикации</button>}
+          {row && <button type="button" onClick={() => deleteCard(row)} disabled={busy || !loaded} className={`${field} text-destructive disabled:opacity-50`}>Удалить товар</button>}
         </div>
       </fieldset>
 

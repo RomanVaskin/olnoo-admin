@@ -1,8 +1,9 @@
 'use client'
 
 import { OwnMaterialUpload } from './own-material-upload'
+import { catalogResponseError } from '@/lib/catalog-http'
 import { CatalogCardEditor } from './catalog-card-editor'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { SectionHeader, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
@@ -435,6 +436,9 @@ export function ContentFactoryItemsView({
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [selected, setSelected] = useState<Item | null>(null)
   const [loading, setLoading] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState('')
+  const deleting = useRef(false)
 
   async function load() {
     if (project === 'all') {
@@ -455,7 +459,27 @@ export function ContentFactoryItemsView({
   useEffect(() => {
     load()
     setSelected(null)
+    setDeleteError('')
   }, [project, statusFilter])
+
+  async function deleteMaterial(item: Item) {
+    if (deleting.current) return
+    deleting.current = true; setDeletingId(item.id); setDeleteError('')
+    try {
+      const cardsResponse = await fetch(`/api/catalog/cards?project=${encodeURIComponent(project)}`, { cache: 'no-store' })
+      if (!cardsResponse.ok) throw new Error(await catalogResponseError(cardsResponse, 'Не удалось проверить связанные товары.'))
+      const cards = await cardsResponse.json() as { content_item_id: string }[]
+      const count = cards.filter((card) => card.content_item_id === item.id).length
+      if (count) throw new Error(`С материалом связаны карточки товаров: ${count}. Сначала откройте материал и удалите карточки.`)
+      const name = item.originalText.trim().split('\n')[0].slice(0, 100) || item.generatedTitle || 'Без названия'
+      if (!window.confirm(`Удалить материал «${name}»? Связанных товаров: 0. Фотографии и публикации в соцсетях сохранятся. Это действие нельзя отменить.`)) return
+      const response = await fetch(`/api/content-factory/items/${item.id}?project=${encodeURIComponent(project)}`, { method: 'DELETE' })
+      if (!response.ok) throw new Error(await catalogResponseError(response, 'Не удалось удалить материал.'))
+      setItems((current) => current.filter((row) => row.id !== item.id))
+      setSelected((current) => current?.id === item.id ? null : current)
+    } catch (err) { setDeleteError(err instanceof Error ? err.message : 'Не удалось удалить материал.') }
+    finally { deleting.current = false; setDeletingId(null) }
+  }
 
   function handleUpdated(updated: Item) {
     setItems((current) => current.map((it) => (it.id === updated.id ? updated : it)))
@@ -488,6 +512,7 @@ export function ContentFactoryItemsView({
             ))}
           </select>
 
+          {deleteError && <p role="alert" className="text-sm text-destructive">{deleteError}</p>}
           <TableShell>
             <thead>
               <tr>
@@ -514,6 +539,7 @@ export function ContentFactoryItemsView({
                   </Td>
                   <Td>
                     <button className="label-mono text-blue underline underline-offset-4">{t.common.open}</button>
+                    {project === 'istraart' && <button type="button" disabled={deletingId !== null} onClick={(event) => { event.stopPropagation(); void deleteMaterial(item) }} className="label-mono ml-3 text-destructive underline underline-offset-4 disabled:opacity-50">{deletingId === item.id ? 'Удаление…' : 'Удалить'}</button>}
                   </Td>
                 </tr>
               ))}

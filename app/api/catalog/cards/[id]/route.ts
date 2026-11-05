@@ -1,3 +1,4 @@
+import { istraArtDeleteAccess, deleteIstraArtCard } from '@/lib/istraart-delete'
 import { withCatalogSchemaGuard } from '@/lib/catalog-schema'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
@@ -69,3 +70,14 @@ async function patch(req: Request, { params }: { params: Promise<{ id: string }>
 }
 
 export const PATCH = withCatalogSchemaGuard(patch)
+
+/** Destructive owner-only operation, behind the existing Admin Basic Auth proxy. */
+export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = istraArtDeleteAccess(req)
+  if (denied) return denied
+  const projectId = await resolveProjectId('istraart')
+  if (!projectId) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const { id } = await params
+  const result = await deleteIstraArtCard(pool, projectId, id)
+  return NextResponse.json(result.body, { status: result.status, headers: { 'Cache-Control': 'no-store' } })
+}

@@ -1,3 +1,4 @@
+import { istraArtDeleteAccess, deleteIstraArtMaterial } from '@/lib/istraart-delete'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
@@ -67,4 +68,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   return NextResponse.json({ error: 'nothing to update' }, { status: 400 })
+}
+
+/** Destructive owner-only operation, behind the existing Admin Basic Auth proxy. */
+export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = istraArtDeleteAccess(req)
+  if (denied) return denied
+  const projectId = await resolveProjectId('istraart')
+  if (!projectId) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const { id } = await params
+  const result = await deleteIstraArtMaterial(pool, projectId, id)
+  return NextResponse.json(result.body, { status: result.status, headers: { 'Cache-Control': 'no-store' } })
 }
