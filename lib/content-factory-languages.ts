@@ -1,3 +1,4 @@
+import { isTrustedCopy } from './telegram-original.ts'
 import type { Pool } from 'pg'
 import { callAiRouter } from './ai-router.ts'
 import { buildProjectAiContext, projectAiContextBlock } from './project-ai-context.ts'
@@ -47,6 +48,7 @@ export async function translateItem(
   pool: Pool, item: ContentFactoryItem, target: PostLanguage, confirmPartnerTranslationRights: boolean,
   deps: { callRouter?: typeof callAiRouter; projectContext?: string } = {},
 ): Promise<ContentFactoryItem> {
+  if (isTrustedCopy(item)) throw new ContentFactoryLanguageError('Перевод MTProto-копии пока не поддерживается: отправьте исходную языковую версию без потери вложений.')
   if (!item.sourceLanguage) throw new ContentFactoryLanguageError('Cannot determine the prepared post language. Edit the text to make its language clear.')
   if (target === item.sourceLanguage) throw new ContentFactoryLanguageError('The post is already in this language.')
   if ((target === 'en' && item.enPublishClaimed) || (target === 'ru' && item.status === 'scheduled')) throw new ContentFactoryLanguageError('This channel is already being prepared for publication.')
@@ -94,10 +96,10 @@ export async function approveLanguage(pool: Pool, item: ContentFactoryItem, lang
   }
   const native = language === item.sourceLanguage
   const text = languageText(item, language)
-  if (!text) throw new ContentFactoryLanguageError('This language version has no text.')
+  if (!text && !isTrustedCopy(item)) throw new ContentFactoryLanguageError('This language version has no text.')
   if (native) {
     if (item.processingMode === 'copy' && !item.copyApprovedAt) {
-      if (!rights || item.status !== 'needs_review' || !copyImagesReady(item) || !(await approvePartnerCopy(pool, item.projectId, item.id, rights))) {
+      if ((!rights && !isTrustedCopy(item)) || item.status !== 'needs_review' || !copyImagesReady(item) || !(await approvePartnerCopy(pool, item.projectId, item.id, rights || isTrustedCopy(item)))) {
         throw new ContentFactoryLanguageError('Compare the original text and confirm text and image rights before approval.')
       }
     } else if (item.processingMode !== 'copy' && (!hasPassedAiReview(item) || !['ready', 'failed', 'scheduled'].includes(item.status))) {

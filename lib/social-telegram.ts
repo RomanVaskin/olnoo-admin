@@ -1,3 +1,5 @@
+import { loadOriginalPlan, sendOriginalPlan, type OriginalPlan } from './social-telegram-original.ts'
+import { isTrustedCopy } from './telegram-original.ts'
 import type { Pool } from 'pg'
 import { resolveProjectId } from '@/lib/crm'
 import { syncPostStatusFromPublications } from '@/lib/social'
@@ -91,11 +93,6 @@ export async function publishSocialPublicationToTelegram(
   )
   const post = postRows[0]
   let text = post?.telegram_text?.trim() || post?.body?.trim() || ''
-  if (!text) {
-    const error = 'post has no content to publish'
-    await recordPublicationPreflightFailure(pool, id, projectId, error)
-    return { error, status: 400 }
-  }
 
   let account: { username: string; platform?: string } | undefined
   if (publication.social_account_id) {
@@ -139,6 +136,7 @@ export async function publishSocialPublicationToTelegram(
   )
   let copyImages: { bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }[] = []
   let outgoingPhoto = photo
+  let originalPlan: OriginalPlan | undefined
   if (linkedRows[0]) {
     const item = await getItem(pool, projectId, linkedRows[0].id)
     const isEnglish = linkedRows[0].is_en
@@ -153,11 +151,19 @@ export async function publishSocialPublicationToTelegram(
       await recordPublicationPreflightFailure(pool, id, projectId, error)
       return { error, status: 409 }
     }
+    if (isTrustedCopy(item) && translated) {
+      const error = 'Перевод MTProto-копии пока не поддерживается; исходные вложения не будут отброшены.'
+      await recordPublicationPreflightFailure(pool,id,projectId,error)
+      return {error,status:409}
+    }
     text = isEnglish ? (translated ? item.enText : item.generatedText) : (translated ? item.ruText : item.generatedText)
     try {
-      const media = await loadLanguageMedia(item, projectSlug!, isEnglish ? 'en' : 'ru')
-      copyImages = media.images
-      outgoingPhoto = media.photo ?? outgoingPhoto
+      if (isTrustedCopy(item) && !translated) originalPlan = await loadOriginalPlan(item.projectId,item.id,item.originalTelegram)
+      else {
+        const media = await loadLanguageMedia(item, projectSlug!, isEnglish ? 'en' : 'ru')
+        copyImages = media.images
+        outgoingPhoto = media.photo ?? outgoingPhoto
+      }
     } catch {
       const error = item.processingMode === 'copy'
         ? 'A saved source image is unavailable. Restore it before publishing the complete post.'
@@ -165,6 +171,12 @@ export async function publishSocialPublicationToTelegram(
       await recordPublicationPreflightFailure(pool, id, projectId, error)
       return { error, status: 409 }
     }
+  }
+
+  if (!text && !originalPlan) {
+    const error = 'post has no content to publish'
+    await recordPublicationPreflightFailure(pool, id, projectId, error)
+    return { error, status: 400 }
   }
 
   // Atomic claim, right before the one irreversible call — see claimPublicationForSending's own
@@ -176,7 +188,11 @@ export async function publishSocialPublicationToTelegram(
   let telegramError: string | null = null
   let messageId: number | null = null
   let sendOutcomeUnknown = false
-  if (outgoingPhoto || copyImages.length) {
+  if (originalPlan) {
+    const result = await sendOriginalPlan({ baseUrl: TELEGRAM_API_BASE, token, chatId, parts: originalPlan })
+    if (result.kind === 'sent') messageId = result.messageId
+    else { telegramError = result.error; sendOutcomeUnknown = result.kind === 'unknown' }
+  } else if (outgoingPhoto || copyImages.length) {
     const result = copyImages.length > 1
       ? await sendTelegramAlbumWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, images: copyImages })
       : await sendTelegramPhotoWithText({ baseUrl: TELEGRAM_API_BASE, token, chatId, text, image: copyImages[0]?.bytes ?? outgoingPhoto!, mimeType: copyImages[0]?.mimeType })

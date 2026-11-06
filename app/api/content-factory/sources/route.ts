@@ -1,3 +1,4 @@
+import { sourceAutomationAccess } from '@/lib/content-factory-source-policy'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
@@ -11,6 +12,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  if (!sourceAutomationAccess(req)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   const project = new URL(req.url).searchParams.get('project')
   const projectId = await resolveProjectId(project)
   if (!projectId) return NextResponse.json({ error: 'a known project is required' }, { status: 400 })
@@ -21,6 +23,7 @@ export async function POST(req: Request) {
   }
   try {
     const source = await createSource(pool, projectId, {
+      automation: body.automation,
       type: body.type, handle: body.handle,
       processingMode: body.processingMode, copyPermissionConfirmed: body.copyPermissionConfirmed,
     })

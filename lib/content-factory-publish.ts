@@ -1,3 +1,5 @@
+import { isTrustedCopy } from './telegram-original.ts'
+import { claimTelegramOrigin } from './content-factory-automation.ts'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { createSocialPost, getSocialPost } from '@/lib/social'
@@ -50,7 +52,7 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
   if (!item.socialPostId && !canPublish(item.status) && item.status !== 'failed') {
     return { error: `Item is not ready to publish (status: ${item.status}). Approve it first.`, status: 409 }
   }
-  if (!ruText.trim()) {
+  if (!ruText.trim() && !isTrustedCopy(item)) {
     return { error: 'This item has no prepared text yet — generate one first.', status: 400 }
   }
   if (isCopy ? !hasApprovedPartnerCopy(item) : !hasPassedAiReview(item)) {
@@ -62,7 +64,7 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
   if (isCopy && item.generatedText !== item.originalText) {
     return { error: 'Partner text differs from the approved source preview. Publication is blocked.', status: 409 }
   }
-  if (isCopy && Array.from(ruText).length > 4096) {
+  if (isCopy && !isTrustedCopy(item) && Array.from(ruText).length > 4096) {
     return { error: 'The Russian text exceeds Telegram\'s 4096-character limit.', status: 422 }
   }
 
@@ -74,6 +76,8 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
       return { error: 'The generated image is unavailable. Regenerate or delete it before publishing.', status: 500 }
     }
   }
+
+  if (!await claimTelegramOrigin(pool, item)) return { error: 'Это исходное сообщение уже связано с другим материалом проекта. Проверьте историю дубликатов.', status: 409 }
 
   let socialPostId = item.socialPostId
   if (!socialPostId) {
@@ -142,7 +146,7 @@ async function publishEnglishItem(projectSlug: string, item: ContentFactoryItem)
   const projectId = item.projectId
   const enText = languageText(item, 'en')
   const translated = item.sourceLanguage === 'ru'
-  if (!item.enApprovedAt || !item.enAccountId || !enText ||
+  if (!item.enApprovedAt || !item.enAccountId || (!enText && !isTrustedCopy(item)) ||
       (translated && (item.enSourceText !== item.generatedText || (item.processingMode === 'copy' && !item.enRightsConfirmed))) ||
       (item.processingMode === 'copy' ? !copyImagesReady(item) || !hasApprovedPartnerCopy(item) : !hasPassedAiReview(item))) {
     return { error: 'Approve the current English version and its rights before publishing.', status: 409 }
@@ -150,6 +154,7 @@ async function publishEnglishItem(projectSlug: string, item: ContentFactoryItem)
   try { await selectedTelegramAccount(pool, projectId, item.enAccountId, true) }
   catch (error) { return { error: error instanceof Error ? error.message : 'Channel verification failed.', status: 409 } }
 
+  if (!await claimTelegramOrigin(pool, item)) return { error: 'Это исходное сообщение уже связано с другим материалом проекта. Проверьте историю дубликатов.', status: 409 }
   let socialPostId = item.enSocialPostId
   if (!socialPostId) {
     const claim = await pool.query(`UPDATE content_factory_items SET en_publish_claimed = true

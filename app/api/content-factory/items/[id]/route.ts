@@ -2,7 +2,7 @@ import { istraArtDeleteAccess, deleteIstraArtMaterial } from '@/lib/istraart-del
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
-import { getItem, editGeneratedContent, setItemStatus, approvePartnerCopy, canApprove, canReject } from '@/lib/content-factory-items'
+import { getItem, editGeneratedContent, setItemStatus, approvePartnerCopy, isTrustedCopy, canApprove, canReject } from '@/lib/content-factory-items'
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -45,9 +45,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (body.action === 'approve') {
     if (!canApprove(item.status)) return NextResponse.json({ error: `Cannot approve from status "${item.status}".` }, { status: 409 })
     if (item.processingMode === 'copy') {
-      if (body.confirmOriginalTextComplete !== true) return NextResponse.json({ error: 'Compare the public preview with the original Telegram post and confirm the text is complete before approving.' }, { status: 422 })
-      if (item.originalImageUrls.length > 0 && body.confirmImageRights !== true) return NextResponse.json({ error: 'Confirm permission to use the source images before approving.' }, { status: 422 })
-      const approved = await approvePartnerCopy(pool, projectId, id, body.confirmImageRights === true)
+      if (body.confirmOriginalTextComplete !== true && !isTrustedCopy(item)) return NextResponse.json({ error: 'Compare the public preview with the original Telegram post and confirm the text is complete before approving.' }, { status: 422 })
+      if (item.originalImageUrls.length > 0 && body.confirmImageRights !== true && !isTrustedCopy(item)) return NextResponse.json({ error: 'Confirm permission to use the source images before approving.' }, { status: 422 })
+      const approved = await approvePartnerCopy(pool, projectId, id, body.confirmImageRights === true || isTrustedCopy(item))
       if (!approved) return NextResponse.json({ error: 'Partner copy is incomplete, unlicensed, or changed. Refresh the material.' }, { status: 409 })
       return NextResponse.json(approved)
     }
