@@ -1,3 +1,5 @@
+import * as originals from './telegram-original.ts'
+import * as originalPublisher from './social-telegram-original.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -68,6 +70,7 @@ test('automatic preparation executes the existing generator/parser and independe
   let generated=0,reviewed=0,fail=false,finished:any, saved:any
   const claim={id:'item',projectId:1,originalText:'Оригинал',originalUrl:'https://t.me/channel_name/101',generatedTitle:'Новый заголовок',generatedText:'Новый материал\n\nИсточник: https://t.me/channel_name/101',imageFilename:'',aiReview:{claimId:'claim'}}
   const api=load('./content-factory-automation.ts',{
+    './telegram-original.ts': originals, './social-telegram-original.ts': originalPublisher,
     './content-factory-items.ts':{setGeneratedContent:async(_p:any,_project:any,_id:any,content:any)=>{saved=content;return claim},claimAiReview:async()=>claim,finishAiReview:async(_p:any,_project:any,_id:any,_snapshot:any,review:any)=>{finished=review;return claim}},
     './content-factory-generate.ts':{generateContentFactoryArticle:async()=>{generated++;return {title:'Новый заголовок',body:'Новый материал',needsReview:false,reviewReason:''}}},
     './content-factory-review.ts':{reviewContentFactoryItem:async(_pool:any,item:any)=>{reviewed++;assert.match(item.generatedText,/Источник: https:\/\/t.me\/channel_name\/101/);if(fail)throw new Error('invalid JSON');return {status:'passed'}}},

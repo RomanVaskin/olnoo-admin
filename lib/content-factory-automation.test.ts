@@ -32,7 +32,7 @@ function harness(mode = 'auto_publish', processing = 'ai') {
       for (const item of items) if (BigInt(item.external_id) > BigInt(args[3]) && new Date(item.created_at) >= new Date(args[4]) && !item.automation.status) item.automation = JSON.parse(args[0])
       return { rows: [] }
     }
-    if (sql.startsWith('SELECT id, automation FROM')) return { rows: items.filter((i) => i.project_id === args[0] && i.source_id === args[1] && i.automation.revision === args[2] && ['pending','failed','processing','publishing','send_retry'].includes(i.automation.status)).slice(0,1) }
+    if (sql.startsWith('SELECT id, automation FROM')) return { rows: items.filter((i) => i.project_id === args[0] && i.source_id === args[1] && i.automation.revision === args[2] && ['pending','failed','processing','publishing','send_retry'].includes(i.automation.status)).slice(0,20) }
     if (sql.startsWith('SELECT * FROM content_factory_items')) return { rows: items.filter((i) => i.id === args[0] && i.project_id === args[1]) }
     if (sql.startsWith('UPDATE content_factory_items SET automation = $1')) { const item = items.find((i) => i.id === args[1]); if (item) item.automation = JSON.parse(args[0]); return { rows: [] } }
     if (sql.startsWith('UPDATE content_factory_items SET ru_account_id')) return { rows: [] }
@@ -245,4 +245,18 @@ test('already delivered source publications count against the day cap even when 
   const h=await armed();h.add(101);h.source.existingPublishedCount=3
   await h.run();assert.equal(h.calls.publish,0);assert.equal(h.source.automation_runtime.operation,'daily_limit')
   assert.equal(h.source.automation_runtime.sendUsed,3)
+})
+
+test('authoritative Monitor copy publishes without AI or per-post completeness/legal prompts',async()=>{
+ const h=await armed('auto_publish','copy');h.source.automation.transport='monitor'
+ h.add(101,{original_text:'Партнёрский оригинал',generated_text:'Партнёрский оригинал',original_telegram:{version:1,transport:'mtproto',complete:true,peerId:'77',groupedId:null,messageIds:['101'],messages:[{id:'101',text:'Партнёрский оригинал',entities:[]}]}})
+ await h.run();assert.equal(h.calls.prepare,0);assert.equal(h.calls.approve,1);assert.equal(h.calls.publish,1)
+ h.advance();await h.run();assert.equal(h.calls.publish,1)
+})
+
+test('one Monitor cycle drains new complete copies up to the daily limit, without paid AI calls',async()=>{
+ const h=await armed('auto_publish','copy');h.source.automation.transport='monitor'
+ for(let id=101;id<=104;id++)h.add(id,{original_text:`Оригинал ${id}`,generated_text:`Оригинал ${id}`,original_telegram:{version:1,transport:'mtproto',complete:true,peerId:'77',groupedId:null,messageIds:[String(id)],messages:[{id:String(id),text:`Оригинал ${id}`,entities:[]}]}})
+ await h.run();assert.equal(h.calls.prepare,0);assert.equal(h.calls.publish,3);assert.equal(h.calls.approve,3)
+ assert.equal(h.items[4].automation.status,'pending')
 })

@@ -36,6 +36,7 @@ export type ContentFactorySource = {
   enabled: boolean
   processingMode: SourceProcessingMode
   copyPermissionConfirmed: boolean
+  monitorBaseline?: boolean
   automation?: SourceAutomation
   automationRevision?: string
   automationRuntime?: Record<string, any>
@@ -137,8 +138,8 @@ export async function updateSource(
     await validateSourceAutomation(db, projectId, existing.type, handle, automation, id, patch.enabled === false)
     const changed = patch.automation !== undefined || handle !== existing.handle || processingMode !== existing.processingMode || enabled !== existing.enabled || JSON.stringify(automation) !== JSON.stringify(existing.automation)
     const { rows } = await db.query(
-      `UPDATE content_factory_sources SET handle = $1, enabled = $2, processing_mode = $3, copy_permission_confirmed = $4, automation = $7::jsonb, automation_revision = CASE WHEN $8 THEN $9 ELSE automation_revision END, automation_runtime = CASE WHEN $8 THEN automation_runtime - ARRAY['since','cursor','paused','failures','operation','error'] ELSE automation_runtime END, updated_at = now() WHERE id = $5 AND project_id = $6 RETURNING *`,
-      [handle, enabled, processingMode, processingMode === 'copy' && copyPermissionConfirmed, id, projectId, JSON.stringify(automation), changed, randomUUID()],
+      `UPDATE content_factory_sources SET handle = $1, enabled = $2, processing_mode = $3, copy_permission_confirmed = $4, automation = $7::jsonb, automation_revision = CASE WHEN $8 THEN $9 ELSE automation_revision END, automation_runtime = CASE WHEN $8 THEN (CASE WHEN $10 THEN automation_runtime - ARRAY['monitorCursor','monitorPeer'] ELSE automation_runtime END) - ARRAY['since','cursor','paused','failures','operation','error'] ELSE automation_runtime END, updated_at = now() WHERE id = $5 AND project_id = $6 RETURNING *`,
+      [handle, enabled, processingMode, processingMode === 'copy' && copyPermissionConfirmed, id, projectId, JSON.stringify(automation), changed, randomUUID(), existing.type === 'telegram' && normalizeTelegramHandle(existing.handle)?.toLowerCase() !== handle],
     )
     return rows[0] ? sourceFromRow(rows[0]) : null
   })

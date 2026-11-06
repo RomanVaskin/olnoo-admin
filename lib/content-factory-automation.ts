@@ -1,3 +1,5 @@
+import { isTrustedCopy, trustedTelegramOriginal } from './telegram-original.ts'
+import { loadOriginalPlan } from './social-telegram-original.ts'
 import type { Pool } from 'pg'
 import { getItem, setGeneratedContent, setItemStatus, claimAiReview, finishAiReview, hasPassedAiReview, type ContentFactoryItem } from './content-factory-items.ts'
 import { generateContentFactoryArticle } from './content-factory-generate.ts'
@@ -54,7 +56,8 @@ export async function approveAutomationItem(pool: Pool, source: ContentFactorySo
 export async function claimTelegramOrigin(pool: Pool, item: ContentFactoryItem): Promise<boolean> {
   const match = /^https:\/\/t\.me\/([a-z0-9_]{5,32})\/(\d+)\/?$/i.exec(item.originalUrl)
   if (item.originKind === 'own' || !match) return true
-  const key = `${match[1].toLowerCase()}/${BigInt(match[2])}`
+  const original = trustedTelegramOriginal(item.originalTelegram) ? item.originalTelegram : null
+  const key = original ? `mtproto:${original.peerId}:${original.groupedId === null ? 'm:'+original.messageIds[0] : 'g:'+original.groupedId}` : `${match[1].toLowerCase()}/${BigInt(match[2])}`
   try {
     const result = await pool.query(`UPDATE content_factory_items i SET automation_message_key = $1
       WHERE i.id = $2 AND i.project_id = $3
@@ -63,4 +66,19 @@ export async function claimTelegramOrigin(pool: Pool, item: ContentFactoryItem):
           AND (other.social_post_id IS NOT NULL OR other.en_social_post_id IS NOT NULL)) RETURNING id`, [key, item.id, item.projectId])
     return !!result.rowCount
   } catch (e) { if ((e as { code?: string }).code === '23505') return false; throw e }
+}
+
+/** Source permission already covers partner materials; API provenance replaces HTML comparison. */
+export async function approveMonitorCopy(pool: Pool, source: ContentFactorySource, item: ContentFactoryItem): Promise<ContentFactoryItem> {
+  if (!item.copyPermissionConfirmed || !isTrustedCopy(item) || !trustedTelegramOriginal(item.originalTelegram,item.originalText) || !item.sourceLanguage) throw new Error('Trusted complete original and source permission required.')
+  await loadOriginalPlan(item.projectId,item.id,item.originalTelegram)
+  const language=item.sourceLanguage
+  const approved=await pool.query(`UPDATE content_factory_items SET status='ready',copy_approved_at=now(),copy_image_permission_confirmed=true,
+    ${language}_account_id=$1,${language}_approved_at=now(),updated_at=now()
+    WHERE id=$2 AND project_id=$3 AND processing_mode='copy' AND copy_permission_confirmed=true
+      AND generated_text=original_text AND original_telegram=$4::jsonb AND content_factory_trusted_original_valid(content_factory_items)
+      AND status IN ('needs_review','ready','failed') AND social_post_id IS NULL AND en_social_post_id IS NULL RETURNING id`,
+    [source.automation!.accountId,item.id,item.projectId,JSON.stringify(item.originalTelegram)])
+  if(!approved.rowCount)throw new Error('The original changed before approval.')
+  return (await getItem(pool,item.projectId,item.id))!
 }

@@ -1,4 +1,5 @@
 'use client'
+import type { TelegramOriginal } from '@/lib/telegram-original'
 
 import { OwnMaterialUpload } from './own-material-upload'
 import { catalogResponseError } from '@/lib/catalog-http'
@@ -27,6 +28,7 @@ function canReject(status: ItemStatus): boolean {
 }
 
 type Item = {
+  originalTelegram?: TelegramOriginal
   automation?: { status?: string; error?: string }
   id: string
   sourceId: string
@@ -116,6 +118,7 @@ function ItemDetail({
   const [copyCompared, setCopyCompared] = useState(false)
   const [imageRights, setImageRights] = useState(false)
   const isCopy = item.processingMode === 'copy'
+  const trustedCopy = isCopy && item.originalTelegram?.transport === 'mtproto' && item.originalTelegram.complete === true
   const ruOnly = project === 'istraart'
   const selectedPublishEn = !ruOnly && selectedEn
   const linked = !!(item.socialPostId || item.enSocialPostId || item.enPublishClaimed || item.status === 'scheduled')
@@ -183,7 +186,7 @@ function ItemDetail({
   }
   function languageAction(action: string, language: 'ru' | 'en', accountId?: string, textValue?: string) {
     const native = language === item.sourceLanguage
-    call(`/api/content-factory/items/${item.id}/languages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, language, accountId, text: textValue, confirmRights: isCopy && (native ? copyCompared && (item.originalImageUrls.length === 0 || imageRights) : partnerTranslationRights), confirmPartnerTranslationRights: isCopy && partnerTranslationRights }) }, action === 'translate' ? 'translate' : 'approve')
+    call(`/api/content-factory/items/${item.id}/languages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, language, accountId, text: textValue, confirmRights: isCopy && (native ? trustedCopy || copyCompared && (item.originalImageUrls.length === 0 || imageRights) : partnerTranslationRights), confirmPartnerTranslationRights: isCopy && partnerTranslationRights }) }, action === 'translate' ? 'translate' : 'approve')
   }
   async function publishSelected() {
     setBusy('publish')
@@ -360,8 +363,8 @@ function ItemDetail({
           </div>
           <div className="flex flex-col gap-4 border border-hairline bg-card p-4 text-sm">
             <span className="label-mono text-muted-foreground">{ruOnly ? 'Публикация RU' : t.contentFactory.items.languagesTitle}</span>
-            {isCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={copyCompared} onChange={(e) => setCopyCompared(e.target.checked)} />{t.contentFactory.items.confirmCopyText}</label>}
-            {isCopy && item.originalImageUrls.length > 0 && <label className="flex items-start gap-2"><input type="checkbox" checked={imageRights} onChange={(e) => setImageRights(e.target.checked)} />{t.contentFactory.items.confirmImageRights}</label>}
+            {isCopy && !trustedCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={copyCompared} onChange={(e) => setCopyCompared(e.target.checked)} />{t.contentFactory.items.confirmCopyText}</label>}
+            {isCopy && !trustedCopy && item.originalImageUrls.length > 0 && <label className="flex items-start gap-2"><input type="checkbox" checked={imageRights} onChange={(e) => setImageRights(e.target.checked)} />{t.contentFactory.items.confirmImageRights}</label>}
             {ruOnly && item.sourceLanguage !== 'ru' && <p className="text-muted-foreground">Для RU-публикации нужна подготовленная русская версия. Проверки языка и утверждения сохранены.</p>}
             <p>{t.contentFactory.items.sourceLanguage}: {item.sourceLanguage?.toUpperCase() ?? t.contentFactory.items.unknownLanguage}</p>
             {!ruOnly && isCopy && <label className="flex items-start gap-2"><input type="checkbox" checked={partnerTranslationRights} onChange={(e) => setPartnerTranslationRights(e.target.checked)} />{t.contentFactory.items.confirmTranslationRights}</label>}
@@ -387,7 +390,7 @@ function ItemDetail({
                   <textarea rows={10} value={translation} onChange={(e) => language === 'ru' ? setRuText(e.target.value) : setEnText(e.target.value)} className="w-full border border-hairline bg-card p-3" disabled={!!(language === 'ru' ? item.socialPostId : item.enSocialPostId)} />
                   <button onClick={() => languageAction('save_translation', language, undefined, translation)} disabled={busy !== null || !savedTranslation || translation === savedTranslation || !!(language === 'ru' ? item.socialPostId : item.enSocialPostId)} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{language === 'ru' ? t.contentFactory.items.saveRussian : t.contentFactory.items.saveEnglish}</button>
                 </>}
-                <button onClick={() => languageAction(language === 'ru' ? 'approve_ru' : 'approve_en', language, account)} disabled={busy !== null || !account || !item.sourceLanguage || (!!approved && account === (language === 'ru' ? item.ruAccountId : item.enAccountId)) || publication?.status === 'published' || publication?.status === 'publishing' || (native ? (!isCopy && (!reviewPassed || dirty || !['ready', 'failed', 'scheduled'].includes(item.status))) || (isCopy && (!copyCompared || (item.originalImageUrls.length > 0 && !imageRights))) : (!savedTranslation || translation !== savedTranslation || !nativeApproved || (isCopy && !partnerTranslationRights)))} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.actionApprove} {language.toUpperCase()}</button>
+                <button onClick={() => languageAction(language === 'ru' ? 'approve_ru' : 'approve_en', language, account)} disabled={busy !== null || !account || !item.sourceLanguage || (!!approved && account === (language === 'ru' ? item.ruAccountId : item.enAccountId)) || publication?.status === 'published' || publication?.status === 'publishing' || (native ? (!isCopy && (!reviewPassed || dirty || !['ready', 'failed', 'scheduled'].includes(item.status))) || (isCopy && !trustedCopy && (!copyCompared || (item.originalImageUrls.length > 0 && !imageRights))) : (!savedTranslation || translation !== savedTranslation || !nativeApproved || (isCopy && !partnerTranslationRights)))} className="label-mono self-start border border-hairline px-3 py-2 disabled:opacity-50">{t.contentFactory.items.actionApprove} {language.toUpperCase()}</button>
               </div>
             })}
             <button onClick={publish} disabled={busy !== null || (!selectedRu && !selectedPublishEn) || (selectedRu && channels.ru?.status !== 'published' && (!item.ruApprovedAt || ruAccount !== item.ruAccountId)) || (selectedPublishEn && channels.en?.status !== 'published' && (!item.enApprovedAt || enAccount !== item.enAccountId)) || ((!selectedRu || channels.ru?.status === 'published') && (!selectedPublishEn || channels.en?.status === 'published'))} className="label-mono border border-foreground bg-foreground px-3 py-2 text-background disabled:opacity-50">{busy === 'publish' ? t.contentFactory.items.publishing : t.contentFactory.items.publishSelected}</button>
@@ -407,10 +410,14 @@ function ItemDetail({
         </div>
 
         <div className="flex flex-col gap-6 px-6 py-6">
+          {item.originalTelegram?.transport === 'mtproto' && <section className="flex flex-col gap-2 border border-hairline p-3"><h3 className="label-mono">Оригинал OLNOO Monitor</h3><p className="text-xs text-muted-foreground">{item.originalTelegram.complete ? 'Получен через Telegram Client API' : 'Получение не завершено — публикация заблокирована'}</p>{item.originalTelegram.messages.map((m) => {
+            const src=`/api/content-factory/items/${item.id}/original-media/${m.id}?project=${encodeURIComponent(project)}`
+            return <div key={m.id}>{m.media?.kind === 'photo' ? <img src={src} alt="Оригинальное фото" className="max-h-80 object-contain" /> : m.media?.kind === 'video' ? <video controls preload="metadata" src={src} className="max-h-80" /> : m.media?.kind === 'audio' ? <audio controls preload="metadata" src={src} /> : m.media ? <a href={src} className="text-blue underline">{m.media.name}</a> : null}{m.text && <p className="whitespace-pre-wrap text-sm">{m.text}</p>}</div>
+          })}</section>}
           {item.automation?.status && <p role="status" className="text-sm text-muted-foreground">Последняя автоматическая операция: {automationLabels[item.automation.status] ?? 'Проверка'}{item.automation.error ? ` · ${item.automation.error}` : ''}</p>}
           {isIstraArt ? <section aria-label="Исходный материал" className="flex flex-col gap-3 border border-hairline p-4"><h2 className="label-mono">Исходный материал</h2>{originalSection}<OwnMaterialUpload key={item.id} itemId={item.id} disabled={busy !== null || linked || !!item.generatedText || !['new','failed'].includes(item.status)} onUpdated={onUpdated} /><div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{item.originalImageFiles.map((filename, index) => <img key={filename} src={`/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`Оригинальное фото ${index + 1}`} className="aspect-[4/5] w-full border border-hairline object-contain" />)}</div>{item.originalImageError && <p role="alert" className="text-sm text-destructive">{item.originalImageError}</p>}{item.originalImageFiles.length !== item.originalImageUrls.length && !item.originalImageError && <p role="alert" className="text-sm text-destructive">{t.contentFactory.items.imagesIncomplete}</p>}</section> : originalSection}
 
-          {isCopy && <p className="border border-hairline bg-background p-3 text-sm">{t.contentFactory.items.previewWarning}</p>}
+          {isCopy && !trustedCopy && <p className="border border-hairline bg-background p-3 text-sm">{t.contentFactory.items.previewWarning}</p>}
           {!isIstraArt && (isCopy || item.originKind === 'own') && item.originalImageUrls.length > 0 && <div className="flex flex-col gap-2 border border-hairline bg-background p-3 text-sm">
             <span className="label-mono text-muted-foreground">{t.contentFactory.items.originalImages} ({item.originalImageFiles.length}/{item.originalImageUrls.length})</span>
             <div className="grid grid-cols-2 gap-2">{item.originalImageFiles.map((filename, index) => <img key={filename} src={`/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`${t.contentFactory.items.originalImages} ${index + 1}`} className="aspect-square w-full border border-hairline object-cover" />)}</div>

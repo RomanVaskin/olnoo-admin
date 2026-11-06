@@ -113,7 +113,7 @@ export function ContentFactorySourcesView({
   }
 
   async function changeMode(source: Source, mode: 'ai' | 'copy') {
-    if (mode === 'copy' && !window.confirm(t.contentFactory.sources.confirmCopyPermission)) return
+    if (mode === 'copy' && !window.confirm('Партнёр разрешил копирование своих материалов?')) return
     const res = await fetch(`/api/content-factory/sources/${source.id}?project=${encodeURIComponent(project)}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ processingMode: mode, copyPermissionConfirmed: mode === 'copy' }),
@@ -159,6 +159,7 @@ export function ContentFactorySourcesView({
         <p className="text-sm text-muted-foreground">{t.contentFactory.selectProjectHint}</p>
       ) : (
         <>
+          <MonitorConnection key={project} project={project} />
           <HeaderActions>
             <select
               value={newType}
@@ -181,7 +182,7 @@ export function ContentFactorySourcesView({
               <option value="ai">{t.contentFactory.sources.modeAi}</option>
               <option value="copy" disabled={newType !== 'telegram'}>{t.contentFactory.sources.modeCopy}</option>
             </select>
-            {newMode === 'copy' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={newCopyPermission} onChange={(e) => setNewCopyPermission(e.target.checked)} />{t.contentFactory.sources.copyPermission}</label>}
+            {newMode === 'copy' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={newCopyPermission} onChange={(e) => setNewCopyPermission(e.target.checked)} />Есть разрешение партнёра на копирование материалов</label>}
             <button
               onClick={addSource}
               disabled={creating || !newHandle.trim() || (newMode === 'copy' && !newCopyPermission)}
@@ -277,24 +278,25 @@ export function ContentFactorySourcesView({
   )
 }
 
-type AutomationPolicy = { mode: 'manual' | 'auto_review' | 'auto_publish'; accountId: string | null; dailyLimit: number; mediaRightsConfirmed: boolean }
+type AutomationPolicy = { transport?: 'preview' | 'monitor'; mode: 'manual' | 'auto_review' | 'auto_publish'; accountId: string | null; dailyLimit: number; mediaRightsConfirmed: boolean }
 type TelegramAccount = { id: string; platform: string; name: string; username: string; active: boolean; status: string }
 function SourceAutomationEditor({ source, project, accounts, onSaved }: { source: Source; project: string; accounts: TelegramAccount[]; onSaved: () => Promise<void> }) {
   const [draft, setDraft] = useState<AutomationPolicy>(source.automation ?? { mode: 'manual', accountId: null, dailyLimit: 3, mediaRightsConfirmed: false })
   const [handle, setHandle] = useState(source.handle)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const modes = { manual: 'Ручной', auto_review: 'С согласованием', auto_publish: source.processingMode === 'copy' ? 'Автоматический: копия требует согласования' : 'Автоматический' }
+  const modes = { manual: 'Ручной', auto_review: 'С согласованием', auto_publish: source.processingMode === 'copy' && source.automation?.transport !== 'monitor' ? 'Автоматический: копия требует согласования' : 'Автоматический' }
   return <details className="min-w-[210px] text-xs">
     <summary className="cursor-pointer">{modes[source.automation?.mode ?? 'manual']} · {accounts.find((a) => a.id === source.automation?.accountId)?.username ?? 'Канал не выбран'} · {source.automation?.dailyLimit ?? 3}/сутки</summary>
     <div className="mt-2 flex flex-col gap-2">
+      <label>Получение<select aria-label={`Получение ${source.handle}`} value={draft.transport ?? 'preview'} disabled={busy || source.type !== 'telegram'} onChange={(e) => setDraft({ ...draft, transport: e.target.value as 'preview' | 'monitor' })} className="block w-full border border-hairline bg-card p-1"><option value="preview">HTML-превью — ручная проверка</option><option value="monitor">OLNOO Monitor — Telegram Client API</option></select></label>
       <label>Адрес источника<input aria-label={`Адрес источника ${source.handle}`} value={handle} disabled={busy} onChange={(e) => setHandle(e.target.value)} className="block w-full border border-hairline bg-card p-1" /></label>
       <label>Режим публикации<select aria-label={`Режим публикации ${source.handle}`} value={draft.mode} disabled={busy || source.type !== 'telegram'} onChange={(e) => setDraft({ ...draft, mode: e.target.value as AutomationPolicy['mode'] })} className="block w-full border border-hairline bg-card p-1">{Object.entries(modes).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label>Канал назначения<select aria-label={`Канал назначения ${source.handle}`} disabled={busy} value={draft.accountId ?? ''} onChange={(e) => setDraft({ ...draft, accountId: e.target.value || null })} className="block w-full border border-hairline bg-card p-1"><option value="">Выберите канал</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name} {a.username}</option>)}</select></label>
       {!accounts.length && <span role="alert">Нет подключённых Telegram-каналов. Подключите канал в «Соцсетях».</span>}
       <label>Лимит в сутки<input aria-label={`Лимит в сутки ${source.handle}`} type="number" min={1} max={20} value={draft.dailyLimit} disabled={busy} onChange={(e) => setDraft({ ...draft, dailyLimit: Number(e.target.value) })} className="block w-full border border-hairline bg-card p-1" /></label>
       <span>Проверка каждые 10 минут. При включении старый архив не публикуется.</span>
-      {source.processingMode === 'copy' && <>
+      {source.processingMode === 'copy' && source.automation?.transport !== 'monitor' && <>
         <label className="flex items-start gap-1"><input type="checkbox" checked={draft.mediaRightsConfirmed} disabled={busy} onChange={(e) => setDraft({ ...draft, mediaRightsConfirmed: e.target.checked })} />Разрешение правообладателя распространяется на изображения.</label>
         <span>HTML-превью не подтверждает полноту оригинала/альбома. Копии требуют сравнения и ручного утверждения даже в автоматическом режиме.</span>
       </>}
@@ -312,4 +314,10 @@ function SourceAutomationEditor({ source, project, accounts, onSaved }: { source
       {error && <span role="alert" className="text-destructive">{error}</span>}
     </div>
   </details>
+}
+
+function MonitorConnection({project}:{project:string}) {
+  const [status,setStatus]=useState('Не проверено'),[busy,setBusy]=useState(false)
+  async function check(){setBusy(true);try{const response=await fetch(`/api/content-factory/monitor?project=${encodeURIComponent(project)}`,{method:'POST'});const result=await response.json();setStatus(response.ok&&result.status==='connected'?'Подключён':result.error==='AUTHORIZATION_REQUIRED'?'Требуется первичная авторизация на сервере':result.error==='NOT_CONFIGURED'?'Не настроен':result.error==='BUSY'?'Выполняется проверка источника':result.error==='FLOOD_WAIT'?'Telegram временно ограничил запросы':'Соединение недоступно')}catch{setStatus('Не удалось проверить соединение')}finally{setBusy(false)}}
+  return <div className="flex flex-wrap items-center gap-3 border border-hairline p-3 text-sm"><span role="status">OLNOO Monitor: {status}</span><button type="button" disabled={busy} onClick={check} className="border border-hairline px-3 py-1 disabled:opacity-50">{busy?'Проверка…':'Проверить / переподключить'}</button></div>
 }
