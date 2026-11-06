@@ -79,7 +79,7 @@ export async function handleOwnTelegramUpdate(pool: Pool, raw: unknown, deps: In
             if (!itemId) {
               const handle = `own-bot:${sender}`
               const existing = await client.query('SELECT * FROM content_factory_sources WHERE project_id = $1 AND handle = $2 AND type = $3', [project.id, handle, 'telegram'])
-              const source = existing.rows[0] ?? await createSource(db, Number(project.id), { type: 'telegram', handle })
+              const source = existing.rows[0] ?? await createSource(db, Number(project.id), { type: 'telegram', handle }, true)
               await client.query('UPDATE content_factory_sources SET enabled = false WHERE id = $1 AND project_id = $2', [source.id, project.id])
               const [item] = await storeNewSourceMessages(db, Number(project.id), source.id, [{ externalId: `own:${pending.id}`, text: original.text, url: original.url, publishedAt: original.date, imageUrls: original.photos.map((p) => `telegram-file:${p.file_id}`) }])
               if (!item) throw new Error('Could not create own material')

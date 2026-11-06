@@ -1,3 +1,4 @@
+import { claimTelegramOrigin } from './content-factory-automation.ts'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { createSocialPost, getSocialPost } from '@/lib/social'
@@ -75,6 +76,8 @@ export async function publishContentFactoryItem(projectSlug: string, itemId: str
     }
   }
 
+  if (!await claimTelegramOrigin(pool, item)) return { error: 'Это исходное сообщение уже связано с другим материалом проекта. Проверьте историю дубликатов.', status: 409 }
+
   let socialPostId = item.socialPostId
   if (!socialPostId) {
     if (isCopy && !(await claimPartnerCopyPublish(pool, projectId, item.id))) {
@@ -150,6 +153,7 @@ async function publishEnglishItem(projectSlug: string, item: ContentFactoryItem)
   try { await selectedTelegramAccount(pool, projectId, item.enAccountId, true) }
   catch (error) { return { error: error instanceof Error ? error.message : 'Channel verification failed.', status: 409 } }
 
+  if (!await claimTelegramOrigin(pool, item)) return { error: 'Это исходное сообщение уже связано с другим материалом проекта. Проверьте историю дубликатов.', status: 409 }
   let socialPostId = item.enSocialPostId
   if (!socialPostId) {
     const claim = await pool.query(`UPDATE content_factory_items SET en_publish_claimed = true

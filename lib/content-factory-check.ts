@@ -17,7 +17,7 @@ import { syncOriginalImages } from './content-factory-original-images.ts'
 // network failure) is recorded as the source's own `lastError` and an empty item list is
 // returned, so one bad source can never stop a multi-source sweep (see
 // lib/content-factory-scheduler.ts) or crash the single-source "Проверить сейчас" button.
-export async function checkSourceNow(pool: Pool, source: ContentFactorySource): Promise<{ created: ContentFactoryItem[]; error: string }> {
+export async function checkSourceNow(pool: Pool, source: ContentFactorySource): Promise<{ created: ContentFactoryItem[]; error: string; observedMaxId?: string }> {
   try {
     if (source.type === 'rss' || source.type === 'website') {
       if (source.processingMode !== 'ai') throw new ContentFactorySourceError('RSS and websites support AI processing only.')
@@ -46,7 +46,7 @@ export async function checkSourceNow(pool: Pool, source: ContentFactorySource): 
       }
     }
     await recordSourceCheckResult(pool, source.id, source.projectId, imageError)
-    return { created, error: imageError }
+    return { created, error: imageError, observedMaxId: messages.reduce((max, msg) => BigInt(msg.externalId) > BigInt(max) ? msg.externalId : max, '0') }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Could not check this source.'
     await recordSourceCheckResult(pool, source.id, source.projectId, message)

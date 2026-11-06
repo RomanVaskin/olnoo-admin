@@ -27,6 +27,7 @@ function canReject(status: ItemStatus): boolean {
 }
 
 type Item = {
+  automation?: { status?: string; error?: string }
   id: string
   sourceId: string
   externalId: string
@@ -73,6 +74,8 @@ type Item = {
   imageFilename: string
   createdAt: string
 }
+
+const automationLabels: Record<string, string> = { pending: 'В очереди', processing: 'Подготовка', failed: 'Ошибка подготовки', review: 'Требуется согласование', publishing: 'Отправка', published: 'Опубликовано', uncertain: 'Результат отправки неизвестен', send_retry: 'Ожидание повторной отправки' }
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—'
@@ -404,6 +407,7 @@ function ItemDetail({
         </div>
 
         <div className="flex flex-col gap-6 px-6 py-6">
+          {item.automation?.status && <p role="status" className="text-sm text-muted-foreground">Последняя автоматическая операция: {automationLabels[item.automation.status] ?? 'Проверка'}{item.automation.error ? ` · ${item.automation.error}` : ''}</p>}
           {isIstraArt ? <section aria-label="Исходный материал" className="flex flex-col gap-3 border border-hairline p-4"><h2 className="label-mono">Исходный материал</h2>{originalSection}<OwnMaterialUpload key={item.id} itemId={item.id} disabled={busy !== null || linked || !!item.generatedText || !['new','failed'].includes(item.status)} onUpdated={onUpdated} /><div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{item.originalImageFiles.map((filename, index) => <img key={filename} src={`/api/content-factory/items/${item.id}/original-images/${index}?project=${encodeURIComponent(project)}`} alt={`Оригинальное фото ${index + 1}`} className="aspect-[4/5] w-full border border-hairline object-contain" />)}</div>{item.originalImageError && <p role="alert" className="text-sm text-destructive">{item.originalImageError}</p>}{item.originalImageFiles.length !== item.originalImageUrls.length && !item.originalImageError && <p role="alert" className="text-sm text-destructive">{t.contentFactory.items.imagesIncomplete}</p>}</section> : originalSection}
 
           {isCopy && <p className="border border-hairline bg-background p-3 text-sm">{t.contentFactory.items.previewWarning}</p>}

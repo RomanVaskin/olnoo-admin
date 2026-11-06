@@ -82,6 +82,8 @@ export function ContentFactoryAutomationView({
         action={<ProjectSelector value={project} onChange={onProjectChange} />}
       />
 
+      <p className="text-sm text-muted-foreground">Режим, канал и суточный лимит фоновой публикации настраиваются у каждого источника в разделе «Источники». Сохранённые ниже параметры проекта не включают и не останавливают автоматизацию источников.</p>
+
       {project === 'all' ? (
         <p className="text-sm text-muted-foreground">{t.contentFactory.selectProjectHint}</p>
       ) : (

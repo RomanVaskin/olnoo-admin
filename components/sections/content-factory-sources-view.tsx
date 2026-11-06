@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { SectionHeader, HeaderActions, StatusPill, TableShell, Th, Td } from '@/components/primitives'
 import { ProjectSelector } from '@/components/project-selector'
 import { useI18n } from '@/components/i18n-provider'
@@ -17,9 +17,15 @@ type Source = {
   enabled: boolean
   processingMode: 'ai' | 'copy'
   copyPermissionConfirmed: boolean
+  automation?: AutomationPolicy
+  automationRevision?: string
+  automationRuntime?: { operation?: string; error?: string; checkedAt?: string; paused?: boolean }
+  duplicateCount?: number
   lastCheckedAt: string | null
   lastError: string
 }
+
+const operationLabels: Record<string, string> = { baseline: 'Начальная граница сохранена', collected: 'Материалы собраны', waiting: 'Ожидание новых данных', processing: 'Подготовка', pending: 'В очереди', review: 'Требуется согласование', publishing: 'Отправка', published: 'Опубликовано', uncertain: 'Результат отправки неизвестен', paused: 'Автоматизация остановлена', error: 'Ошибка операции', ai_limit: 'Достигнут лимит AI', daily_limit: 'Достигнут лимит отправок', send_retry: 'Ожидание повторной отправки' }
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—'
@@ -35,6 +41,9 @@ export function ContentFactorySourcesView({
 }) {
   const { t } = useI18n()
   const [sources, setSources] = useState<Source[]>([])
+  const [accounts, setAccounts] = useState<TelegramAccount[]>([])
+  const [operationError, setOperationError] = useState('')
+  const currentProject = useRef(project)
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
@@ -50,16 +59,22 @@ export function ContentFactorySourcesView({
       setSources([])
       return
     }
-    setLoading(true)
+    setLoading(true); setOperationError('')
     try {
       const res = await fetch(`/api/content-factory/sources?project=${encodeURIComponent(project)}`)
-      if (res.ok) setSources(await res.json())
-    } finally {
+      if (res.ok) { const rows = await res.json(); if (currentProject.current !== project) return; setSources(rows) }
+      else throw new Error((await res.json().catch(() => null))?.error || 'Не удалось загрузить источники. Проверьте миграцию 0043.')
+      const acc = await fetch(`/api/social-accounts?project=${encodeURIComponent(project)}`)
+      if (acc.ok) { const rows = await acc.json() as TelegramAccount[]; if (currentProject.current !== project) return; setAccounts(rows.filter((a) => a.platform === 'telegram' && a.active && a.status === 'connected')) }
+      else { setAccounts([]); setOperationError('Не удалось загрузить каналы назначения.') }
+    } catch (e) { setOperationError(e instanceof Error ? e.message : 'Ошибка загрузки.') } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
+    currentProject.current = project
+    setSources([]); setAccounts([])
     load()
     setCheckMessage({})
   }, [project])
@@ -94,6 +109,7 @@ export function ContentFactorySourcesView({
       body: JSON.stringify({ enabled: !source.enabled }),
     })
     if (res.ok) await load()
+    else setOperationError((await res.json().catch(() => null))?.error || 'Не удалось изменить источник.')
   }
 
   async function changeMode(source: Source, mode: 'ai' | 'copy') {
@@ -103,12 +119,14 @@ export function ContentFactorySourcesView({
       body: JSON.stringify({ processingMode: mode, copyPermissionConfirmed: mode === 'copy' }),
     })
     if (res.ok) await load()
+    else setOperationError((await res.json().catch(() => null))?.error || 'Не удалось изменить источник.')
   }
 
   async function remove(source: Source) {
     if (!window.confirm(t.contentFactory.sources.confirmDelete)) return
     const res = await fetch(`/api/content-factory/sources/${source.id}?project=${encodeURIComponent(project)}`, { method: 'DELETE' })
     if (res.ok) await load()
+    else setOperationError((await res.json().catch(() => null))?.error || 'Не удалось изменить источник.')
   }
 
   async function checkNow(source: Source) {
@@ -172,6 +190,7 @@ export function ContentFactorySourcesView({
               {t.contentFactory.sources.addSource}
             </button>
           </HeaderActions>
+          {operationError && <p role="alert" className="text-sm text-destructive">{operationError}</p>}
           {createError && <p className="text-sm text-destructive">{createError}</p>}
 
           <TableShell>
@@ -181,13 +200,14 @@ export function ContentFactorySourcesView({
                 <Th>{t.contentFactory.sources.tableType}</Th>
                 <Th>{t.contentFactory.sources.tableStatus}</Th>
                 <Th>{t.contentFactory.sources.tableLastChecked}</Th>
+                <Th>Автоматизация · каждые 10 минут</Th>
                 <Th>{t.table.actions}</Th>
               </tr>
             </thead>
             <tbody>
               {sources.map((source) => (
                 <tr key={source.id}>
-                  <Td className="font-medium text-foreground">{source.handle}</Td>
+                  <Td className="font-medium text-foreground">{source.handle}{!!source.duplicateCount && <p className="mt-1 text-xs text-destructive">Дубликатов в проекте: {source.duplicateCount}. Отключите лишние строки; историю не удаляйте.</p>}</Td>
                   <Td>
                     <span className="label-mono text-muted-foreground">{t.contentFactory.sourceType[source.type]}</span>
                     <select value={source.processingMode} onChange={(e) => changeMode(source, e.target.value as 'ai' | 'copy')} className="mt-1 block border border-hairline bg-card p-1 text-xs">
@@ -208,6 +228,11 @@ export function ContentFactorySourcesView({
                     </div>
                   </Td>
                   <Td className="text-muted-foreground">{formatDate(source.lastCheckedAt)}</Td>
+                  <Td>
+                    <SourceAutomationEditor key={`${source.id}:${source.automationRevision}`} source={source} project={project} accounts={accounts} onSaved={load} />
+                    {source.automationRuntime?.operation && <p className="mt-2 text-xs">{operationLabels[source.automationRuntime.operation] ?? 'Проверка'} · {formatDate(source.automationRuntime.checkedAt ?? null)}</p>}
+                    {source.automationRuntime?.error && <p className="text-xs text-destructive">{source.automationRuntime.error}</p>}
+                  </Td>
                   <Td>
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -250,4 +275,41 @@ export function ContentFactorySourcesView({
       )}
     </div>
   )
+}
+
+type AutomationPolicy = { mode: 'manual' | 'auto_review' | 'auto_publish'; accountId: string | null; dailyLimit: number; mediaRightsConfirmed: boolean }
+type TelegramAccount = { id: string; platform: string; name: string; username: string; active: boolean; status: string }
+function SourceAutomationEditor({ source, project, accounts, onSaved }: { source: Source; project: string; accounts: TelegramAccount[]; onSaved: () => Promise<void> }) {
+  const [draft, setDraft] = useState<AutomationPolicy>(source.automation ?? { mode: 'manual', accountId: null, dailyLimit: 3, mediaRightsConfirmed: false })
+  const [handle, setHandle] = useState(source.handle)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const modes = { manual: 'Ручной', auto_review: 'С согласованием', auto_publish: source.processingMode === 'copy' ? 'Автоматический: копия требует согласования' : 'Автоматический' }
+  return <details className="min-w-[210px] text-xs">
+    <summary className="cursor-pointer">{modes[source.automation?.mode ?? 'manual']} · {accounts.find((a) => a.id === source.automation?.accountId)?.username ?? 'Канал не выбран'} · {source.automation?.dailyLimit ?? 3}/сутки</summary>
+    <div className="mt-2 flex flex-col gap-2">
+      <label>Адрес источника<input aria-label={`Адрес источника ${source.handle}`} value={handle} disabled={busy} onChange={(e) => setHandle(e.target.value)} className="block w-full border border-hairline bg-card p-1" /></label>
+      <label>Режим публикации<select aria-label={`Режим публикации ${source.handle}`} value={draft.mode} disabled={busy || source.type !== 'telegram'} onChange={(e) => setDraft({ ...draft, mode: e.target.value as AutomationPolicy['mode'] })} className="block w-full border border-hairline bg-card p-1">{Object.entries(modes).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label>Канал назначения<select aria-label={`Канал назначения ${source.handle}`} disabled={busy} value={draft.accountId ?? ''} onChange={(e) => setDraft({ ...draft, accountId: e.target.value || null })} className="block w-full border border-hairline bg-card p-1"><option value="">Выберите канал</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name} {a.username}</option>)}</select></label>
+      {!accounts.length && <span role="alert">Нет подключённых Telegram-каналов. Подключите канал в «Соцсетях».</span>}
+      <label>Лимит в сутки<input aria-label={`Лимит в сутки ${source.handle}`} type="number" min={1} max={20} value={draft.dailyLimit} disabled={busy} onChange={(e) => setDraft({ ...draft, dailyLimit: Number(e.target.value) })} className="block w-full border border-hairline bg-card p-1" /></label>
+      <span>Проверка каждые 10 минут. При включении старый архив не публикуется.</span>
+      {source.processingMode === 'copy' && <>
+        <label className="flex items-start gap-1"><input type="checkbox" checked={draft.mediaRightsConfirmed} disabled={busy} onChange={(e) => setDraft({ ...draft, mediaRightsConfirmed: e.target.checked })} />Разрешение правообладателя распространяется на изображения.</label>
+        <span>HTML-превью не подтверждает полноту оригинала/альбома. Копии требуют сравнения и ручного утверждения даже в автоматическом режиме.</span>
+      </>}
+      <button type="button" disabled={busy || (draft.mode !== 'manual' && !draft.accountId)} className="border border-hairline p-1 disabled:opacity-50" onClick={async () => {
+        if (busy) return
+        setBusy(true); setError('')
+        try {
+          const res = await fetch(`/api/content-factory/sources/${source.id}?project=${encodeURIComponent(project)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ automation: draft, handle }) })
+          const data = await res.json().catch(() => null)
+          if (!res.ok) throw new Error(data?.error || 'Не удалось сохранить настройки.')
+          await onSaved()
+        } catch (e) { setError(e instanceof Error ? e.message : 'Ошибка сохранения.') }
+        finally { setBusy(false) }
+      }}>{busy ? 'Сохранение…' : 'Сохранить настройки'}</button>
+      {error && <span role="alert" className="text-destructive">{error}</span>}
+    </div>
+  </details>
 }

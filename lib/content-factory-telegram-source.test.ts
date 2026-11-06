@@ -115,3 +115,15 @@ test('fetchPublicTelegramChannel: returns the parsed messages for a reachable pu
   assert.equal(messages.length, 1)
   assert.equal(messages[0].externalId, '301')
 })
+
+test('four photo URLs are retained in order despite intervening attributes; foreign host suffixes are not channel handles', () => {
+  const urls = [1,2,3,4].map((i) => `https://cdn4.telesco.pe/file/${i}.jpg`)
+  const html = `<div class="tgme_widget_message_wrap"><div data-post="alexander_realty/77">
+    ${urls.map((url) => `<a class="tgme_widget_message_photo_wrap grouped_media_wrap" href="/post" data-ratio="1" style="background-image: url('${url}')"></a>`).join('')}
+    <div class="tgme_widget_message_text">Полный доступный текст &#33;</div></div></div>`
+  const [post] = parseTelegramPreviewHtml(html, 'alexander_realty')
+  assert.deepEqual(post.imageUrls, urls)
+  assert.equal(post.text, 'Полный доступный текст !')
+  assert.equal(normalizeTelegramHandle('https://t.me/alexander_realty.evil/path'), null)
+  assert.equal(normalizeTelegramHandle('https://t.me/alexander_realty/123garbage'), null)
+})

@@ -49,6 +49,7 @@ export function isItemStatus(value: unknown): value is ItemStatus {
 }
 
 export type ContentFactoryItem = {
+  automation?: Record<string, unknown>
   id: string
   projectId: number
   sourceId: string
@@ -92,6 +93,7 @@ export type ContentFactoryItem = {
 
 function fromRow(row: Record<string, unknown>): ContentFactoryItem {
   return {
+    automation: (row.automation ?? {}) as Record<string, unknown>,
     id: row.id as string,
     projectId: row.project_id as number,
     sourceId: row.source_id as string,

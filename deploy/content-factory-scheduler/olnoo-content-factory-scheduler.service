@@ -1,0 +1,10 @@
+[Unit]
+Description=OLNOO Admin Content Factory sweep (explicit source opt-in)
+After=network.target olnoo-admin.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/olnoo/projects/olnoo-admin/.env.local
+# Header via stdin: keep the scheduler token out of curl's process arguments.
+ExecStart=/bin/bash -o pipefail -c 'printf "X-Scheduler-Token: %%s\n" "$CONTENT_FACTORY_SCHEDULER_TOKEN" | curl -fsS --max-time 840 --request POST --header @- http://127.0.0.1:3140/api/content-factory-scheduler/run'
+TimeoutStartSec=15min
