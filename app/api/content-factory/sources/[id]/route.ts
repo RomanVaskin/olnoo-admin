@@ -1,9 +1,11 @@
+import { sourceAutomationAccess } from '@/lib/content-factory-source-policy'
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { resolveProjectId } from '@/lib/crm'
 import { updateSource, deleteSource, ContentFactorySourceError } from '@/lib/content-factory-sources'
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (!sourceAutomationAccess(req)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   const { id } = await params
   const project = new URL(req.url).searchParams.get('project')
   const projectId = await resolveProjectId(project)
@@ -12,6 +14,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const body = await req.json().catch(() => null)
   try {
     const source = await updateSource(pool, projectId, id, {
+      automation: body?.automation,
       handle: typeof body?.handle === 'string' ? body.handle : undefined,
       enabled: typeof body?.enabled === 'boolean' ? body.enabled : undefined,
       processingMode: body?.processingMode,
@@ -27,6 +30,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (!sourceAutomationAccess(req)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   const { id } = await params
   const project = new URL(req.url).searchParams.get('project')
   const projectId = await resolveProjectId(project)

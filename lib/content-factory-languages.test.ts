@@ -172,3 +172,15 @@ test('a selected account is project-scoped and bot access is verified before sen
     else process.env.TELEGRAM_BOT_TOKEN = previous
   }
 })
+
+test('native Monitor copies cannot enter the legacy translation path and silently lose attachments', async () => {
+  const text = 'Оригинальный текст'
+  const item = { processingMode: 'copy', originalText: text, generatedText: text,
+    originalImageError: '', imageFilename: '', originalTelegram: { version: 1, transport: 'mtproto',
+      complete: true, peerId: '77', groupedId: null, messageIds: ['101'], messages: [{ id: '101', text, entities: [] }] }
+  } as unknown as ContentFactoryItem
+  let calls = 0
+  await assert.rejects(() => translateItem({ query: async () => { calls++; return { rows: [] } } } as unknown as Pool,
+    item, 'en', true, { callRouter: async () => { calls++; return 'translated' } }), /Перевод MTProto-копии пока не поддерживается/)
+  assert.equal(calls, 0)
+})

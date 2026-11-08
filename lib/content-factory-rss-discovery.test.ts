@@ -48,7 +48,7 @@ test('connect uses existing project registry in AI mode and rejects a repeated c
   const client = { query: async (sql: string, values: unknown[] = []) => {
     calls.push(sql)
     if (sql.includes('pg_advisory_xact_lock')) assert.deepEqual(values, [7])
-    if (sql.startsWith('SELECT * FROM content_factory_sources')) { assert.deepEqual(values, [7]); return { rows } }
+    if (sql.includes('FROM content_factory_sources s WHERE')) { assert.deepEqual(values, [7]); return { rows } }
     if (sql.startsWith('INSERT INTO content_factory_sources')) {
       assert.equal(values[1], 7)
       assert.equal(values[4], 'ai')

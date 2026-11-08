@@ -34,7 +34,7 @@ export function normalizeTelegramHandle(input: string): string | null {
   const trimmed = input.trim()
   if (!trimmed) return null
   let handle = trimmed
-  const urlMatch = /^(?:https?:\/\/)?t\.me\/(?:s\/)?([a-zA-Z0-9_]+)/i.exec(trimmed)
+  const urlMatch = /^(?:https?:\/\/)?t\.me\/(?:s\/)?([a-zA-Z0-9_]+)(?:\/\d+)?\/?$/i.exec(trimmed)
   if (urlMatch) {
     handle = urlMatch[1]
   } else if (handle.startsWith('@')) {
@@ -72,10 +72,10 @@ export function parseTelegramPreviewHtml(html: string, handle: string): RawSourc
     const text = textMatch ? decodeTelegramHtml(stripTags(textMatch[1])) : ''
 
     const imageUrls: string[] = []
-    const photoRe = /tgme_widget_message_photo_wrap[^"]*"\s+style="[^"]*background-image:url\('([^']+)'\)/g
-    let photoMatch: RegExpExecArray | null
-    while ((photoMatch = photoRe.exec(block))) {
-      imageUrls.push(decodeTelegramHtml(photoMatch[1]))
+    const photoRe = /<(?:a|div)\b[^>]*class="[^"]*\btgme_widget_message_photo_wrap\b[^"]*"[^>]*>/g
+    for (const tag of block.match(photoRe) ?? []) {
+      const photo = /background-image\s*:\s*url\(\s*['"]?([^'"\s)]+)['"]?\s*\)/i.exec(tag)
+      if (photo) imageUrls.push(decodeTelegramHtml(photo[1]))
     }
 
     const dateMatch = /<time[^>]*datetime="([^"]+)"/.exec(block)
@@ -132,7 +132,7 @@ export type FetchLike = (url: string) => Promise<{ ok: boolean; status: number; 
  * adapter never attempts to authenticate, scrape around a redirect, or otherwise bypass that
  * refusal.
  */
-export async function fetchPublicTelegramChannel(handle: string, fetchImpl: FetchLike = fetch as FetchLike): Promise<RawSourceMessage[]> {
+export async function fetchPublicTelegramChannel(handle: string, fetchImpl: FetchLike = (url) => fetch(url, { signal: AbortSignal.timeout(15_000) })): Promise<RawSourceMessage[]> {
   const url = telegramPreviewUrl(handle)
   let res: { ok: boolean; status: number; text(): Promise<string> }
   try {
@@ -146,6 +146,7 @@ export async function fetchPublicTelegramChannel(handle: string, fetchImpl: Fetc
     )
   }
   const html = await res.text()
+  if (html.length > 4_000_000) throw new ContentFactoryTelegramSourceError('Telegram preview exceeds the size limit.')
   if (!html.includes('tgme_widget_message')) {
     throw new ContentFactoryTelegramSourceError(`"${handle}" does not look like a public Telegram channel preview — check the handle.`)
   }

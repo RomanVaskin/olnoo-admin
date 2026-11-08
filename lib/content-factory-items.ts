@@ -1,3 +1,4 @@
+import { isTrustedCopy } from './telegram-original.ts'
 import type { Pool } from 'pg'
 import { randomUUID } from 'node:crypto'
 import type { RawSourceMessage } from './content-factory-telegram-source.ts'
@@ -49,6 +50,8 @@ export function isItemStatus(value: unknown): value is ItemStatus {
 }
 
 export type ContentFactoryItem = {
+  originalTelegram?: unknown
+  automation?: Record<string, unknown>
   id: string
   projectId: number
   sourceId: string
@@ -92,6 +95,8 @@ export type ContentFactoryItem = {
 
 function fromRow(row: Record<string, unknown>): ContentFactoryItem {
   return {
+    originalTelegram: row.original_telegram,
+    automation: (row.automation ?? {}) as Record<string, unknown>,
     id: row.id as string,
     projectId: row.project_id as number,
     sourceId: row.source_id as string,
@@ -232,7 +237,7 @@ export function canReject(status: ItemStatus): boolean {
 
 export function hasApprovedPartnerCopy(item: ContentFactoryItem): boolean {
   return item.processingMode === 'copy' && item.copyPermissionConfirmed && !!item.copyApprovedAt
-    && !!item.originalText && item.generatedText === item.originalText && !item.imageFilename
+    && (!!item.originalText || isTrustedCopy(item)) && item.generatedText === item.originalText && !item.imageFilename
     && !item.originalImageError && item.originalImageFiles.length === item.originalImageUrls.length
     && (item.originalImageUrls.length === 0 || item.copyImagePermissionConfirmed)
 }
@@ -245,7 +250,7 @@ export async function approvePartnerCopy(pool: Pool, projectId: number, id: stri
        copy_image_permission_confirmed = CASE WHEN original_image_urls = '' THEN false ELSE $3 END, updated_at = now()
      WHERE id = $1 AND project_id = $2 AND processing_mode = 'copy'
        AND copy_permission_confirmed = true AND status = 'needs_review'
-       AND original_text <> '' AND generated_text = original_text AND image_filename = ''
+       AND (original_text <> '' OR content_factory_trusted_original_valid(content_factory_items)) AND generated_text = original_text AND image_filename = ''
        AND original_image_error = ''
        AND jsonb_array_length(original_image_files) = CASE WHEN original_image_urls = '' THEN 0 ELSE cardinality(string_to_array(original_image_urls, ',')) END
        AND (original_image_urls = '' OR $3 = true)
@@ -261,7 +266,7 @@ export async function claimPartnerCopyPublish(pool: Pool, projectId: number, id:
      WHERE id = $1 AND project_id = $2 AND processing_mode = 'copy'
        AND status IN ('ready', 'failed') AND social_post_id IS NULL
        AND copy_permission_confirmed = true AND copy_approved_at IS NOT NULL
-       AND original_text <> '' AND generated_text = original_text AND image_filename = ''
+       AND (original_text <> '' OR content_factory_trusted_original_valid(content_factory_items)) AND generated_text = original_text AND image_filename = ''
        AND original_image_error = ''
        AND jsonb_array_length(original_image_files) = CASE WHEN original_image_urls = '' THEN 0 ELSE cardinality(string_to_array(original_image_urls, ',')) END
        AND (original_image_urls = '' OR copy_image_permission_confirmed = true)`,
@@ -364,3 +369,5 @@ export async function setItemImageFilename(pool: Pool, projectId: number, id: st
 export function ownMaterialSourceText(item: ContentFactoryItem): string {
   return item.originKind === 'own' && item.ownBrief ? `${item.originalText}\n\nOwner-provided context:\n${item.ownBrief}`.trim() : item.originalText
 }
+
+export { isTrustedCopy } from './telegram-original.ts'

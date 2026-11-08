@@ -1,0 +1,11 @@
+[Unit]
+Description=OLNOO Admin Content Factory every ten minutes
+
+[Timer]
+OnCalendar=*-*-* *:0/10:00
+AccuracySec=1s
+Persistent=false
+Unit=olnoo-content-factory-scheduler.service
+
+[Install]
+WantedBy=timers.target
